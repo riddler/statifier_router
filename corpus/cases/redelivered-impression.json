@@ -1,0 +1,50 @@
+{
+  "id": "redelivered-impression",
+  "description": "The impression's message is delivered again in every state the execution rests in once it holds that impression - awaiting_click, closed, and after it finished - and each redelivery is a duplicate; a new message for the same impression during the grace period is delivered and absorbed.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"]
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"advance": "PT1H"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1107", "data": {"kind": "click", "impression_id": "imp_7f3a", "clicked_at": "2026-09-19T09:00:00Z", "url": "https://example.com/offer"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/7/0019", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"advance": "PT1H"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "created_and_delivered", "key": "imp_7f3a"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/3/1107", "outcome": "delivered", "key": "imp_7f3a"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/7/0019", "outcome": "delivered", "key": "imp_7f3a"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"}
+    ],
+    "status": "completed",
+    "configuration": [],
+    "timers": [],
+    "datamodel": {"outcome": "joined", "late_clicks": []}
+  }
+}

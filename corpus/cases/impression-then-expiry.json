@@ -1,0 +1,39 @@
+{
+  "id": "impression-then-expiry",
+  "description": "An impression whose click never comes: the 24 hour window closes, the execution records the impression as expired and holds the grace period.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"]
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/2/5531", "data": {"kind": "impression", "impression_id": "imp_c04e", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"advance": "PT24H30M"}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "impressions_to_join", "message_id": "ad_events/2/5531", "outcome": "created_and_delivered", "key": "imp_c04e"}
+    ],
+    "status": "active",
+    "configuration": ["closed"],
+    "timers": ["grace.over"],
+    "datamodel": {"outcome": "expired", "late_clicks": []}
+  }
+}

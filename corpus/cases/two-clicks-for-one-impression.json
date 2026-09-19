@@ -1,0 +1,50 @@
+{
+  "id": "two-clicks-for-one-impression",
+  "description": "An impression and two clicks on it: the first click joins, the second arrives during the grace period and is kept as a late click, and the execution finishes when the grace period ends.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"]
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/0/7702", "data": {"kind": "impression", "impression_id": "imp_e6a0", "shown_at": "2026-09-19T08:00:00Z", "placement": "footer"}}},
+    {"advance": "PT10M"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/0/7745", "data": {"kind": "click", "impression_id": "imp_e6a0", "clicked_at": "2026-09-19T08:10:00Z", "url": "https://example.com/offer"}}},
+    {"advance": "PT10M"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/0/7781", "data": {"kind": "click", "impression_id": "imp_e6a0", "clicked_at": "2026-09-19T08:20:00Z", "url": "https://example.com/offer?again=1"}}},
+    {"advance": "PT1H"}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "impressions_to_join", "message_id": "ad_events/0/7702", "outcome": "created_and_delivered", "key": "imp_e6a0"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/0/7745", "outcome": "delivered", "key": "imp_e6a0"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/0/7781", "outcome": "delivered", "key": "imp_e6a0"}
+    ],
+    "status": "completed",
+    "configuration": [],
+    "timers": [],
+    "datamodel": {
+      "outcome": "joined",
+      "late_clicks": [
+        {"impression_id": "imp_e6a0", "clicked_at": "2026-09-19T08:20:00Z", "url": "https://example.com/offer?again=1"}
+      ]
+    }
+  }
+}
