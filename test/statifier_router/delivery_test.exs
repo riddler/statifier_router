@@ -3,10 +3,12 @@ defmodule StatifierRouter.DeliveryTest do
 
   import StatifierRouter.DeliveryFixtures
 
+  alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierRouter.Binding
+  alias StatifierRouter.Config
   alias StatifierRouter.Delivery
-  alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
   alias StatifierRouter.TestRepo
 
   @now ~U[2026-09-19 08:00:00.000000Z]
@@ -160,14 +162,26 @@ defmodule StatifierRouter.DeliveryTest do
     # execution survived, red; restored, green.
     test "a failing ledger insert rolls back the address row and the execution; the raise propagates",
          %{config: config} do
-      # A nil message id fails the ledger's NOT NULL constraint, the last
-      # write of the transaction, after create/4 and step/5 have run.
-      delivery = %{delivery("ad_events/3/1042", "impression") | message_id: nil}
-
-      assert_raise Postgrex.Error, ~r/not_null_violation/, fn ->
-        Delivery.deliver(config, impression_binding(%{}), "imp_7f3a", delivery)
+      # A table prefix whose address and dedupe tables exist, created in
+      # this test's own sandbox transaction, and whose ledger does not: the
+      # ledger insert, the last write of the transaction, fails after the
+      # dedupe claim, create/4 and step/5 have run.
+      for table <- ["addresses", "dedupe"] do
+        SQL.query!(
+          TestRepo,
+          "CREATE TABLE ledgerless_#{table} (LIKE statifier_router_#{table} INCLUDING ALL)"
+        )
       end
 
+      ledgerless = %{config | table_prefix: "ledgerless_"}
+      delivery = delivery("ad_events/3/1042", "impression")
+
+      assert_raise Postgrex.Error, ~r/undefined_table/, fn ->
+        Delivery.deliver(ledgerless, impression_binding(%{}), "imp_7f3a", delivery)
+      end
+
+      assert addresses(ledgerless) == []
+      assert TestRepo.aggregate(Config.queryable(ledgerless, Dedupe), :count) == 0
       assert addresses(config) == []
       assert executions() == 0
       assert input_rows() == 0
