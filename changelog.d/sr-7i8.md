@@ -5,4 +5,4 @@
 
 ### Changed
 
-- `StatifierRouter.route/3` returns `{:error, :no_message_id}` for an event whose `message_id` is `nil` or empty; a `nil` one was `{:error, {:invalid_event, event}}` before.
+- `StatifierRouter.route/3` returns `{:error, :no_message_id}` for an event whose `message_id` is `nil` or empty; a `nil` one was `{:error, {:invalid_event, event}}` before, and an empty one was routed.

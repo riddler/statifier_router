@@ -34,8 +34,9 @@ defmodule StatifierRouter do
 
   `scope` is an opaque host string; the package gives it no meaning.
 
-  Of the pieces named above, this release builds the binding, as
-  `StatifierRouter.Binding`; the tables behind the rest, created by
+  Of the pieces named above, this release builds the Broadway front, as
+  `StatifierRouter.Broadway`; the binding, as `StatifierRouter.Binding`;
+  the tables behind the rest, created by
   `StatifierRouter.Migrations` and read through the schemas in
   `StatifierRouter.Schema`; `route/3`, which evaluates the bindings for
   one event and hands each delivery to the configuration's delivery
@@ -43,9 +44,12 @@ defmodule StatifierRouter do
   claims the message for the binding with `StatifierRouter.Dedupe` and
   then, in the same transaction, gets or creates the execution an address
   names and steps the event into it, under each of the three `create`
-  modes. The host schedules the two reapers, `StatifierRouter.Dedupe.reap/2`
-  and `StatifierRouter.Addresses.reap/2`. Each piece lands behind the
-  decision record that fixes it, in `docs/adr/`.
+  modes; and `StatifierRouter.Resolver`, the host's answer to the chart a
+  new execution starts on, with `StatifierRouter.Resolver.Static` over
+  charts compiled at boot. The host schedules the two reapers,
+  `StatifierRouter.Dedupe.reap/2` and `StatifierRouter.Addresses.reap/2`.
+  Each piece lands behind the decision record that fixes it, in
+  `docs/adr/`.
 
   ## Routing an event
 
