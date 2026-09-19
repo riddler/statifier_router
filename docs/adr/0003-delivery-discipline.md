@@ -68,9 +68,11 @@ The transaction writes, in this order:
 1. the dedupe row for `(binding_id, message_id)`, inserted if absent
    (section 6); when one is present and unexpired, the delivery is a
    duplicate, and the transaction writes the ledger row and nothing else;
-2. the address insert-or-lookup of ADR-0002 (section 3 below says which
-   per `create` mode), stamping `terminal_seen_at` when it finds the
-   execution terminal;
+2. the address insert-or-lookup of ADR-0002 (section 3 says how the
+   insert settles a race, section 4 which of the two each `create` mode
+   does), stamping `terminal_seen_at` when it finds the execution
+   terminal and the stamp is still empty, so the horizon counts from the
+   first sighting (ADR-0002, section 5);
 3. when the binding's `create` mode calls for one (section 4),
    `create/4`, under an execution id the router mints for it (ADR-0002,
    section 3) and on the chart the host's resolver names (ADR-0002,
@@ -87,6 +89,22 @@ An `{:error, reason}` from any of these steps, from the resolver, or from
 the repo rolls the whole transaction back and is `route/3`'s `{:error,
 reason}`: no dedupe row, no address row, no execution, no input and no
 ledger row survive it.
+
+A raise inside the delivery rolls it back the same way. The likeliest one
+is a lock wait that the repo's query timeout, the server or a dropped
+connection ends: statifier_persistence takes the execution's lock with a
+query that raises on failure, and its Ecto adapter's `lock_execution/3`
+lets a raise roll back and propagate (that function's documentation, read
+at statifier_persistence a1a83a2), so the host's repo rolls back the whole
+delivery transaction and re-raises. Nothing the transaction wrote
+survives, and any effect already fired stays fired, as section 2 says.
+`route/3` does not rescue it: the raise propagates to `route/3`'s caller.
+The rollback has already happened by then, so nothing is left half
+written, and rescuing would mean catching whatever the host's repo and
+executor raise and turning a fault into an `{:error, reason}` nobody
+can tell apart from an expected one; this package does not rescue to a
+default. A front treats a raise as it treats `{:error, reason}`: it does
+not acknowledge the message, and the source hands it over again.
 
 ### 2. step/5 runs inside the transaction, not after the commit
 
@@ -129,15 +147,18 @@ to the same execution from waiting on more than the step itself.
 ### 3. The address race is settled by the unique index, and the loser never creates
 
 Two first events for one key, routed at once, each find no address row.
-The address write is therefore an **insert-if-absent that reports a
-conflict without failing the transaction** (on Postgres, `INSERT ... ON
-CONFLICT DO NOTHING`), and it runs **before** `create/4`, carrying the
-id the router has just minted. The unique index on `(scope, document,
-key)` then settles the race: the first insert wins, and the second waits
-for the first transaction to end. If the first commits, the second
-reports a conflict, reads the winner's row in the same transaction, and
-steps the winner's execution: it is delivered, not created. If the first
-rolls back, the second's insert proceeds and it creates.
+The address write is therefore an **insert that, on a conflict with the
+unique index, inserts no row and does not fail the transaction** (on
+Postgres, `INSERT ... ON CONFLICT DO NOTHING`), and it runs **before**
+`create/4`, carrying the id the router has just minted. The router knows
+there was a conflict because the insert inserted no row; the insert does
+not hand back the row it conflicted with, which that statement cannot
+see. The unique index on `(scope, document, key)` settles the race: the
+first insert wins, and the second waits for the first transaction to
+end. If the first commits, the second inserts no row, and a following
+statement in the same transaction reads the winner's row, whose
+execution it steps: it is delivered, not created. If the first rolls
+back, the second's insert proceeds and it creates.
 
 The loser never calls `create/4`. That matters twice over: a `create/4`
 it called would fire its chart's initialize effects, and if it named an
@@ -147,8 +168,8 @@ the same transaction and just written to the address row, so it names no
 existing execution; an `{:error, :execution_exists}` from it is an error
 under section 1, not a race to retry.
 
-The lookup after a conflict relies on the second statement seeing the
-winner's committed row, which holds at Postgres's default isolation, read
+The lookup after a conflict relies on that following statement seeing
+the winner's committed row, which holds at Postgres's default isolation, read
 committed; a host that runs the delivery transaction at a stricter
 isolation level is outside this record.
 
@@ -156,8 +177,8 @@ isolation level is outside this record.
 
 | `create` | The address has no row | The row's execution is active | The row's execution is terminal |
 |---|---|---|---|
-| `:if_absent` | insert the row, `create/4`, `step/5`: created_and_delivered | `step/5`: delivered | stamp `terminal_seen_at`, no step: dropped: finished |
-| `:never` | no row is written, no create, no step: dropped: no_execution | `step/5`: delivered | stamp `terminal_seen_at`, no step: dropped: finished |
+| `:if_absent` | insert the row, `create/4`, `step/5`: created_and_delivered | `step/5`: delivered | stamp `terminal_seen_at` if it is still empty, no step: dropped: finished |
+| `:never` | no row is written, no create, no step: dropped: no_execution | `step/5`: delivered | stamp `terminal_seen_at` if it is still empty, no step: dropped: finished |
 | `:always_new` | no row is read or written; `create/4`, `step/5`: created_and_delivered | (the address is not read) | (the address is not read) |
 
 - **`:if_absent`** creates when the address has no row and delivers to the
@@ -211,8 +232,8 @@ among them, are serialized by the same lock.
   unexpired, the outcome is duplicate, and the transaction writes its
   ledger row and nothing else: no address row, no execution, no step. Two
   concurrent deliveries of one pair are settled as in section 3: the
-  second insert waits for the first transaction, then conflicts or
-  proceeds.
+  second insert waits for the first transaction, then inserts no row
+  (a duplicate) or proceeds.
 - **A queue source's message id is structural.** For a queue source, the
   source adapter derives the message id from the message's own position in
   the source (for a partitioned log, its topic, partition and offset),
@@ -275,8 +296,8 @@ default, partitions by the binding's key.
 - Broadway's partitioning, the front optimisation: messages in one
   partition are processed in order.
   <https://broadway.hexdocs.pm/Broadway.html#module-ordering-and-partitioning>
-- PostgreSQL's `INSERT ... ON CONFLICT DO NOTHING`, the insert-if-absent
-  that reports a conflict without failing the transaction.
+- PostgreSQL's `INSERT ... ON CONFLICT DO NOTHING`, the insert that
+  inserts no row on a conflict and does not fail the transaction.
   <https://www.postgresql.org/docs/current/sql-insert.html>
 
 ### The example: an impression and its click
@@ -296,8 +317,8 @@ horizon and `order: :by_key`. Under the scope `"7c1e"`:
   by a second consumer of the source while that transaction is still
   open. Its transaction inserts
   its own dedupe row, and its address insert waits on the unique index.
-  When the first commits, the insert conflicts; the transaction reads the
-  row, finds `ex_9k2q` active and calls `step/5`, which steps the `click`
+  When the first commits, the insert inserts no row; a following
+  statement reads the row, finds `ex_9k2q` active and calls `step/5`, which steps the `click`
   after the `impression`. It commits: delivered. `ex_9k2q`'s input log
   holds the impression, then the click.
 - The source redelivers `ad_events/3/1107`. Its dedupe row is present and
