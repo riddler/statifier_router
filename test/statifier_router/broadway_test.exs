@@ -131,12 +131,15 @@ defmodule StatifierRouter.BroadwayTest do
     test "a message the default normalize cannot build an event from is failed" do
       pipeline = start(config(self()), processors: [default: [concurrency: 4]])
 
-      ref = Broadway.test_message(pipeline, impression().data, metadata: %{source: "ad_events"})
+      ref =
+        Broadway.test_message(pipeline, impression().data,
+          metadata: %{message_id: "ad_events/3/1042", source: "ad_events"}
+        )
 
       assert_receive {:ack, ^ref, [], [%Message{status: {:failed, {:invalid_event, event}}}]},
                      5_000
 
-      assert %{scope: nil, message_id: nil, source: "ad_events"} = event
+      assert %{scope: nil, message_id: "ad_events/3/1042", source: "ad_events"} = event
 
       stop(pipeline)
     end
