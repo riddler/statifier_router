@@ -2,6 +2,7 @@ defmodule StatifierRouter.ConfigTest do
   use ExUnit.Case, async: true
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.RecordingDelivery
@@ -70,16 +71,54 @@ defmodule StatifierRouter.ConfigTest do
       assert Config.new(base ++ [prefix: ""]) == {:error, {:invalid_value, :prefix, ""}}
     end
 
-    # sabotage: new/1 skipped the :delivery fetch (delivery: nil in the
-    # struct) -> the missing delivery was accepted, red; restored, green.
-    test "requires a delivery module" do
-      assert Config.new(repo: TestRepo) == {:error, {:missing_key, :delivery}}
-
+    # sabotage: fetch_delivery/1 accepted any value it was given -> the
+    # string delivery was accepted, red; restored, green.
+    test "refuses a malformed delivery module" do
       assert Config.new(repo: TestRepo, delivery: "Delivery") ==
                {:error, {:invalid_value, :delivery, "Delivery"}}
 
       assert Config.new(repo: TestRepo, delivery: false) ==
                {:error, {:invalid_value, :delivery, false}}
+    end
+
+    # sabotage: delivery_needs/2 computed required? as false for every
+    # delivery module -> the default delivery was accepted with no store,
+    # red; restored, green.
+    test "defaults to StatifierRouter.Delivery, which requires its four options" do
+      {:ok, store} = Storage.new(Storage.InMemory, [])
+
+      needs = [
+        store: store,
+        executor: fn _effect, _context -> :ok end,
+        resolver: fn _scope, _document -> {:error, :none} end,
+        chart_resolver: fn _content_hash -> :error end
+      ]
+
+      assert {:ok, %Config{delivery: StatifierRouter.Delivery, store: ^store}} =
+               Config.new([repo: TestRepo] ++ needs)
+
+      for {name, _value} <- needs do
+        assert Config.new([repo: TestRepo] ++ Keyword.delete(needs, name)) ==
+                 {:error, {:missing_key, name}}
+      end
+    end
+
+    # sabotage: delivery_value?/2's :resolver clause accepted a fun of any
+    # arity -> the arity-1 resolver was accepted, red; restored, green.
+    test "checks each of the four options when given, whatever the delivery module" do
+      for {name, value} <- [
+            store: %{adapter: Storage.InMemory},
+            executor: fn _effect -> :ok end,
+            executor: nil,
+            resolver: fn _document -> :error end,
+            chart_resolver: fn _scope, _hash -> :error end
+          ] do
+        assert Config.new([repo: TestRepo, delivery: @delivery] ++ [{name, value}]) ==
+                 {:error, {:invalid_value, name, value}}
+      end
+
+      assert {:ok, %Config{executor: RecordingDelivery, store: nil}} =
+               Config.new(repo: TestRepo, delivery: @delivery, executor: RecordingDelivery)
     end
 
     # sabotage: build_bindings/1 prepended without the final reverse ->

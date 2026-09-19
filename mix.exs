@@ -76,6 +76,9 @@ defmodule StatifierRouter.MixProject do
       {:statifier_persistence, "~> 0.12.0"},
       {:predicator, "~> 9.4"},
       {:ecto_sql, "~> 3.14"},
+      # The execution ids the router mints (ADR-0002, section 3): the same
+      # uxid statifier_persistence already requires for its own keys.
+      {:uxid, "~> 2.0"},
       # The no_match telemetry event (ADR-0004, section 5).
       {:telemetry, "~> 1.0"},
 

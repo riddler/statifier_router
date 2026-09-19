@@ -1,8 +1,9 @@
 defmodule StatifierRouter.Config do
   @moduledoc """
   The router's resolved configuration: the host's repo, where this
-  package's tables live in it, the bindings events are routed by, and the
-  module each delivery is handed to.
+  package's tables live in it, the bindings events are routed by, the
+  module each delivery is handed to, and what that module needs to reach
+  statifier_persistence.
 
   `new/1` takes a keyword list and returns `{:ok, config}` or
   `{:error, reason}`:
@@ -10,13 +11,19 @@ defmodule StatifierRouter.Config do
   | Option | Value | Default |
   |---|---|---|
   | `:repo` | the host's `Ecto.Repo` module | required |
-  | `:delivery` | the module `StatifierRouter.route/3` hands each delivery to | required |
+  | `:delivery` | the module `StatifierRouter.route/3` hands each delivery to | `StatifierRouter.Delivery` |
+  | `:store` | a `%StatifierPersistence.Storage{}` built over the same repo | required by `StatifierRouter.Delivery` |
+  | `:executor` | the `StatifierPersistence.Executor` effects are handed to: a module or an arity-2 fun | required by `StatifierRouter.Delivery` |
+  | `:resolver` | a fun of `(scope, document)` naming the chart a new execution starts on | required by `StatifierRouter.Delivery` |
+  | `:chart_resolver` | a fun of `(content_hash)` compiling the chart an existing execution started on | required by `StatifierRouter.Delivery` |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
   | `:prefix` | the Postgres schema the tables live in, as a string | `nil` (the repo's default) |
 
-  `:delivery` is required because this release ships no delivery module of
-  its own; `StatifierRouter` documents what the module must answer.
+  `StatifierRouter` documents what a delivery module must answer, and
+  `StatifierRouter.Delivery` what the four options it requires must be.
+  A configuration that names another delivery module may leave those four
+  out; one it gives is checked all the same.
 
   Each binding is built with `StatifierRouter.Binding.new/1`, in the order
   given, and the resolved configuration keeps that order: it is the order
@@ -49,11 +56,41 @@ defmodule StatifierRouter.Config do
   alias StatifierRouter.Schema
 
   @enforce_keys [:repo, :delivery]
-  defstruct [:repo, :delivery, :prefix, bindings: [], table_prefix: "statifier_router_"]
+  defstruct [
+    :repo,
+    :delivery,
+    :store,
+    :executor,
+    :resolver,
+    :chart_resolver,
+    :prefix,
+    bindings: [],
+    table_prefix: "statifier_router_"
+  ]
+
+  @typedoc """
+  The host's answer to which chart a new execution of `document` starts on,
+  under `scope` (ADR-0002, section 4): `{content_hash, machine}`, or
+  `{:error, reason}`.
+  """
+  @type resolver ::
+          (scope :: String.t(), document :: String.t() ->
+             {String.t(), Statifier.Machine.t()} | {:error, term()})
+
+  @typedoc """
+  The host's compiled chart for a content hash an existing execution
+  records, or `:error` when it has none: the shape
+  `StatifierPersistence.Driver`'s `chart_resolver:` takes.
+  """
+  @type chart_resolver :: (content_hash :: String.t() -> {:ok, Statifier.Machine.t()} | :error)
 
   @type t :: %__MODULE__{
           repo: module(),
           delivery: module(),
+          store: StatifierPersistence.Storage.t() | nil,
+          executor: StatifierPersistence.Executor.t() | nil,
+          resolver: resolver() | nil,
+          chart_resolver: chart_resolver() | nil,
           bindings: [Binding.t()],
           table_prefix: String.t(),
           prefix: String.t() | nil
@@ -65,7 +102,7 @@ defmodule StatifierRouter.Config do
   @typedoc "Why `new/1` refused a configuration."
   @type new_error ::
           {:unknown_key, term()}
-          | {:missing_key, :repo | :delivery}
+          | {:missing_key, :repo | :store | :executor | :resolver | :chart_resolver}
           | {:invalid_value, atom(), term()}
           | {:invalid_config, term()}
           | {:binding, non_neg_integer(), Binding.new_error()}
@@ -73,7 +110,8 @@ defmodule StatifierRouter.Config do
 
   @tables [:addresses, :dedupe, :routing_ledger]
   @storage_keys [:table_prefix, :prefix]
-  @known [:repo, :delivery, :bindings | @storage_keys]
+  @delivery_keys [:store, :executor, :resolver, :chart_resolver]
+  @known [:repo, :delivery, :bindings | @delivery_keys ++ @storage_keys]
 
   @schemas %{
     Schema.Address => :addresses,
@@ -86,25 +124,32 @@ defmodule StatifierRouter.Config do
   configuration.
 
   Returns `{:ok, config}`, or `{:error, reason}` naming the first fault:
-  an unknown option, then a missing or malformed `:repo`, then a missing or
-  malformed `:delivery`, then a storage value the table does not allow,
-  then the first binding `StatifierRouter.Binding.new/1` refuses, as
-  `{:binding, index, reason}` with `index` counted from zero, then the
-  first duplicated binding `id`.
+  an unknown option, then a missing or malformed `:repo`, then a malformed
+  `:delivery`, then a missing or malformed `:store`, `:executor`,
+  `:resolver` or `:chart_resolver`, in that order, then a storage value the
+  table does not allow, then the first binding
+  `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
+  with `index` counted from zero, then the first duplicated binding `id`.
 
       iex> StatifierRouter.Config.new(repo: MyApp.Repo, delivery: MyApp.Delivery, table_prefix: 7)
       {:error, {:invalid_value, :table_prefix, 7}}
+      iex> StatifierRouter.Config.new(repo: MyApp.Repo)
+      {:error, {:missing_key, :store}}
   """
   @spec new(keyword()) :: {:ok, t()} | {:error, new_error()}
   def new(opts) when is_list(opts) do
     with true <- Keyword.keyword?(opts) || {:error, {:invalid_config, opts}},
          :ok <- reject_unknown(opts, @known),
          {:ok, repo} <- fetch_module(opts, :repo),
-         {:ok, delivery} <- fetch_module(opts, :delivery),
+         {:ok, delivery} <- fetch_delivery(opts),
+         {:ok, needs} <- delivery_needs(opts, delivery),
          {:ok, storage} <- storage(opts),
          {:ok, bindings} <- bindings(opts) do
       {:ok,
-       struct!(__MODULE__, [{:repo, repo}, {:delivery, delivery}, {:bindings, bindings} | storage])}
+       struct!(
+         __MODULE__,
+         [{:repo, repo}, {:delivery, delivery}, {:bindings, bindings} | needs ++ storage]
+       )}
     end
   end
 
@@ -180,16 +225,51 @@ defmodule StatifierRouter.Config do
 
   defp fetch_module(opts, name) do
     case Keyword.fetch(opts, name) do
-      {:ok, module} when is_atom(module) and not is_nil(module) and not is_boolean(module) ->
-        {:ok, module}
-
-      {:ok, other} ->
-        {:error, {:invalid_value, name, other}}
+      {:ok, value} ->
+        if module?(value), do: {:ok, value}, else: {:error, {:invalid_value, name, value}}
 
       :error ->
         {:error, {:missing_key, name}}
     end
   end
+
+  defp fetch_delivery(opts) do
+    case Keyword.fetch(opts, :delivery) do
+      :error -> {:ok, StatifierRouter.Delivery}
+      {:ok, _module} -> fetch_module(opts, :delivery)
+    end
+  end
+
+  # The four options StatifierRouter.Delivery reads. They are required when
+  # it is the delivery module, and checked whenever they are given.
+  defp delivery_needs(opts, delivery) do
+    required? = delivery == StatifierRouter.Delivery
+
+    Enum.reduce_while(@delivery_keys, {:ok, []}, fn name, {:ok, acc} ->
+      case delivery_need(name, Keyword.fetch(opts, name), required?) do
+        {:ok, nil} -> {:cont, {:ok, acc}}
+        {:ok, value} -> {:cont, {:ok, [{name, value} | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp delivery_need(name, {:ok, value}, _required?) do
+    if delivery_value?(name, value),
+      do: {:ok, value},
+      else: {:error, {:invalid_value, name, value}}
+  end
+
+  defp delivery_need(name, :error, true), do: {:error, {:missing_key, name}}
+  defp delivery_need(_name, :error, false), do: {:ok, nil}
+
+  defp delivery_value?(:store, value), do: is_struct(value, StatifierPersistence.Storage)
+  defp delivery_value?(:executor, value) when is_function(value, 2), do: true
+  defp delivery_value?(:executor, value), do: module?(value)
+  defp delivery_value?(:resolver, value), do: is_function(value, 2)
+  defp delivery_value?(:chart_resolver, value), do: is_function(value, 1)
+
+  defp module?(value), do: is_atom(value) and not is_nil(value) and not is_boolean(value)
 
   defp bindings(opts) do
     case Keyword.get(opts, :bindings, []) do

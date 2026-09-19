@@ -191,3 +191,40 @@ after the next reap past it the address is free again.
 - This record leaves to later records: the get-or-create transaction and
   its race, how the scope rides with an event, the names of the recorded
   outcomes, and the code that creates the table.
+
+## Amendment (2026-09-19, sr-v56): the chart an existing execution is stepped on
+
+Status: proposed
+
+Section 4 decides which chart a new execution starts on, and says the
+router asks the host's resolver only when it is about to create one. It
+does not say where the router gets the chart of an execution that
+already exists, and the delivery record needs one for every delivery to
+such an execution: `StatifierPersistence.Executions.step/5` takes the
+compiled machine as an argument (statifier_persistence a1a83a2).
+
+- **By content hash, never by document.** An existing execution is
+  stepped on the chart it started on, named by the content hash its
+  execution record carries (`StatifierPersistence.Storage.fetch_execution/2`).
+  The document is never consulted, so a new revision of a document still
+  changes only where new executions start (section 4).
+- **The host compiles it, through a second callback.** Beside the
+  resolver, the host supplies a chart resolver,
+  `(content_hash) -> {:ok, machine} | :error`. It is the shape
+  statifier_persistence's driver already takes for the same need, a chart
+  it does not hold, and for the same reason: a stored chart blob is opaque
+  to statifier_persistence, so only the host that saved the chart can
+  compile it (`StatifierPersistence.Driver`'s `chart_resolver:` option,
+  statifier_persistence a1a83a2). The router calls it only when it is
+  about to step an existing execution, and never decodes a stored chart
+  itself.
+- **A chart the host cannot resolve is an error, not an outcome.** When
+  the chart resolver answers `:error`, the delivery's transaction rolls
+  back and `route/3` returns `{:error, {:chart_not_resolved,
+  content_hash}}`, as ADR-0004, section 7 decides for a failure that is
+  not about the event and the binding.
+
+A host with a publish store implements both callbacks over it: the
+resolver reads which revision of a document is active, and the chart
+resolver reads a chart by its content hash. The option that carries the
+chart resolver is the code half's.

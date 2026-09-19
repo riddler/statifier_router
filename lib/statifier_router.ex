@@ -37,9 +37,13 @@ defmodule StatifierRouter do
   Of the pieces named above, this release builds the binding, as
   `StatifierRouter.Binding`; the tables behind the rest, created by
   `StatifierRouter.Migrations` and read through the schemas in
-  `StatifierRouter.Schema`; and `route/3`, which evaluates the bindings
-  for one event and hands each delivery to a module the host names. Each
-  piece lands behind the decision record that fixes it, in `docs/adr/`.
+  `StatifierRouter.Schema`; `route/3`, which evaluates the bindings for
+  one event and hands each delivery to the configuration's delivery
+  module; and that module's default, `StatifierRouter.Delivery`, which
+  gets or creates the execution an address names and steps the event into
+  it in one transaction, for a binding whose `create` is `:if_absent`.
+  Each piece lands behind the decision record that fixes it, in
+  `docs/adr/`.
 
   ## Routing an event
 
@@ -96,8 +100,7 @@ defmodule StatifierRouter do
   `{:dropped, binding_id, :finished}` for the binding it was handed, or
   with `{:error, reason}`, and it writes that outcome's rows inside the
   delivery's own transaction (ADR-0003, section 1). Any other answer
-  raises `ArgumentError`. This release ships no delivery module, so the
-  host must name one in `:delivery`.
+  raises `ArgumentError`. The default module is `StatifierRouter.Delivery`.
   """
 
   alias StatifierRouter.Binding
