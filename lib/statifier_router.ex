@@ -34,8 +34,8 @@ defmodule StatifierRouter do
 
   `scope` is an opaque host string; the package gives it no meaning.
 
-  This release is the skeleton: nothing named above is built yet, and
-  `version/0` is the whole public surface. Each piece lands behind the
+  This release is the skeleton: of the pieces named above only the binding
+  is built, as `StatifierRouter.Binding`. Each piece lands behind the
   decision record that fixes it, in `docs/adr/`.
   """
 
