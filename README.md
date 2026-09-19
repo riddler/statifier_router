@@ -73,9 +73,9 @@ first decision record, not by this README.
 
 ## Status
 
-This release is the skeleton. Nothing named above is built yet, and
-`StatifierRouter.version/0` is the whole public surface. Each piece lands
-behind the decision record that fixes it, in [docs/adr/](docs/adr/README.md).
+This release is the skeleton. Of the pieces named above only the binding is
+built, as `StatifierRouter.Binding`. Each piece lands behind the decision
+record that fixes it, in [docs/adr/](docs/adr/README.md).
 
 ## Installation
 
