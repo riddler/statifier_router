@@ -120,9 +120,10 @@ by the time `step/5` is handed the event (its chart finished while it was
 initialized), the outcome is dropped: finished with that execution's id:
 the create was the binding's to make, and the event did not reach it.
 
-The one write a drop makes outside the ledger is the `terminal_seen_at`
-stamp on the address row that ADR-0002, section 5 asks for, and that row
-is the router's, not the execution's.
+The writes a drop makes outside the ledger are the router's own: the
+dedupe row the delivery record defines, and the `terminal_seen_at` stamp
+on the address row that ADR-0002, section 5 asks for. Neither is the
+execution's.
 
 ### 4. The ledger
 
@@ -150,11 +151,12 @@ The ledger is append-only: one row per recorded outcome per attempt, never
 updated. A front that hands the router the same message again makes a
 second attempt, and the second attempt's outcomes are rows of their own;
 for a binding that delivered the first time, that row is a duplicate.
-The ledger rows of delivered and created_and_delivered are written in the
-delivery record's transaction, so they commit exactly when the input does;
-the rows of every other outcome the ledger holds are written by the
-evaluation that decides them. The ledger is not the dedupe table: which
-table answers "already handled" is the delivery record's.
+The ledger row of every outcome decided inside the delivery record's
+transaction commits with that transaction, so a delivered or
+created_and_delivered row commits exactly when the input does; a
+key_refused row, decided before any delivery, is written on its own. The
+ledger is not the dedupe table: which table answers "already handled" is
+the delivery record's.
 
 ### 5. no_match is returned and counted, never written as a row
 
