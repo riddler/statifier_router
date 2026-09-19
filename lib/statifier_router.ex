@@ -40,11 +40,12 @@ defmodule StatifierRouter do
   `StatifierRouter.Schema`; `route/3`, which evaluates the bindings for
   one event and hands each delivery to the configuration's delivery
   module; and that module's default, `StatifierRouter.Delivery`, which
-  gets or creates the execution an address names and steps the event into
-  it in one transaction, for a binding whose `create` is `:if_absent`,
-  after claiming the message for the binding with `StatifierRouter.Dedupe`,
-  whose `reap/2` the host schedules. Each piece lands behind the decision record that fixes it, in
-  `docs/adr/`.
+  claims the message for the binding with `StatifierRouter.Dedupe` and
+  then, in the same transaction, gets or creates the execution an address
+  names and steps the event into it, under each of the three `create`
+  modes. The host schedules the two reapers, `StatifierRouter.Dedupe.reap/2`
+  and `StatifierRouter.Addresses.reap/2`. Each piece lands behind the
+  decision record that fixes it, in `docs/adr/`.
 
   ## Routing an event
 
