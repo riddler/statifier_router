@@ -199,7 +199,7 @@ Status: proposed
 Section 4 decides which chart a new execution starts on, and says the
 router asks the host's resolver only when it is about to create one. It
 does not say where the router gets the chart of an execution that
-already exists, and the delivery record needs one for every delivery to
+already exists, and the delivery record needs one for every step of
 such an execution: `StatifierPersistence.Executions.step/5` takes the
 compiled machine as an argument (statifier_persistence a1a83a2).
 
