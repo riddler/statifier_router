@@ -34,9 +34,12 @@ defmodule StatifierRouter do
 
   `scope` is an opaque host string; the package gives it no meaning.
 
-  This release is the skeleton: of the pieces named above only the binding
-  is built, as `StatifierRouter.Binding`. Each piece lands behind the
-  decision record that fixes it, in `docs/adr/`.
+  This release is the skeleton: of the pieces named above the binding is
+  built, as `StatifierRouter.Binding`, and so are the tables behind the
+  rest, created by `StatifierRouter.Migrations` and read through the
+  schemas in `StatifierRouter.Schema`. Nothing writes those tables yet.
+  Each piece lands behind the decision record that fixes it, in
+  `docs/adr/`.
   """
 
   @version Mix.Project.config()[:version]

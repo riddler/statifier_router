@@ -76,14 +76,17 @@ defmodule StatifierRouter.MixProject do
       {:statifier_persistence, "~> 0.12.0"},
       {:predicator, "~> 9.4"},
       {:ecto_sql, "~> 3.14"},
-      {:postgrex, "~> 0.22"},
 
       # Dev / test
       {:ex_quality, "~> 0.14", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
-      {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false}
+      {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},
+      # Test-only: a host brings its own database driver, and this package
+      # needs one only to test itself (the rule sp-ADR-0005 records for
+      # statifier_persistence).
+      {:postgrex, "~> 0.22", only: :test}
     ]
   end
 end
