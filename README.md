@@ -73,9 +73,13 @@ first decision record, not by this README.
 
 ## Status
 
-This release is the skeleton. Of the pieces named above only the binding is
-built, as `StatifierRouter.Binding`. Each piece lands behind the decision
-record that fixes it, in [docs/adr/](docs/adr/README.md).
+This release is the skeleton. Of the pieces named above the binding is built,
+as `StatifierRouter.Binding`, and so are the tables behind the rest: the
+address table, the dedupe table and the routing ledger, created by
+`StatifierRouter.Migrations` and read through the schemas in
+`StatifierRouter.Schema`. Nothing writes those tables yet. Each piece lands
+behind the decision record that fixes it, in
+[docs/adr/](docs/adr/README.md).
 
 ## Installation
 
