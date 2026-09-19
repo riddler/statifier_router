@@ -31,9 +31,10 @@ Facts outside this package that bound the answer:
   missing map key or an out-of-range index reads as `:undefined` rather
   than failing (predicator's `docs/guides/nested-data-access.md`). Some
   opcodes propagate it (`compare` under a non-strict operator such as
-  `==`, `in`, `contains`), some reject it with an error (`not`, the
-  arithmetic operators, among others), and a strict `===` compares it
-  like any other value. Its truth rule is that "true" means exactly
+  `==`, and the `in` and `contains` opcodes), some reject it with an
+  error (`not`, the arithmetic operators, among others), and a strict
+  `===` compares it like any other value.
+  Its truth rule is that "true" means exactly
   `true`, and "falsy" means `false`, `null` or `:undefined` and nothing
   else (predicator's `docs/isa.md`: section 2 for these rules, and the
   `compare` subsection of section 5 for `===`).
