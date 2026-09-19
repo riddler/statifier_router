@@ -2,18 +2,46 @@ defmodule StatifierRouter.ConfigTest do
   use ExUnit.Case, async: true
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias StatifierRouter.Binding
   alias StatifierRouter.Config
+  alias StatifierRouter.RecordingDelivery
   alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
   alias StatifierRouter.TestRepo
 
   doctest Config
 
+  @delivery RecordingDelivery
+
+  @impressions %{
+    id: "impressions_to_join",
+    source: "ad_events",
+    match: "event.kind == 'impression'",
+    key: "event.impression_id",
+    document: "impression_click_join",
+    event: "impression"
+  }
+
+  @clicks %{
+    id: "clicks_to_join",
+    source: "ad_events",
+    match: "event.kind == 'click'",
+    key: "event.impression_id",
+    document: "impression_click_join",
+    event: "click"
+  }
+
   describe "new/1" do
     # sabotage: storage/1's table_prefix default changed to "statifier_"
     # -> red; restored, green.
     test "resolves the defaults" do
-      assert {:ok, %Config{repo: TestRepo, table_prefix: "statifier_router_", prefix: nil}} =
-               Config.new(repo: TestRepo)
+      assert {:ok,
+              %Config{
+                repo: TestRepo,
+                delivery: @delivery,
+                bindings: [],
+                table_prefix: "statifier_router_",
+                prefix: nil
+              }} = Config.new(repo: TestRepo, delivery: @delivery)
     end
 
     # sabotage: fetch_repo/1 returned {:ok, nil} when :repo was absent ->
@@ -27,17 +55,65 @@ defmodule StatifierRouter.ConfigTest do
     # sabotage: new/1 skipped reject_unknown/2 -> the unknown key was
     # accepted, red; restored, green.
     test "refuses an unknown key before anything else" do
-      assert Config.new(bindings: [], table_prefix: 7) == {:error, {:unknown_key, :bindings}}
+      assert Config.new(bindingz: [], table_prefix: 7) == {:error, {:unknown_key, :bindingz}}
     end
 
     # sabotage: storage/1 accepted any prefix -> red on the integer
     # prefix; restored, green.
     test "refuses a malformed table prefix or Postgres schema" do
-      assert Config.new(repo: TestRepo, table_prefix: "") ==
+      base = [repo: TestRepo, delivery: @delivery]
+
+      assert Config.new(base ++ [table_prefix: ""]) ==
                {:error, {:invalid_value, :table_prefix, ""}}
 
-      assert Config.new(repo: TestRepo, prefix: 1) == {:error, {:invalid_value, :prefix, 1}}
-      assert Config.new(repo: TestRepo, prefix: "") == {:error, {:invalid_value, :prefix, ""}}
+      assert Config.new(base ++ [prefix: 1]) == {:error, {:invalid_value, :prefix, 1}}
+      assert Config.new(base ++ [prefix: ""]) == {:error, {:invalid_value, :prefix, ""}}
+    end
+
+    # sabotage: new/1 skipped the :delivery fetch (delivery: nil in the
+    # struct) -> the missing delivery was accepted, red; restored, green.
+    test "requires a delivery module" do
+      assert Config.new(repo: TestRepo) == {:error, {:missing_key, :delivery}}
+
+      assert Config.new(repo: TestRepo, delivery: "Delivery") ==
+               {:error, {:invalid_value, :delivery, "Delivery"}}
+
+      assert Config.new(repo: TestRepo, delivery: false) ==
+               {:error, {:invalid_value, :delivery, false}}
+    end
+
+    # sabotage: build_bindings/1 prepended without the final reverse ->
+    # the order came back reversed, red; restored, green.
+    test "builds every binding through Binding.new/1 and keeps their order" do
+      {:ok, built} = Binding.new(@clicks)
+
+      assert {:ok, %Config{bindings: [%Binding{id: "impressions_to_join"}, ^built]}} =
+               Config.new(repo: TestRepo, delivery: @delivery, bindings: [@impressions, built])
+    end
+
+    # sabotage: build_bindings/1 skipped a binding Binding.new/1 refused ->
+    # the configuration was accepted, red; restored, green.
+    test "refuses the first binding Binding.new/1 refuses, naming its index" do
+      assert Config.new(
+               repo: TestRepo,
+               delivery: @delivery,
+               bindings: [@impressions, Map.put(@clicks, :mode, :batch)]
+             ) == {:error, {:binding, 1, {:reserved_key, :mode}}}
+
+      assert Config.new(repo: TestRepo, delivery: @delivery, bindings: :none) ==
+               {:error, {:invalid_value, :bindings, :none}}
+    end
+
+    # sabotage: new/1 skipped refuse_duplicate_ids/1 -> the duplicated id
+    # was accepted, red; restored, green.
+    test "refuses a duplicate binding id, naming it" do
+      again = %{@clicks | match: "event.kind == 'tap'"}
+
+      assert Config.new(
+               repo: TestRepo,
+               delivery: @delivery,
+               bindings: [@clicks, @impressions, again]
+             ) == {:error, {:duplicate_binding_id, "clicks_to_join"}}
     end
 
     # sabotage: new/1's non-list clause removed -> FunctionClauseError,
@@ -52,7 +128,7 @@ defmodule StatifierRouter.ConfigTest do
     # sabotage: table_name/2 dropped the table prefix -> red; restored,
     # green.
     test "names each table under the table prefix" do
-      {:ok, config} = Config.new(repo: TestRepo, table_prefix: "ads_")
+      {:ok, config} = Config.new(repo: TestRepo, delivery: @delivery, table_prefix: "ads_")
 
       assert Enum.map([:addresses, :dedupe, :routing_ledger], &Config.table(config, &1)) ==
                ["ads_addresses", "ads_dedupe", "ads_routing_ledger"]
@@ -62,7 +138,7 @@ defmodule StatifierRouter.ConfigTest do
   describe "the schemas under the default configuration" do
     setup do
       :ok = Sandbox.checkout(TestRepo)
-      {:ok, config} = Config.new(repo: TestRepo)
+      {:ok, config} = Config.new(repo: TestRepo, delivery: @delivery)
       {:ok, config: config}
     end
 

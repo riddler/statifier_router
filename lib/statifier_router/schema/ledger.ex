@@ -5,8 +5,9 @@ defmodule StatifierRouter.Schema.Ledger do
 
   `key` is empty for key_refused, `execution_id` is empty where the
   outcome names no execution, and `reason` is empty for every outcome but
-  key_refused. See `StatifierRouter.Schema` for how a row reaches a
-  configured table.
+  key_refused, when it holds the reason term as `inspect/1` renders it
+  (see `StatifierRouter`). See `StatifierRouter.Schema` for how a row
+  reaches a configured table.
   """
 
   use Ecto.Schema
