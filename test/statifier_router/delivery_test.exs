@@ -236,25 +236,6 @@ defmodule StatifierRouter.DeliveryTest do
     end
   end
 
-  describe "the create modes this release does not deliver" do
-    # sabotage: deliver/4's :if_absent head matched every create mode ->
-    # an execution was created, red; restored, green.
-    test ":never and :always_new answer {:error, :not_implemented} and write nothing",
-         %{config: config} do
-      for mode <- [:never, :always_new] do
-        assert Delivery.deliver(
-                 config,
-                 impression_binding(%{create: mode}),
-                 "imp_7f3a",
-                 delivery("ad_events/3/1042", "impression")
-               ) == {:error, :not_implemented}
-      end
-
-      assert addresses(config) == []
-      assert executions() == 0
-    end
-  end
-
   defp impression_binding(overrides) do
     {:ok, binding} = Binding.new(Map.merge(hd(bindings()), overrides))
     binding

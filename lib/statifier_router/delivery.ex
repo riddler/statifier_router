@@ -27,35 +27,50 @@ defmodule StatifierRouter.Delivery do
 
   ## What one delivery does
 
-  Under a binding whose `create` is `:if_absent`, the transaction:
+  The transaction first claims `(binding_id, message_id)` with
+  `StatifierRouter.Dedupe.claim/4`, its first write under every `create`
+  mode. When the pair's row is present and unexpired, the delivery is a
+  duplicate, and the transaction writes the ledger row and nothing else:
+  no address row is read or written (ADR-0003, section 6). Past the claim,
+  the binding's `create` decides the rest (ADR-0003, section 4):
 
-    1. claims `(binding_id, message_id)` with
-       `StatifierRouter.Dedupe.claim/4`; when the pair's row is present
-       and unexpired, the delivery is a duplicate, and the transaction
-       writes the ledger row and nothing else (ADR-0003, section 6);
-    2. reads the address row for `(scope, document, key)`;
-    3. when there is none, mints an execution id and inserts the row with
-       it, an insert that inserts nothing on a conflict with the unique
-       index and does not fail the transaction; when it inserted nothing,
-       another delivery's row won the race, and a following statement
-       reads that row (ADR-0003, section 3);
-    4. for the row it inserted, asks the resolver for the chart and calls
-       `create/4` under the minted id; for a row it read, reads the
-       execution's status;
-    5. calls `step/5` with the event, unless the execution is terminal;
-    6. writes the ledger row (ADR-0004, section 4) and commits.
+    * `:if_absent` reads the address row for `(scope, document, key)`.
+      When there is none, it mints an execution id and inserts the row
+      with it, an insert that inserts nothing on a conflict with the
+      unique index and does not fail the transaction; when it inserted
+      nothing, another delivery's row won the race, and a following
+      statement reads that row (ADR-0003, section 3). For the row it
+      inserted, it asks the resolver for the chart and calls `create/4`
+      under the minted id; for a row it read, it reads the execution's
+      status.
+    * `:never` reads the address row and never inserts one. When there is
+      none, the outcome is `{:dropped, binding_id, :no_execution}`:
+      nothing is created or stepped, and the ledger row and the claim's
+      dedupe row are the delivery's only writes. For a row it read, it
+      reads the execution's status, as `:if_absent` does.
+    * `:always_new` neither reads nor writes an address row (ADR-0002,
+      section 7). It mints an execution id, asks the resolver for the
+      chart and calls `create/4` under that id, for every delivery; the
+      minted id is the only handle on the execution.
+
+  Then it calls `step/5` with the event, unless the execution is
+  terminal, writes the ledger row (ADR-0004, section 4) and commits.
 
   The outcomes are `{:created_and_delivered, binding_id, execution_id}`
   when this delivery created the execution, `{:delivered, binding_id,
   execution_id}` when it stepped one that existed, `{:duplicate,
-  binding_id}` when the claim found the pair already handled, and
-  `{:dropped, binding_id, :finished}` when the execution was terminal:
-  read terminal before the step, created already terminal, or answered
-  `{:discarded, execution}` by `step/5` (ADR-0004, section 3). A terminal
-  sighting stamps the address row's `terminal_seen_at` when it is still
-  empty (ADR-0002, section 5). Every outcome but the duplicate commits
-  the dedupe row the claim wrote, a drop included, and a duplicate's
-  ledger row carries the key and no execution id (ADR-0004, section 4).
+  binding_id}` when the claim found the pair already handled,
+  `{:dropped, binding_id, :no_execution}` for a `:never` binding whose
+  address has no row, and `{:dropped, binding_id, :finished}` when the
+  execution was terminal: read terminal before the step, created already
+  terminal, or answered `{:discarded, execution}` by `step/5` (ADR-0004,
+  section 3). A terminal sighting through an address row stamps the row's
+  `terminal_seen_at` when it is still empty (ADR-0002, section 5); the
+  row itself is left in place, and removing it is
+  `StatifierRouter.Addresses.reap/2`'s. Every outcome but the duplicate
+  commits the dedupe row the claim wrote, a drop included, and a
+  duplicate's ledger row carries the key and no execution id (ADR-0004,
+  section 4).
 
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
@@ -67,9 +82,6 @@ defmodule StatifierRouter.Delivery do
   raise rolls it back the same way and propagates; nothing here rescues
   it. Effects the executor was handed before a rollback stay fired
   (ADR-0003, section 2).
-
-  Under `:never` and `:always_new` this release answers
-  `{:error, :not_implemented}` and writes nothing.
 
   The execution id is a UXID with the prefix `ex`, minted by
   `UXID.generate!/1`; nothing is derived from the address (ADR-0002,
@@ -97,9 +109,9 @@ defmodule StatifierRouter.Delivery do
   """
   @spec deliver(Config.t(), Binding.t(), String.t(), StatifierRouter.delivery()) ::
           StatifierRouter.outcome() | {:error, term()}
-  def deliver(%Config{} = config, %Binding{create: :if_absent} = binding, key, delivery) do
+  def deliver(%Config{} = config, %Binding{} = binding, key, delivery) do
     config.repo.transaction(fn ->
-      case if_absent(config, binding, key, delivery) do
+      case claimed(config, binding, key, delivery) do
         {:ok, outcome} -> outcome
         {:error, reason} -> config.repo.rollback(reason)
       end
@@ -110,27 +122,36 @@ defmodule StatifierRouter.Delivery do
     end
   end
 
-  def deliver(%Config{}, %Binding{create: mode}, _key, _delivery)
-      when mode in [:never, :always_new],
-      do: {:error, :not_implemented}
-
-  defp if_absent(config, binding, key, delivery) do
+  # The claim is the transaction's first write under every create mode: a
+  # duplicate touches nothing past it (ADR-0003, sections 1 and 6).
+  defp claimed(config, binding, key, delivery) do
     case Dedupe.claim(config, binding, delivery.message_id, delivery.now) do
-      :new -> address(config, binding, key, delivery)
+      :new -> by_mode(config, binding, key, delivery)
       :duplicate -> duplicate(config, binding, key, delivery)
     end
   end
 
+  defp by_mode(config, %Binding{create: :always_new} = binding, key, delivery),
+    do: create(config, binding, key, delivery, mint_execution_id(), nil)
+
+  defp by_mode(config, binding, key, delivery) do
+    case lookup(config, delivery.scope, binding.document, key) do
+      %Address{} = row -> existing(config, binding, key, delivery, row)
+      nil -> absent(config, binding, key, delivery)
+    end
+  end
+
+  defp absent(config, %Binding{create: :never} = binding, key, delivery) do
+    record(config, binding, key, delivery, "dropped: no_execution", nil)
+    {:ok, {:dropped, binding.id, :no_execution}}
+  end
+
+  defp absent(config, %Binding{create: :if_absent} = binding, key, delivery),
+    do: insert_or_existing(config, binding, key, delivery)
+
   defp duplicate(config, binding, key, delivery) do
     record(config, binding, key, delivery, "duplicate", nil)
     {:ok, {:duplicate, binding.id}}
-  end
-
-  defp address(config, binding, key, delivery) do
-    case lookup(config, delivery.scope, binding.document, key) do
-      %Address{} = row -> existing(config, binding, key, delivery, row)
-      nil -> insert_or_existing(config, binding, key, delivery)
-    end
   end
 
   defp insert_or_existing(config, binding, key, delivery) do
@@ -153,18 +174,20 @@ defmodule StatifierRouter.Delivery do
         existing(config, binding, key, delivery, winner)
 
       %Address{} = inserted ->
-        create(config, binding, key, delivery, inserted)
+        create(config, binding, key, delivery, inserted.execution_id, inserted)
     end
   end
 
-  defp create(config, binding, key, delivery, row) do
+  # `row` is the address row the execution id was written to, or nil under
+  # :always_new, which writes none (ADR-0002, section 7).
+  defp create(config, binding, key, delivery, execution_id, row) do
     with {:ok, machine} <- resolve(config, delivery.scope, binding.document),
          {:ok, execution, _state} <-
-           Executions.create(config.store, row.execution_id, machine, executor: config.executor) do
+           Executions.create(config.store, execution_id, machine, executor: config.executor) do
       if execution.status in @terminal do
-        finished(config, binding, key, delivery, row)
+        finished(config, binding, key, delivery, execution_id, row)
       else
-        step(config, binding, key, delivery, row, machine, :created_and_delivered)
+        step(config, binding, key, delivery, {execution_id, row}, machine, :created_and_delivered)
       end
     end
   end
@@ -172,11 +195,11 @@ defmodule StatifierRouter.Delivery do
   defp existing(config, binding, key, delivery, row) do
     case Storage.fetch_execution(config.store, row.execution_id) do
       {:ok, %{status: status}} when status in @terminal ->
-        finished(config, binding, key, delivery, row)
+        finished(config, binding, key, delivery, row.execution_id, row)
 
       {:ok, record} ->
         with {:ok, machine} <- chart(config, record.content_hash) do
-          step(config, binding, key, delivery, row, machine, :delivered)
+          step(config, binding, key, delivery, {row.execution_id, row}, machine, :delivered)
         end
 
       {:error, _reason} = error ->
@@ -184,27 +207,25 @@ defmodule StatifierRouter.Delivery do
     end
   end
 
-  defp step(config, binding, key, delivery, row, machine, outcome) do
+  defp step(config, binding, key, delivery, {execution_id, row}, machine, outcome) do
     event = Event.external(delivery.name, data: delivery.data)
 
-    case Executions.step(config.store, row.execution_id, machine, event,
-           executor: config.executor
-         ) do
+    case Executions.step(config.store, execution_id, machine, event, executor: config.executor) do
       {:ok, _execution, _state} ->
-        record(config, binding, key, delivery, Atom.to_string(outcome), row.execution_id)
-        {:ok, {outcome, binding.id, row.execution_id}}
+        record(config, binding, key, delivery, Atom.to_string(outcome), execution_id)
+        {:ok, {outcome, binding.id, execution_id}}
 
       {:discarded, _execution} ->
-        finished(config, binding, key, delivery, row)
+        finished(config, binding, key, delivery, execution_id, row)
 
       {:error, _reason} = error ->
         error
     end
   end
 
-  defp finished(config, binding, key, delivery, row) do
-    stamp_terminal_seen(config, row, delivery.now)
-    record(config, binding, key, delivery, "dropped: finished", row.execution_id)
+  defp finished(config, binding, key, delivery, execution_id, row) do
+    if row, do: stamp_terminal_seen(config, row, delivery.now)
+    record(config, binding, key, delivery, "dropped: finished", execution_id)
     {:ok, {:dropped, binding.id, :finished}}
   end
 

@@ -114,6 +114,16 @@ absent when a delivery claims its message, so the reaper only reclaims
 space: a host that never schedules it is still correct, and keeps every
 row.
 
+`StatifierRouter.Addresses.reap/2` takes the configuration and the host's
+current bindings. It deletes the address rows whose execution finished longer
+ago than the longest dedupe horizon of any enabled binding naming the row's
+document, stamping the time it first sees an execution finished. A document no
+enabled binding names has a horizon of zero, so its finished rows go at the
+next reap. One call examines at most `:limit` rows and answers with a `next`
+cursor; a host sweeps the table by calling again with `after: next` until
+`next` is `nil`. A host that never schedules it keeps every row, which is
+correct and only costs space.
+
 A host that runs [Oban](https://hexdocs.pm/oban) would write a worker and a
 cron entry like these; this package depends on neither:
 
@@ -146,8 +156,8 @@ address table, the dedupe table and the routing ledger, created by
 `StatifierRouter.Schema`. `StatifierRouter.route/3` evaluates the bindings
 for an event and writes the ledger row of a refusal, and
 `StatifierRouter.Delivery`, its default delivery module, gets or creates the
-execution an address names and steps the event into it in one transaction, for
-bindings whose `create` is `:if_absent`, after claiming the message for the
+execution an address names and steps the event into it in one transaction,
+under each of the three `create` modes, after claiming the message for the
 binding in the same transaction with `StatifierRouter.Dedupe`.
 Each piece lands behind the decision record that fixes it, in
 [docs/adr/](docs/adr/README.md).
