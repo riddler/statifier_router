@@ -1,8 +1,9 @@
 defmodule StatifierRouter.BootstrapMigrations do
   @moduledoc """
   The suite-wide DDL bootstrap: the package's tables under the default
-  options, applied once by `test/test_helper.exs` through `Ecto.Migrator`
-  (idempotent on `:already_up`) and left in place. The SQL sandbox rolls
+  options and statifier_persistence's tables for
+  `StatifierRouter.TestPersistence`, applied once by `test/test_helper.exs`
+  through `Ecto.Migrator` (idempotent on `:already_up`) and left in place. The SQL sandbox rolls
   each test's rows back, so only the DDL persists from one suite to the next.
 
   The live migration tests in `StatifierRouter.MigrationsTest` do not use
@@ -11,7 +12,8 @@ defmodule StatifierRouter.BootstrapMigrations do
   """
 
   @migrations [
-    {20_260_919_000_101, __MODULE__.DefaultTables}
+    {20_260_919_000_101, __MODULE__.DefaultTables},
+    {20_260_919_000_102, __MODULE__.PersistenceTables}
   ]
 
   defmodule DefaultTables do
@@ -25,6 +27,18 @@ defmodule StatifierRouter.BootstrapMigrations do
     # bootstrap migration of its own, as a host's would.
     def up, do: Migrations.up(version: 1)
     def down, do: Migrations.down(from: 1)
+  end
+
+  defmodule PersistenceTables do
+    @moduledoc false
+    use Ecto.Migration
+
+    alias StatifierPersistence.Ecto.Migrations
+
+    # statifier_persistence's tables, which the delivery tests create and
+    # step executions in, through StatifierRouter.TestPersistence.
+    def up, do: Migrations.up(for: StatifierRouter.TestPersistence)
+    def down, do: Migrations.down(for: StatifierRouter.TestPersistence)
   end
 
   @doc "Applies every bootstrap migration, tolerating `:already_up`."

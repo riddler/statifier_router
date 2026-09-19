@@ -19,9 +19,13 @@
 The front of this package is [Broadway](https://hexdocs.pm/broadway). The host
 starts `StatifierRouter.Broadway` in its own supervision tree with any
 producer it already operates, and `partition_by` keeps every message for one key
-on one processor, so the events for one execution are delivered in order
-without a lock held across the step. Each message is matched against the
-bindings, addressed, and delivered to a durable
+on one processor, so the events for one key reach the router one after another
+instead of queueing on a lock. The partitioner is an optimisation, not the
+guarantee: each delivery steps its execution under statifier_persistence's
+per-execution lock and holds that lock until its transaction commits, so two
+events for one execution are stepped one at a time, in the order the lock
+grants them, whether or not they came through the front. Each message is
+matched against the bindings, addressed, and delivered to a durable
 [statifier](https://github.com/riddler/statifier-ex) execution kept by
 [statifier_persistence](https://github.com/riddler/statifier_persistence),
 which is created when absent.
@@ -77,8 +81,12 @@ This release is the skeleton. Of the pieces named above the binding is built,
 as `StatifierRouter.Binding`, and so are the tables behind the rest: the
 address table, the dedupe table and the routing ledger, created by
 `StatifierRouter.Migrations` and read through the schemas in
-`StatifierRouter.Schema`. Nothing writes those tables yet. Each piece lands
-behind the decision record that fixes it, in
+`StatifierRouter.Schema`. `StatifierRouter.route/3` evaluates the bindings
+for an event and writes the ledger row of a refusal, and
+`StatifierRouter.Delivery`, its default delivery module, gets or creates the
+execution an address names and steps the event into it in one transaction, for
+bindings whose `create` is `:if_absent`. Nothing writes the dedupe table yet.
+Each piece lands behind the decision record that fixes it, in
 [docs/adr/](docs/adr/README.md).
 
 ## Installation
