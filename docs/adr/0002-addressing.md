@@ -68,8 +68,8 @@ a binding carries none. The package never says what a scope means, compares
 it only for equality, and gives it no structure: two events with equal
 scopes, documents and keys share an execution, and any difference in scope
 keeps them apart. The word is `scope` in every column, function and
-document of this package. How the scope rides with an event is the delivery
-record's.
+piece of documentation in this package. How the scope rides with an event
+is the delivery record's.
 
 ### 3. The router mints the execution id
 
