@@ -96,29 +96,32 @@ rest. Given a binding that reaches the last step, the outcome is:
 An `:always_new` binding reads and writes no address row (ADR-0002,
 section 7), so its three columns are one case: every delivery creates.
 A created_and_delivered cell becomes dropped: finished in the one case
-section 3 names, an execution that is already terminal when it is handed
-the event.
+section 3 names, an execution that `create/4` returns already terminal.
 
-### 3. A refusal or a drop never creates or touches an execution
+### 3. A refusal or a drop never creates or touches an execution, except the create that precedes a dropped: finished
 
-For a refusal or a drop, the router creates no execution, steps none and
-writes none, with the one exception named at the end of the next
-paragraph, where the create came first. Every refusal, every duplicate
-and dropped: no_execution is decided before any call to `create/4` or
-`step/5`, because a called `create/4` fires its chart's initialize
-effects whether or not it succeeds. The router decides
-dropped: finished from the address row and the execution's status, and
-steps nothing.
+A refusal or a drop never creates, steps or writes an execution, with one
+exception: the create that precedes a dropped: finished, named below.
+Every refusal, every duplicate and dropped: no_execution is decided before
+any call to `create/4` or `step/5`, because a called `create/4` fires its
+chart's initialize effects whether or not it succeeds. The router reads
+the status of the execution the address row names before it calls
+`step/5`, and when that read finds the execution terminal, the outcome is
+dropped: finished and nothing is stepped.
 
-Two cases reach dropped: finished after a call has been made. When `step/5` answers `{:discarded,
-execution}` because the execution became terminal after the router's
-read, the outcome is dropped: finished and statifier_persistence's input
-log carries nothing for it (sp-ADR-0010, section 5); whatever `step/5`
-does with its own record in that case is statifier_persistence's. And
-when an execution the router created for this event is already terminal
-by the time `step/5` is handed the event (its chart finished while it was
-initialized), the outcome is dropped: finished with that execution's id:
-the create was the binding's to make, and the event did not reach it.
+Two cases reach dropped: finished after a call has been made, and in
+neither does the execution's input log receive the event. In the first,
+`step/5` is called: it answers `{:discarded, execution}` because the
+execution became terminal after the router's read, and that answer
+decides the outcome. statifier_persistence's input log carries nothing for
+a discarded delivery (sp-ADR-0010, section 5), and whatever `step/5` does
+with its own record in that case is statifier_persistence's. In the
+second, `create/4` is called, and this is the one exception: an execution
+the router created for this event is already terminal when `create/4`
+returns it (its chart finished while it was initialized), so it is not
+stepped, and the outcome is dropped: finished with that execution's id.
+The create was the binding's to make, and the event did not reach the
+execution.
 
 The writes a drop makes outside the ledger are the router's own: the
 dedupe row the delivery record defines, and the `terminal_seen_at` stamp
@@ -255,7 +258,10 @@ click: the duplicate, the refusal and the drop never reached it.
 - Everything that did not land is findable per binding. A host asking why
   an event did not reach an execution reads the binding's ledger and finds
   a duplicate, a refusal with its reason, or a drop; an execution never
-  carries a trace of an event that did not reach it.
+  carries a trace of an event that did not reach it. The one execution a
+  drop can leave behind is the exception of section 3, one created for the
+  event that was already terminal when `create/4` returned it, and its
+  input log does not hold the event.
 - A no_match leaves no durable trace. A host that needs to know how often
   a binding did not apply counts the telemetry event; a host that needs to
   know that a particular event matched no binding at all reads the `{:ok,
