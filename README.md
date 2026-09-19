@@ -206,18 +206,22 @@ config :my_app, Oban,
 
 ## Status
 
-This release is the skeleton. Of the pieces named above the binding is built,
-as `StatifierRouter.Binding`, and so are the tables behind the rest: the
-address table, the dedupe table and the routing ledger, created by
+Every piece named under "What this package owns" is built in this release.
+The Broadway front is `StatifierRouter.Broadway`. The binding is
+`StatifierRouter.Binding`. The tables behind the rest - the address table,
+the dedupe table and the routing ledger - are created by
 `StatifierRouter.Migrations` and read through the schemas in
 `StatifierRouter.Schema`. `StatifierRouter.route/3` evaluates the bindings
 for an event and writes the ledger row of a refusal, and
 `StatifierRouter.Delivery`, its default delivery module, gets or creates the
 execution an address names and steps the event into it in one transaction,
 under each of the three `create` modes, after claiming the message for the
-binding in the same transaction with `StatifierRouter.Dedupe`.
-Each piece lands behind the decision record that fixes it, in
-[docs/adr/](docs/adr/README.md).
+binding in the same transaction with `StatifierRouter.Dedupe`. The chart a
+new execution starts on is the host's `StatifierRouter.Resolver`, or
+`StatifierRouter.Resolver.Static` over charts compiled at boot. The host
+schedules the two reapers, `StatifierRouter.Dedupe.reap/2` and
+`StatifierRouter.Addresses.reap/2`. Each piece lands behind the decision
+record that fixes it, in [docs/adr/](docs/adr/README.md).
 
 ## Installation
 
@@ -231,4 +235,4 @@ end
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT - see [LICENSE](https://github.com/riddler/statifier_router/blob/main/LICENSE).
