@@ -1,0 +1,11 @@
+# mise config for statifier_router: toolchain only.
+#
+#   mise install        provision the toolchain below
+#
+# Pinned to match statifier_persistence and statifier-ex, the two packages
+# this one builds on. Nothing in lib/ or test/ needs anything beyond Erlang
+# and Elixir.
+
+[tools]
+erlang = "27.3"
+elixir = "1.18.3-otp-27"

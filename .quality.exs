@@ -1,0 +1,45 @@
+# Quality configuration for statifier_router.
+#
+#   mix quality                 - full gate: format, compile, credo, dialyzer,
+#                                 deps audit, full test suite with coverage.
+#                                 Run before every commit.
+#
+#   mix quality --profile loop  - inner loop while implementing: skips dialyzer
+#                                 and coverage, runs only the tests covering
+#                                 changed code. Use between edits.
+#
+# Agents: prefer `--format json --report -` when you want to route on results.
+#
+# Copied from statifier_persistence's gate, and deliberately smaller than
+# statifier-ex's. That repo's custom stages - the gate guard, the ADR guard
+# and judge, the regression ratchet - exist to protect a conformance corpus
+# and an accepted ADR set this package does not have yet. Adopting any of
+# them here is a decision to record when there is something for it to
+# protect, not a default to inherit.
+#
+# There is deliberately no .credo.exs either: credo's own defaults under
+# --strict are the gate until this package has a reason to deviate from one.
+
+[
+  compile: [
+    warnings_as_errors: true
+  ],
+
+  # Check-mode, not reformat-mode (the family-wide decision the statifier
+  # repos share): a gate that rewrites drifting files cannot report drift as
+  # a finding, so unformatted code would pass instead of going red. Drift
+  # fails the stage; run `mix format` yourself before committing.
+  format: [
+    check: true
+  ],
+
+  credo: [
+    strict: true
+  ],
+  profiles: [
+    loop: [
+      stages: [:format, :compile, :credo, :test],
+      test: [scope: :changed, coverage: false]
+    ]
+  ]
+]
