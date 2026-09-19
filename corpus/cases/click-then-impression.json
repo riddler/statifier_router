@@ -1,0 +1,42 @@
+{
+  "id": "click-then-impression",
+  "description": "A click arrives before its impression, and the impression follows within the hour: the execution joins, cancels the orphan timer and holds the grace period.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"]
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/4/2210", "data": {"kind": "click", "impression_id": "imp_9b21", "clicked_at": "2026-09-19T08:00:00Z", "url": "https://example.com/offer"}}},
+    {"advance": "PT30M"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/1/0877", "data": {"kind": "impression", "impression_id": "imp_9b21", "shown_at": "2026-09-19T07:59:58Z", "placement": "header"}}},
+    {"advance": "PT45M"}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "clicks_to_join", "message_id": "ad_events/4/2210", "outcome": "created_and_delivered", "key": "imp_9b21"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/1/0877", "outcome": "delivered", "key": "imp_9b21"}
+    ],
+    "status": "active",
+    "configuration": ["closed"],
+    "timers": ["grace.over"],
+    "datamodel": {"outcome": "joined", "late_clicks": []}
+  }
+}

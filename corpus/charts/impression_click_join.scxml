@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The impression / click left outer join: one execution per impression_id.
+
+  An impression waits 24 hours for its click; a click waits 1 hour for its
+  impression. Either way the execution then holds a 1 hour grace period, in
+  the state closed, before it finishes in done.
+
+  Where the join's design sends a result to a sink, this chart assigns the
+  result to the datamodel instead: outcome is joined, expired or
+  orphan_click, and a click that arrives during the grace period is
+  appended to late_clicks. The timers are the host's: every delay below
+  reaches the host as a delayed send, and a cancel as a cancel.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="predicator" initial="empty">
+  <datamodel>
+    <data id="outcome" expr="null"/>
+    <data id="late_clicks" expr="[]"/>
+  </datamodel>
+
+  <state id="empty">
+    <transition event="impression" target="awaiting_click"/>
+    <transition event="click" target="awaiting_impression"/>
+  </state>
+
+  <state id="awaiting_click">
+    <onentry>
+      <send id="window" event="window.closed" delay="24h"/>
+    </onentry>
+    <transition event="click" target="joined"/>
+    <transition event="window.closed" target="expired"/>
+  </state>
+
+  <state id="awaiting_impression">
+    <onentry>
+      <send id="orphan" event="orphan.timeout" delay="1h"/>
+    </onentry>
+    <transition event="impression" target="joined"/>
+    <transition event="orphan.timeout" target="closed">
+      <assign location="outcome" expr="'orphan_click'"/>
+    </transition>
+  </state>
+
+  <state id="joined">
+    <onentry>
+      <cancel sendid="window"/>
+      <cancel sendid="orphan"/>
+      <assign location="outcome" expr="'joined'"/>
+    </onentry>
+    <transition target="closed"/>
+  </state>
+
+  <state id="expired">
+    <onentry>
+      <assign location="outcome" expr="'expired'"/>
+    </onentry>
+    <transition target="closed"/>
+  </state>
+
+  <state id="closed">
+    <onentry>
+      <send id="grace" event="grace.over" delay="1h"/>
+    </onentry>
+    <transition event="click">
+      <assign location="late_clicks" expr="concat(late_clicks, [_event.data])"/>
+    </transition>
+    <transition event="impression"/>
+    <transition event="grace.over" target="done"/>
+  </state>
+
+  <final id="done"/>
+</scxml>
