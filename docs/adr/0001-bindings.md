@@ -29,11 +29,14 @@ Facts outside this package that bound the answer:
   rather than raising them.
 - **predicator is three-valued.** `:undefined` is a first-class value: a
   missing map key or an out-of-range index reads as `:undefined` rather
-  than failing, and a comparison with an `:undefined` operand is
-  `:undefined` (predicator's `docs/guides/nested-data-access.md`). Its
-  truth rule is that "true" means exactly `true`, and "falsy" means
-  `false`, `null` or `:undefined` and nothing else (predicator's
-  `docs/isa.md`, section 2).
+  than failing (predicator's `docs/guides/nested-data-access.md`). Some
+  opcodes propagate it (`compare` under a non-strict operator such as
+  `==`, `in`, `contains`), some reject it with an error (`not`, the
+  arithmetic operators, among others), and a strict `===` compares it
+  like any other value. Its truth rule is that "true" means exactly
+  `true`, and "falsy" means `false`, `null` or `:undefined` and nothing
+  else (predicator's `docs/isa.md`: section 2 for these rules, and the
+  `compare` subsection of section 5 for `===`).
 - **An execution is created under an id its caller supplies.**
   statifier_persistence's `StatifierPersistence.Executions.create/4` takes
   the execution id as an argument (read at statifier_persistence 2e25130).
@@ -49,7 +52,11 @@ Facts outside this package that bound the answer:
 
 ### 1. The binding schema
 
-A binding is a map with exactly these keys:
+A binding is given as a map or keyword list with exactly these keys, as
+atoms. The enumerated values in the table (`:if_absent`, `:never`,
+`:always_new`, `:message_id`, `:by_key`, `:none`) are atoms; `id`,
+`source`, `document`, `event`, `match`, `key` and each `data` path are
+strings.
 
 | Key | Value | Required or default |
 |---|---|---|
@@ -61,9 +68,9 @@ A binding is a map with exactly these keys:
 | `document` | the stable id of the document whose executions this binding addresses | required |
 | `event` | the name of the chart event delivered to the execution | required |
 | `data` | a list of field paths projected into the delivered event's data (section 5) | default: the empty list |
-| `create` | `if_absent`, `never` or `always_new` | default: `if_absent` |
-| `dedupe` | deduplication on the event's message id, with a per-binding horizon | default: message id, 72 hours |
-| `order` | `by_key` or `none` | default: `by_key` |
+| `create` | `:if_absent`, `:never` or `:always_new` | default: `:if_absent` |
+| `dedupe` | `%{by: :message_id, horizon_ms: h}`: deduplication on the event's message id, the only basis in this release, with a per-binding horizon `h`, a positive integer of milliseconds | default: `%{by: :message_id, horizon_ms: 259_200_000}` (72 hours) |
+| `order` | `:by_key` or `:none` | default: `:by_key` |
 | `enabled` | a boolean | default: `true` |
 
 `document` is never a chart hash. A document keeps its id across revisions,
@@ -75,10 +82,12 @@ decide; this record fixes only that they are keys of a binding, their
 values, and their defaults. What the address table records for a binding
 whose `create` is `always_new` is the address record's.
 
-A configuration holding two bindings with the same `id` is refused. A
-binding with a missing required key, or with a value the table's Value
+A binding with a missing required key, or with a value the table's Value
 column does not allow, is refused when it is constructed, not when an
-event first reaches it.
+event first reaches it. A duplicate `id` is a fault of the configuration,
+not of any one binding: it is refused when the host hands the router its
+list of bindings, before any event is routed, and the refusal names the
+duplicated `id`.
 
 ### 2. match and key are predicator programs over the normalized event
 
@@ -192,11 +201,14 @@ its key evaluates to `:undefined`: that is a key refusal recorded against
 - The binding is the whole routing declaration: a host changes where events
   go by changing bindings, not code, and every later record reads the
   binding's keys as fixed here.
-- A binding fails at construction for every fault that can be seen without
-  an event (a missing or unknown key, a reserved key, an out-of-range
-  value, a duplicate id, a program that does not compile). Only faults that
-  depend on the event (a match or key that errors, a key that is not a
-  non-empty string) are routing refusals at delivery.
+- Every fault that can be seen without an event is refused before any
+  event is routed: a missing or unknown key, a reserved key, an
+  out-of-range value or a program that does not compile when the binding
+  is constructed, and a duplicate id when the host hands the router its
+  bindings. Only faults that depend on the event (a match or key that
+  errors, a match that evaluates to a value other than `true`, `false`,
+  `nil` or `:undefined`, a key that is not a non-empty string) are routing
+  refusals at delivery.
 - Sparse events are normal, not errors. Because `:undefined` does not hold
   a match, a binding written against a field an event lacks simply does not
   apply; because a key must be a non-empty string, an event that holds a
