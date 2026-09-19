@@ -15,10 +15,11 @@ defmodule StatifierRouter.Delivery do
       README, "Writing inside a caller's transaction").
     * `:executor` - the `StatifierPersistence.Executor` both doors hand
       their effects to.
-    * `:resolver` - `(scope, document) -> {content_hash, machine}` or
-      `{:error, reason}`: the chart a new execution of `document` starts
-      on (ADR-0002, section 4). It is called only when the delivery is
-      about to create an execution.
+    * `:resolver` - the `StatifierRouter.Resolver`, a module or an
+      arity-2 fun, answering `{content_hash, machine}` or
+      `{:error, reason}` for `(scope, document)`: the chart a new
+      execution of `document` starts on (ADR-0002, section 4). It is
+      called only when the delivery is about to create an execution.
     * `:chart_resolver` - `(content_hash) -> {:ok, machine}` or `:error`:
       the compiled chart an existing execution started on, which `step/5`
       is handed. An existing execution keeps the chart it started on, so
@@ -75,8 +76,10 @@ defmodule StatifierRouter.Delivery do
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
 
-  An `{:error, reason}` from the resolver, from `create/4`, `step/5` or
-  `StatifierPersistence.Storage.fetch_execution/2`, and
+  An `{:error, reason}` from `create/4`, `step/5` or
+  `StatifierPersistence.Storage.fetch_execution/2`,
+  `{:error, {:unresolved_document, document, reason}}` when the resolver
+  answers `{:error, reason}`, and
   `{:error, {:chart_not_resolved, content_hash}}` when the chart resolver
   answers `:error`, roll the whole transaction back and are returned. A
   raise rolls it back the same way and propagates; nothing here rescues
@@ -97,6 +100,7 @@ defmodule StatifierRouter.Delivery do
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.Dedupe
+  alias StatifierRouter.Resolver
   alias StatifierRouter.Schema.Address
   alias StatifierRouter.Schema.Ledger
 
@@ -230,12 +234,12 @@ defmodule StatifierRouter.Delivery do
   end
 
   defp resolve(config, scope, document) do
-    case config.resolver.(scope, document) do
+    case Resolver.call(config.resolver, scope, document) do
       {content_hash, %Machine{} = machine} when is_binary(content_hash) ->
         {:ok, machine}
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} ->
+        {:error, {:unresolved_document, document, reason}}
 
       other ->
         raise ArgumentError,

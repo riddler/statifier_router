@@ -18,6 +18,7 @@ defmodule StatifierRouter.BroadwayTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierPersistence.Executions
   alias StatifierRouter.Config
+  alias StatifierRouter.Resolver.Static
   alias StatifierRouter.TestRepo
 
   # Every click stays in the one state, so every click is stepped and
@@ -118,7 +119,8 @@ defmodule StatifierRouter.BroadwayTest do
           metadata: Map.take(impression(), [:scope, :message_id, :source])
         )
 
-      assert_receive {:ack, ^ref, [], [%Message{status: {:failed, :unknown_document}}]}, 5_000
+      assert_receive {:ack, ^ref, [], [%Message{status: {:failed, reason}}]}, 5_000
+      assert reason == {:unresolved_document, "impression_click_join", :unknown_document}
       assert executions() == 0
       assert input_rows() == 0
 
@@ -307,9 +309,10 @@ defmodule StatifierRouter.BroadwayTest do
   defp counter_config do
     {:ok, machine} = Statifier.compile(@counter)
     content_hash = Statifier.Machine.identity(machine).content_hash
+    {:ok, resolver} = Static.new(%{{"7c1e", "click_counter"} => machine})
 
     config(self(),
-      resolver: fn _scope, "click_counter" -> {content_hash, machine} end,
+      resolver: resolver,
       chart_resolver: fn ^content_hash -> {:ok, machine} end,
       bindings: [
         %{
