@@ -41,8 +41,9 @@ defmodule StatifierRouter do
   one event and hands each delivery to the configuration's delivery
   module; and that module's default, `StatifierRouter.Delivery`, which
   gets or creates the execution an address names and steps the event into
-  it in one transaction, for a binding whose `create` is `:if_absent`.
-  Each piece lands behind the decision record that fixes it, in
+  it in one transaction, for a binding whose `create` is `:if_absent`,
+  after claiming the message for the binding with `StatifierRouter.Dedupe`,
+  whose `reap/2` the host schedules. Each piece lands behind the decision record that fixes it, in
   `docs/adr/`.
 
   ## Routing an event
@@ -111,8 +112,9 @@ defmodule StatifierRouter do
 
   @typedoc """
   The event a host hands `route/3`: the scope it routes under, the message
-  id its source adapter derived, the source it came from, and the
-  adapter-normalized event as a string-keyed map. Other keys are ignored.
+  id its source adapter derived (a non-empty string, taken as given), the
+  source it came from, and the adapter-normalized event as a string-keyed
+  map. Other keys are ignored.
   """
   @type source_event :: %{
           required(:scope) => String.t(),
@@ -163,11 +165,14 @@ defmodule StatifierRouter do
 
   Returns `{:ok, outcomes}`, one outcome per enabled binding whose `source`
   is the event's source, in configuration order, and `{:ok, []}` when there
-  is no such binding. Returns `{:error, reason}` for a malformed event
-  (`{:invalid_event, event}`) or option (`{:invalid_opts, opts}`,
-  `{:unknown_key, name}`, `{:invalid_value, :now, value}`) before any
-  binding is evaluated, and for the first error the delivery module answers
-  with. The module documentation says what each outcome writes.
+  is no such binding. Returns `{:error, reason}` before any binding is
+  evaluated for an event whose `message_id` is `nil` or empty
+  (`:no_message_id`), for any other malformed event
+  (`{:invalid_event, event}`) and for a malformed option
+  (`{:invalid_opts, opts}`, `{:unknown_key, name}`,
+  `{:invalid_value, :now, value}`), and for the first error the delivery
+  module answers with. The module documentation says what each outcome
+  writes.
 
   `opts`:
 
@@ -203,6 +208,9 @@ defmodule StatifierRouter do
   def refusal_reason(program, {:evaluation_error, error}), do: {program, {:error, error}}
   def refusal_reason(:match, {:non_boolean, value}), do: {:match, {:value, value}}
   def refusal_reason(:key, {:invalid_key, value}), do: {:key, {:value, value}}
+
+  defp validate_event(%{message_id: message_id}) when message_id in [nil, ""],
+    do: {:error, :no_message_id}
 
   defp validate_event(%{scope: scope, message_id: message_id, source: source, data: data} = event)
        when is_binary(scope) and is_binary(message_id) and is_binary(source) and is_map(data),

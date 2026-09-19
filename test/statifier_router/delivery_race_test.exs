@@ -1,7 +1,8 @@
 defmodule StatifierRouter.DeliveryRaceTest do
   @moduledoc """
   Two first events for one key, delivered at once from two processes
-  (ADR-0003, section 3).
+  (ADR-0003, section 3), and two deliveries of one message the same way
+  (ADR-0003, section 6).
 
   Live, outside the SQL sandbox, for the reason statifier_persistence's
   own caller-transaction tests give: the sandbox funnels every process
@@ -21,12 +22,13 @@ defmodule StatifierRouter.DeliveryRaceTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierRouter.Config
-  alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
   alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
 
   @now ~U[2026-09-19 08:00:00.000000Z]
   @scope "race-7c1e"
+  @message_prefix "race-ad_events/"
 
   setup do
     Sandbox.mode(TestRepo, :auto)
@@ -88,6 +90,42 @@ defmodule StatifierRouter.DeliveryRaceTest do
              )
   end
 
+  # sabotage: claim/4 replaced the stored row on every conflict (its
+  # expiry condition dropped) -> the second delivery of the impression
+  # stepped it again as delivered, red; restored, green.
+  test "two concurrent deliveries of one message: one delivery, one duplicate" do
+    test_pid = self()
+    config = config(test_pid, resolver: holding_resolver(test_pid))
+
+    # The first delivery claims the message and then waits, inside its
+    # open transaction, in the resolver.
+    first = Task.async(fn -> StatifierRouter.route(config, scoped(impression()), now: @now) end)
+    assert_receive {:resolving, winner}, 5_000
+
+    # The second's claim waits on the first's uncommitted dedupe row.
+    second = Task.async(fn -> StatifierRouter.route(config, scoped(impression()), now: @now) end)
+    wait_for_lock_wait()
+
+    send(winner, :resolve)
+
+    assert {:ok, [{:created_and_delivered, "impressions_to_join", execution_id}, _]} =
+             Task.await(first, 5_000)
+
+    assert {:ok, [{:duplicate, "impressions_to_join"}, _]} = Task.await(second, 5_000)
+    refute_received {:resolving, _}
+
+    assert inputs(config, execution_id) == [{0, "step", "impression"}]
+
+    assert ["created_and_delivered", "duplicate"] =
+             TestRepo.all(
+               from(l in Config.queryable(config, Ledger),
+                 where: l.scope == @scope,
+                 order_by: l.id,
+                 select: l.outcome
+               )
+             )
+  end
+
   # A resolver that tells the test which process is resolving, then waits
   # for the word to answer.
   defp holding_resolver(test_pid) do
@@ -126,7 +164,8 @@ defmodule StatifierRouter.DeliveryRaceTest do
     end
   end
 
-  defp scoped(event), do: %{event | scope: @scope}
+  defp scoped(event),
+    do: %{event | scope: @scope, message_id: @message_prefix <> event.message_id}
 
   defp executions(execution_ids) do
     TestRepo.aggregate(
@@ -151,5 +190,11 @@ defmodule StatifierRouter.DeliveryRaceTest do
     TestRepo.delete_all(from(e in TestPersistence.Execution, where: e.execution_id in ^ids))
     TestRepo.delete_all(from(a in Config.queryable(config, Address), where: a.scope == @scope))
     TestRepo.delete_all(from(l in Config.queryable(config, Ledger), where: l.scope == @scope))
+
+    TestRepo.delete_all(
+      from(d in Config.queryable(config, Dedupe),
+        where: like(d.message_id, ^"#{@message_prefix}%")
+      )
+    )
   end
 end

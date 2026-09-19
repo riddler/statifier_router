@@ -29,26 +29,33 @@ defmodule StatifierRouter.Delivery do
 
   Under a binding whose `create` is `:if_absent`, the transaction:
 
-    1. reads the address row for `(scope, document, key)`;
-    2. when there is none, mints an execution id and inserts the row with
+    1. claims `(binding_id, message_id)` with
+       `StatifierRouter.Dedupe.claim/4`; when the pair's row is present
+       and unexpired, the delivery is a duplicate, and the transaction
+       writes the ledger row and nothing else (ADR-0003, section 6);
+    2. reads the address row for `(scope, document, key)`;
+    3. when there is none, mints an execution id and inserts the row with
        it, an insert that inserts nothing on a conflict with the unique
        index and does not fail the transaction; when it inserted nothing,
        another delivery's row won the race, and a following statement
        reads that row (ADR-0003, section 3);
-    3. for the row it inserted, asks the resolver for the chart and calls
+    4. for the row it inserted, asks the resolver for the chart and calls
        `create/4` under the minted id; for a row it read, reads the
        execution's status;
-    4. calls `step/5` with the event, unless the execution is terminal;
-    5. writes the ledger row (ADR-0004, section 4) and commits.
+    5. calls `step/5` with the event, unless the execution is terminal;
+    6. writes the ledger row (ADR-0004, section 4) and commits.
 
   The outcomes are `{:created_and_delivered, binding_id, execution_id}`
   when this delivery created the execution, `{:delivered, binding_id,
-  execution_id}` when it stepped one that existed, and
+  execution_id}` when it stepped one that existed, `{:duplicate,
+  binding_id}` when the claim found the pair already handled, and
   `{:dropped, binding_id, :finished}` when the execution was terminal:
   read terminal before the step, created already terminal, or answered
   `{:discarded, execution}` by `step/5` (ADR-0004, section 3). A terminal
   sighting stamps the address row's `terminal_seen_at` when it is still
-  empty (ADR-0002, section 5).
+  empty (ADR-0002, section 5). Every outcome but the duplicate commits
+  the dedupe row the claim wrote, a drop included, and a duplicate's
+  ledger row carries the key and no execution id (ADR-0004, section 4).
 
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
@@ -77,6 +84,7 @@ defmodule StatifierRouter.Delivery do
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
+  alias StatifierRouter.Dedupe
   alias StatifierRouter.Schema.Address
   alias StatifierRouter.Schema.Ledger
 
@@ -107,6 +115,18 @@ defmodule StatifierRouter.Delivery do
       do: {:error, :not_implemented}
 
   defp if_absent(config, binding, key, delivery) do
+    case Dedupe.claim(config, binding, delivery.message_id, delivery.now) do
+      :new -> address(config, binding, key, delivery)
+      :duplicate -> duplicate(config, binding, key, delivery)
+    end
+  end
+
+  defp duplicate(config, binding, key, delivery) do
+    record(config, binding, key, delivery, "duplicate", nil)
+    {:ok, {:duplicate, binding.id}}
+  end
+
+  defp address(config, binding, key, delivery) do
     case lookup(config, delivery.scope, binding.document, key) do
       %Address{} = row -> existing(config, binding, key, delivery, row)
       nil -> insert_or_existing(config, binding, key, delivery)

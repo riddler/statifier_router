@@ -75,6 +75,42 @@ document, one key:
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
 
+## The host schedules the reapers
+
+This package runs no process, supervisor or scheduler. Rows that have
+outlived their use are removed by plain functions the host calls on a
+schedule of its own choosing.
+
+`StatifierRouter.Dedupe.reap/2` takes the router's configuration and the
+current time, deletes every dedupe row whose `expires_at` is earlier than
+that time, and returns `{:ok, count}`. An expired row already counts as
+absent when a delivery claims its message, so the reaper only reclaims
+space: a host that never schedules it is still correct, and keeps every
+row.
+
+A host that runs [Oban](https://hexdocs.pm/oban) would write a worker and a
+cron entry like these; this package depends on neither:
+
+```elixir
+defmodule MyApp.RouterDedupeReaper do
+  use Oban.Worker, queue: :maintenance
+
+  @impl Oban.Worker
+  def perform(_job) do
+    # MyApp.Router.config/0 is the host's own: it returns the
+    # %StatifierRouter.Config{} the host routes events with.
+    {:ok, _count} = StatifierRouter.Dedupe.reap(MyApp.Router.config(), DateTime.utc_now())
+    :ok
+  end
+end
+
+# config/config.exs
+config :my_app, Oban,
+  plugins: [
+    {Oban.Plugins.Cron, crontab: [{"@hourly", MyApp.RouterDedupeReaper}]}
+  ]
+```
+
 ## Status
 
 This release is the skeleton. Of the pieces named above the binding is built,
@@ -85,7 +121,8 @@ address table, the dedupe table and the routing ledger, created by
 for an event and writes the ledger row of a refusal, and
 `StatifierRouter.Delivery`, its default delivery module, gets or creates the
 execution an address names and steps the event into it in one transaction, for
-bindings whose `create` is `:if_absent`. Nothing writes the dedupe table yet.
+bindings whose `create` is `:if_absent`, after claiming the message for the
+binding in the same transaction with `StatifierRouter.Dedupe`.
 Each piece lands behind the decision record that fixes it, in
 [docs/adr/](docs/adr/README.md).
 
