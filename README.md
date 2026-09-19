@@ -101,6 +101,63 @@ document, one key:
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
 
+## Resolving a document to its chart
+
+This package keeps no publish store, so which chart a new execution of a
+document starts on is the host's answer. The host gives the router's
+configuration a `:resolver`: a module implementing the
+`StatifierRouter.Resolver` behaviour, whose one callback takes
+`(scope, document)` and answers `{content_hash, machine}` or
+`{:error, reason}`. The router calls it only when it is about to create an
+execution. A host with a publish store (a blocks document store, a database
+table of published revisions) implements the callback over it:
+
+```elixir
+defmodule MyApp.PublishedCharts do
+  @behaviour StatifierRouter.Resolver
+
+  @impl StatifierRouter.Resolver
+  def resolve(scope, document) do
+    case MyApp.Publishing.active_revision(scope, document) do
+      {:ok, revision} ->
+        machine = MyApp.Publishing.compiled_chart(revision)
+        {Statifier.Machine.identity(machine).content_hash, machine}
+
+      :error ->
+        {:error, :not_published}
+    end
+  end
+end
+```
+
+A host whose charts are compiled at boot can use
+`StatifierRouter.Resolver.Static` instead, over a map from
+`{scope, document}` to a compiled machine:
+
+```elixir
+{:ok, machine} = Statifier.compile(File.read!("priv/charts/impression_click_join.scxml"))
+
+{:ok, resolver} =
+  StatifierRouter.Resolver.Static.new(%{{"7c1e", "impression_click_join"} => machine})
+```
+
+It answers the content hash of the machine's own identity, the hash
+statifier_persistence records for the execution, and `{:error, :not_found}`
+for a pair it does not hold. An arity-2 fun with the callback's signature is
+accepted wherever a module is; `Static` returns one.
+
+When the resolver answers `{:error, reason}`, nothing is created: the
+delivery's transaction rolls back, no row of this package's is written, and
+`StatifierRouter.route/3` returns
+`{:error, {:unresolved_document, document, reason}}`, which a front does not
+acknowledge.
+
+An execution that already exists keeps the chart it started on, and is never
+resolved through the resolver. For those the configuration takes a second,
+separate callback, `:chart_resolver`, from a content hash to
+`{:ok, machine}` or `:error`: the chart the execution's record names. A host
+with a publish store implements both over it.
+
 ## The host schedules the reapers
 
 This package runs no process, supervisor or scheduler. Rows that have

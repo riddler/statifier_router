@@ -13,6 +13,7 @@ defmodule StatifierRouter.DeliveryFixtures do
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
   alias StatifierRouter.Config
+  alias StatifierRouter.Resolver.Static
   alias StatifierRouter.Schema.{Address, Ledger}
   alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
@@ -77,20 +78,24 @@ defmodule StatifierRouter.DeliveryFixtures do
 
   @doc """
   A configuration over the default delivery. `opts` override any option;
-  the resolver answers from `machines/0` and reports each call to `pid`.
+  the resolver is a `StatifierRouter.Resolver.Static` over `machines/0`
+  under the scope `7c1e`, and reports each call to `pid`.
   """
   @spec config(pid(), keyword()) :: Config.t()
   def config(pid, opts \\ []) do
     machines = machines()
     {:ok, store} = Storage.new(Storage.Ecto, persistence: TestPersistence)
 
+    {:ok, static} =
+      Static.new(
+        for {document, machine} <- machines, into: %{} do
+          {{"7c1e", document}, machine}
+        end
+      )
+
     resolver = fn scope, document ->
       send(pid, {:resolved, scope, document})
-
-      case Map.fetch(machines, document) do
-        {:ok, machine} -> {Machine.identity(machine).content_hash, machine}
-        :error -> {:error, :unknown_document}
-      end
+      static.(scope, document)
     end
 
     by_hash = Map.new(Map.values(machines), &{Machine.identity(&1).content_hash, &1})

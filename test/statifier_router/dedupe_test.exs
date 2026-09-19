@@ -149,7 +149,7 @@ defmodule StatifierRouter.DedupeTest do
         )
 
       assert StatifierRouter.route(failing, impression(), now: @now) ==
-               {:error, :unknown_document}
+               {:error, {:unresolved_document, "impression_click_join", :unknown_document}}
 
       assert dedupe_rows(config) == []
       assert ledger(config) == []

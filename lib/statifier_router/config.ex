@@ -14,7 +14,7 @@ defmodule StatifierRouter.Config do
   | `:delivery` | the module `StatifierRouter.route/3` hands each delivery to | `StatifierRouter.Delivery` |
   | `:store` | a `%StatifierPersistence.Storage{}` built over the same repo | required by `StatifierRouter.Delivery` |
   | `:executor` | the `StatifierPersistence.Executor` effects are handed to: a module or an arity-2 fun | required by `StatifierRouter.Delivery` |
-  | `:resolver` | a fun of `(scope, document)` naming the chart a new execution starts on | required by `StatifierRouter.Delivery` |
+  | `:resolver` | the `StatifierRouter.Resolver` naming the chart a new execution starts on: a module implementing it or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:chart_resolver` | a fun of `(content_hash)` compiling the chart an existing execution started on | required by `StatifierRouter.Delivery` |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
@@ -70,12 +70,11 @@ defmodule StatifierRouter.Config do
 
   @typedoc """
   The host's answer to which chart a new execution of `document` starts on,
-  under `scope` (ADR-0002, section 4): `{content_hash, machine}`, or
-  `{:error, reason}`.
+  under `scope` (ADR-0002, section 4): a module implementing
+  `StatifierRouter.Resolver`, or an arity-2 fun with its callback's
+  signature.
   """
-  @type resolver ::
-          (scope :: String.t(), document :: String.t() ->
-             {String.t(), Statifier.Machine.t()} | {:error, term()})
+  @type resolver :: StatifierRouter.Resolver.t()
 
   @typedoc """
   The host's compiled chart for a content hash an existing execution
@@ -266,7 +265,7 @@ defmodule StatifierRouter.Config do
   defp delivery_value?(:store, value), do: is_struct(value, StatifierPersistence.Storage)
   defp delivery_value?(:executor, value) when is_function(value, 2), do: true
   defp delivery_value?(:executor, value), do: module?(value)
-  defp delivery_value?(:resolver, value), do: is_function(value, 2)
+  defp delivery_value?(:resolver, value), do: StatifierRouter.Resolver.valid?(value)
   defp delivery_value?(:chart_resolver, value), do: is_function(value, 1)
 
   defp module?(value), do: is_atom(value) and not is_nil(value) and not is_boolean(value)

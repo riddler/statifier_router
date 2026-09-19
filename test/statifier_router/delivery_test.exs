@@ -194,15 +194,21 @@ defmodule StatifierRouter.DeliveryTest do
 
     # sabotage: deliver/4's transaction function returned {:error, reason}
     # instead of rolling back -> the address row committed, red; restored,
-    # green.
-    test "a resolver error is route/3's error and leaves nothing", %{config: config} do
+    # green. Second mutation: resolve/3 returned the resolver's
+    # {:error, reason} as it came -> route/3 answered {:error, :not_found},
+    # red; restored, green.
+    test "an unresolvable document is route/3's error and creates nothing",
+         %{config: config} do
       config = %{config | bindings: [%{hd(config.bindings) | document: "unpublished"}]}
 
       assert StatifierRouter.route(config, impression(), now: @now) ==
-               {:error, :unknown_document}
+               {:error, {:unresolved_document, "unpublished", :not_found}}
 
+      assert_received {:resolved, "7c1e", "unpublished"}
       assert addresses(config) == []
+      assert TestRepo.aggregate(Config.queryable(config, Dedupe), :count) == 0
       assert executions() == 0
+      assert input_rows() == 0
       assert ledger(config) == []
     end
 
