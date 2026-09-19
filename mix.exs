@@ -76,6 +76,8 @@ defmodule StatifierRouter.MixProject do
       {:statifier_persistence, "~> 0.12.0"},
       {:predicator, "~> 9.4"},
       {:ecto_sql, "~> 3.14"},
+      # The no_match telemetry event (ADR-0004, section 5).
+      {:telemetry, "~> 1.0"},
 
       # Dev / test
       {:ex_quality, "~> 0.14", only: [:dev, :test], runtime: false},

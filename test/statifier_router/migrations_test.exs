@@ -35,7 +35,14 @@ defmodule StatifierRouter.MigrationsTest do
     :ok = migrate(:up)
     on_exit(fn -> :ok = migrate(:down) end)
 
-    {:ok, config} = Config.new(repo: TestRepo, table_prefix: "kx_router_", prefix: @schema)
+    {:ok, config} =
+      Config.new(
+        repo: TestRepo,
+        delivery: StatifierRouter.RecordingDelivery,
+        table_prefix: "kx_router_",
+        prefix: @schema
+      )
+
     {:ok, config: config}
   end
 
