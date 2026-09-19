@@ -30,6 +30,32 @@ matched against the bindings, addressed, and delivered to a durable
 [statifier_persistence](https://github.com/riddler/statifier_persistence),
 which is created when absent.
 
+### Starting the pipeline
+
+`StatifierRouter.Broadway` is the pipeline. The host adds it to its own
+supervision tree, after the repo, with the producer it already operates and
+the router's configuration:
+
+```elixir
+children = [
+  MyApp.Repo,
+  {StatifierRouter.Broadway,
+   name: MyApp.AdEventsRouter,
+   producer: {BroadwayKafka.Producer, kafka_opts},
+   router: router_config,
+   processors: [default: [concurrency: 8]]}
+]
+
+Supervisor.start_link(children, strategy: :one_for_one)
+```
+
+`router_config` is a `%StatifierRouter.Config{}`. By default each message's
+`scope`, `message_id` and `source` are read from its metadata and its data is
+the normalized event; a producer that carries them elsewhere is paired with a
+`:normalize` function of the host's own. A message whose routing returns an
+error, or raises, is failed rather than acknowledged, so the source hands it
+over again. A binding whose `order` is `:none` is not partitioned by its key.
+
 ## What this package owns
 
 - **Bindings**: source -> match -> key -> document -> event. `match` and
