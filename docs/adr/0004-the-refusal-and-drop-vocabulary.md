@@ -98,10 +98,15 @@ section 7), so its three columns are one case: every delivery creates.
 A created_and_delivered cell becomes dropped: finished in the one case
 section 3 names, an execution that `create/4` returns already terminal.
 
-### 3. A refusal or a drop never creates or touches an execution, except the create that precedes a dropped: finished
+### 3. For a refusal or a drop, the router itself never creates, steps or writes an execution, except the create that precedes a dropped: finished
 
-A refusal or a drop never creates, steps or writes an execution, with one
-exception: the create that precedes a dropped: finished, named below.
+For a refusal or a drop, the router itself never creates, steps or
+writes an execution, with one exception: the create that precedes a
+dropped: finished, named below. Its one other call into an execution for
+a drop is the `step/5` whose `{:discarded, execution}` answer decides a
+dropped: finished, also named below; what `step/5` writes then, such as
+a repair of the execution's status, is statifier_persistence's, not the
+router's.
 Every refusal, every duplicate and dropped: no_execution is decided before
 any call to `create/4` or `step/5`, because a called `create/4` fires its
 chart's initialize effects whether or not it succeeds. The router reads
@@ -194,14 +199,15 @@ shape.
 
 A failure that is not about the event and the binding is not an outcome:
 the host's chart resolver failing, the Repo unavailable, a
-statifier_persistence door returning `{:error, reason}`, a lock wait
-ending in a timeout. `route/3` returns `{:error, reason}` for it and writes
+statifier_persistence door returning `{:error, reason}`. `route/3` returns `{:error, reason}` for it and writes
 no ledger row for it. The first such error ends the attempt: the bindings
 after it are not evaluated, and outcomes already committed for the
 bindings before it stay committed. A front that receives `{:error, _}`
 does not acknowledge the message, so the source hands it over again, and
 the next attempt finds the bindings whose delivery committed as
-duplicates (the delivery record's dedupe).
+duplicates (the delivery record's dedupe). A raise inside a delivery,
+such as a lock wait ended by a timeout, is not an outcome either, and
+what it does is the delivery record's to decide.
 
 ### 8. unmatched_event is out of this release
 
