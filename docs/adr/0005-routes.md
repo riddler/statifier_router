@@ -344,10 +344,19 @@ Concretely, on the process-less shape:
 
 ### 6. Registered types reach a durable execution through the config surface, handed to `send_types:`
 
-The host's registry becomes an engine-visible set through
-`StatifierRouter.Config`, whose route entries yield the
-`Statifier.Send.Types` snapshot this package hands to
-statifier_persistence's `send_types:` option.
+The host's processor becomes an engine-visible set through
+`StatifierRouter.Config`, as the `Statifier.Send.Types` snapshot this
+package hands to statifier_persistence's `send_types:` option.
+
+That snapshot is **not** derived from decision 2's registry, and cannot be:
+a types snapshot maps a **type string** to a processor module
+(`Statifier.Send.Types.from_send_types/1` takes a `%{String.t() =>
+module()}`), while decision 2's registry maps a **route name** to an
+adapter, and this record's own example puts both of its routes under one
+type. No type string is recoverable from that map. The type strings come
+from decision 5's handler module and the type or types the host registers
+it under; decision 2's registry is what the handler consults **after** a
+send of such a type arrives, to find the adapter for its `target`.
 
 Two facts govern how it is handed over, both from that option's own
 typedoc on `StatifierPersistence.Executions`. On `step/5` the snapshot is
@@ -363,12 +372,24 @@ The carrier for it is on `main` as this record is written:
 `StatifierRouter.Config`'s `:persistence_options`, a keyword list over
 `:routes`, `:invoke_types` and `:send_types`, carried onto every create and
 every step of every delivery, with the create-side placement inside
-`initialize:` that the paragraph above requires. What is **not** there yet
-is decision 2's route registry - route name to adapter - and the derivation
-of a `Statifier.Send.Types` snapshot from it. That is the dependency this
-record names: the route-registry bead adds it and hands its snapshot through
-`:persistence_options`, and this record's foot takes a dated Note citing
-that surface's own record when it lands.
+`initialize:` that the paragraph above requires.
+
+**`:routes` there is not this record's route.** It is
+`Statifier.Send.Routes`, the engine's caller-declared, point-in-time claim
+about which `<send>` routes are live - reachable session ids, whether a
+parent exists, live invoke ids. It has nothing to do with the named
+outbound destinations this record calls routes, and the two never meet: a
+route of this record's rides in `target` under a registered `type`, which
+the engine does not resolve at all. Where the ambiguity would bite, this
+record says **route name** for its own noun.
+
+What is **not** on `main` yet is decision 2's registry - route name to
+adapter - together with the handler of decision 5 and the type strings it
+is registered under, which are what a `Statifier.Send.Types` snapshot is
+built from. That is the dependency this record names: the route-registry
+bead adds both and hands the snapshot through `:persistence_options`, and
+this record's foot takes a dated Note citing that surface's own record when
+it lands.
 
 ### 7. A route the host has not registered
 
@@ -408,9 +429,13 @@ route.** A route is the wrong shape for it: an invoke has the
 cancel-on-exit and stale-answer semantics that waiting needs, and a route
 has neither. The router-hosted invoke answer path is **unbuilt**: this
 package hosts through `StatifierPersistence.Executions.create/4` and
-`step/5` with only `:executor`, and that package's driver-side invoke
-doors are outside the caller's-transaction contract this package's
-ADR-0003 section 1 depends on. This record names that as an open trigger
+`step/5`, carrying `:executor` and `Config`'s `:persistence_options` -
+`:routes`, `:invoke_types` and `:send_types` - and **no driver-side invoke
+door**. `:invoke_types` is the option a reader chasing this trigger checks
+first, and it is not the missing piece: it declares which invoke types a
+chart may use, not how a child's answer gets back. What is missing is a
+door, and that package's driver-side invoke doors are outside the
+caller's-transaction contract this package's ADR-0003 section 1 depends on. This record names that as an open trigger
 and designs nothing for it.
 
 Three further questions are open for the operator and are recorded here so
