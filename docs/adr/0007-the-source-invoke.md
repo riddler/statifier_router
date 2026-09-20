@@ -62,11 +62,16 @@ Facts outside this record that bound the answer:
   (statifier_persistence 0.12.0,
   `lib/statifier_persistence/executions.ex`), so registering an invoke
   type is reachable from where the router already stands. Answering an
-  invocation is not: the doors that do it,
-  `StatifierPersistence.Driver.done_invocation/5` and
-  `.failed_invocation/5`, run "a separate drive under the *parent's* own
-  exclusion" (`lib/statifier_persistence/driver.ex`), outside the
-  caller's transaction this package delivers in (ADR-0003, section 1).
+  invocation is not. `StatifierPersistence.Driver.done_invocation/5`
+  "[a]nswers a `:pending` invocation with `donedata` and drives the
+  execution to quiescence", deciding a discard "from the loaded position
+  inside the execution's serialization strategy"
+  (statifier_persistence 0.12.0,
+  `lib/statifier_persistence/driver.ex`): a drive of its own on the
+  execution it answers, taking that execution's serialization for
+  itself, rather than a statement inside the transaction a delivery is
+  already holding (ADR-0003, section 1). `.failed_invocation/5` is
+  documented there as "`done_invocation/5`'s failing counterpart".
 - **`mode` cannot be spelled on a binding.** ADR-0001, section 6:
   "`mode`, `batch` and `window` are **reserved**: a binding carrying any
   of them is refused at construction, and the refusal names the reserved
@@ -181,10 +186,17 @@ execution id, the scope, the key the subscription reads events under,
 and the invocation it belongs to, so that `cancel/2` deletes exactly the
 row its subscribe created and two invocations of the same binding in one
 execution do not cancel each other. The key is the execution's own
-address key: it is resolved once, at subscribe time, from the address row
-naming this execution for the binding's document and the delivery's
-scope, which the V01 `<table>_execution_id_index` on `execution_id`
-exists to find without a scan. An execution with no such row - an
+address key, resolved once at subscribe time **by execution id alone**.
+No scope and no delivery is in hand there: the executor seam's context is
+`%{execution_id: String.t(), content_hash: String.t()}`
+(`StatifierPersistence.Executor`, statifier_persistence 0.12.0) and the
+invoke effect carries its id, its type and its params, which name the
+binding alone. The execution id is enough, because the V01
+`<table>_execution_id_index` on `execution_id` finds the row without a
+scan and finds at most one: the router mints a fresh opaque execution id
+at every create (ADR-0002, section 3), so no id is ever written under two
+addresses. The row it finds carries the scope and the key. An execution
+with no such row - an
 `always_new` create - has no key to subscribe under, and its source
 invoke is refused rather than subscribed under an invented key, the same
 rule ADR-0001 section 3 already applies to a binding whose `key` produces
@@ -201,8 +213,9 @@ work on invoke and answers this same execution when the work completes -
 is **unbuilt**, and this record does not design it. The router hosts
 through `create/4` and `step/5`, handing them an executor; the doors that
 answer an invocation, `Driver.done_invocation/5` and
-`.failed_invocation/5`, run as a separate drive under the answering
-execution's own exclusion, which is outside the caller's-transaction
+`.failed_invocation/5`, drive the **answered** execution - the invoking
+one, which is waiting on the answer - under that execution's own
+serialization, a drive of its own and outside the caller's-transaction
 discipline ADR-0003 fixes for a delivery. The source invoke specified
 above needs none of that: it subscribes and unsubscribes, and every event
 it wants arrives through the ordinary binding path. Opening the answer
@@ -225,8 +238,14 @@ this one knows which half of `<invoke>` this package supports.
   arrive as effects, and a handler that ignores `{:cancel, _}` fires a
   send its chart cancelled.
 - The package gains a table, and with it a second migration version. A
-  host that upgrades runs the router's migrations again; `up(from:)` is
-  inclusive, so a host that has only V01 gets V02 from the same call.
+  host that has already run V01 writes its next migration with
+  **`from: 2`**. `StatifierRouter.Migrations.up/1` walks `from..version`
+  **inclusive of `from`**, and `from:` defaults to V01, so the default
+  call on such a host re-runs V01's `CREATE TABLE` against tables it
+  already has: `from:` names the first version the host has **not** run,
+  never the newest it has (`lib/statifier_router/migrations.ex`, whose
+  moduledoc says the same). A host installing the package for the first
+  time takes the default and gets both versions in one call.
 - Subscriptions are per binding, execution and invocation, so fan-out
   works the way bindings already do: two states invoking two bindings
   subscribe twice, independently, and one exit cancels one of them.
