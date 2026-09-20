@@ -68,6 +68,8 @@ over again. A binding whose `order` is `:none` is not partitioned by its key.
 - **Dedupe** on `(binding, message_id)` with a horizon.
 - **The recorded outcome vocabulary**: every delivery attempt ends in one
   named, recorded outcome.
+- **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
+  host calls from its own controller or plug.
 
 ## What it does not own
 
@@ -75,7 +77,6 @@ over again. A binding whose `order` is `:none` is not partitioned by its key.
 - Execution-to-execution sends.
 - The source invoke.
 - Any queue adapter: Broadway's producers are the host's choice.
-- The webhook helper.
 - Timers: those are [statifier_oban](https://github.com/riddler/statifier_oban)'s.
 - A publish store: a host callback resolves a document to its active chart.
 - Any process or supervisor: the host schedules the reapers and starts the
@@ -100,6 +101,44 @@ document, one key:
 
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
+
+## A webhook front
+
+A provider that posts rather than queues reaches the same `route/3`. This
+package adds no dependency on Plug or Phoenix: `StatifierRouter.Webhook`
+is a plain function with the shape a plug or a controller action calls, and
+the host writes those ten lines itself.
+
+**The host verifies the signature.** This package verifies nothing; it
+routes what it is handed.
+
+```elixir
+def create(conn, _params) do
+  {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+
+  with :ok <- MyApp.Provider.verify(conn, raw_body) do
+    answer =
+      StatifierRouter.Webhook.handle(MyApp.Router.config(), %{
+        scope: conn.assigns.scope,
+        source: "ad_events",
+        selector: %{"path" => conn.request_path},
+        raw_body: raw_body,
+        data: Jason.decode!(raw_body),
+        provider_id: List.first(Plug.Conn.get_req_header(conn, "x-provider-event-id"))
+      })
+
+    send_resp(conn, StatifierRouter.Webhook.status(answer), "")
+  end
+end
+```
+
+The message id is the provider's event id when it sends a non-empty one,
+and otherwise the lowercase hex SHA-256 of the raw body, so a provider's
+retry of the same body is the same message. `status/1` answers `200` for
+every recorded outcome - a duplicate, a drop, a refusal and a no-match
+included - so the provider stops retrying, and `500` for an `{:error, _}`,
+so it retries. The request's `selector` is carried for the host's own front
+and is never read here: bindings are chosen by source alone.
 
 ## Resolving a document to its chart
 
