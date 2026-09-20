@@ -53,16 +53,17 @@ Facts outside this record that bound the answer:
   executor seam, one call per effect
   (`StatifierPersistence.Executor`'s `c:execute/2`,
   statifier_persistence 0.12.0).
-- **The router hosts through two doors, and hands both only an
-  executor.** `StatifierRouter.Delivery` calls
-  `StatifierPersistence.Executions.create/4` and `.step/5` with
-  `executor: config.executor` and nothing else
-  (`lib/statifier_router/delivery.ex`). Both doors also accept
-  `invoke_types:`, "the `t:Statifier.Invoke.Types.t/0` snapshot"
-  (statifier_persistence 0.12.0,
-  `lib/statifier_persistence/executions.ex`), so registering an invoke
-  type is reachable from where the router already stands. Answering an
-  invocation is not. `StatifierPersistence.Driver.done_invocation/5`
+- **The router hosts through two doors, and already carries the host's
+  type snapshots onto both.** `StatifierRouter.Delivery` calls
+  `StatifierPersistence.Executions.create/4` and `.step/5` with the
+  configuration's `:executor` and its `:persistence_options`, "the
+  per-call snapshot options both doors carry, `:routes`, `:invoke_types`
+  and `:send_types`", which "reach a `step/5` beside the event and a
+  `create/4` inside its `initialize:`"
+  (`lib/statifier_router/delivery.ex`). Registering the invoke type a
+  source invoke is spelled with therefore needs no new seam: the host
+  passes it where it already passes its send types. Answering an
+  invocation is what the package has no door for. `StatifierPersistence.Driver.done_invocation/5`
   "[a]nswers a `:pending` invocation with `donedata` and drives the
   execution to quiescence", deciding a discard "from the loaded position
   inside the execution's serialization strategy"
@@ -211,7 +212,9 @@ something a chart gets back from an outbound send. The router-hosted
 **invoke answer path** - a host handler that starts
 work on invoke and answers this same execution when the work completes -
 is **unbuilt**, and this record does not design it. The router hosts
-through `create/4` and `step/5`, handing them an executor; the doors that
+through `create/4` and `step/5`, handing them an executor and the host's
+snapshot options, which is enough to register an invoke type and not
+enough to answer one; the doors that
 answer an invocation, `Driver.done_invocation/5` and
 `.failed_invocation/5`, drive the **answered** execution - the invoking
 one, which is waiting on the answer - under that execution's own
