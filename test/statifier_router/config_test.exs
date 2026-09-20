@@ -2,11 +2,14 @@ defmodule StatifierRouter.ConfigTest do
   use ExUnit.Case, async: true
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Statifier.Invoke.Types
+  alias Statifier.Send.Routes
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.RecordingDelivery
   alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
+  alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
 
   doctest Config
@@ -121,6 +124,49 @@ defmodule StatifierRouter.ConfigTest do
                Config.new(repo: TestRepo, delivery: @delivery, executor: RecordingDelivery)
     end
 
+    # sabotage: same_repo/2's mismatch arm returned :ok -> the store over
+    # another repo was accepted, red; restored, green.
+    test "refuses a store whose adapter options name another repo" do
+      {:ok, own} = Storage.new(Storage.Ecto, persistence: TestPersistence)
+      other = %Storage{adapter: Storage.Ecto, opts: [repo: OtherRepo]}
+
+      assert {:ok, %Config{store: ^own}} =
+               Config.new([repo: TestRepo] ++ Keyword.put(needs(), :store, own))
+
+      assert Config.new([repo: TestRepo] ++ Keyword.put(needs(), :store, other)) ==
+               {:error, {:invalid_value, :store, other}}
+
+      # An adapter that resolves no :repo is passed through unchecked: the
+      # in-memory storage is one, and the moduledoc says so.
+      {:ok, memory} = Storage.new(Storage.InMemory, [])
+
+      assert {:ok, %Config{store: ^memory}} =
+               Config.new([repo: TestRepo] ++ Keyword.put(needs(), :store, memory))
+    end
+
+    # sabotage: persistence_options/1 accepted any keyword list -> the
+    # :initialize key was accepted, red; restored, green.
+    test "carries the statifier_persistence snapshot options, and only those" do
+      snapshot = [
+        routes: Routes.new(),
+        invoke_types: Types.new(types: ["adserver:verify"])
+      ]
+
+      assert {:ok, %Config{persistence_options: ^snapshot}} =
+               Config.new(repo: TestRepo, delivery: @delivery, persistence_options: snapshot)
+
+      assert {:ok, %Config{persistence_options: []}} =
+               Config.new(repo: TestRepo, delivery: @delivery)
+
+      for refused <- [[initialize: []], [executor: @delivery], [:routes], %{}] do
+        assert Config.new(
+                 repo: TestRepo,
+                 delivery: @delivery,
+                 persistence_options: refused
+               ) == {:error, {:invalid_value, :persistence_options, refused}}
+      end
+    end
+
     # sabotage: build_bindings/1 prepended without the final reverse ->
     # the order came back reversed, red; restored, green.
     test "builds every binding through Binding.new/1 and keeps their order" do
@@ -161,6 +207,15 @@ defmodule StatifierRouter.ConfigTest do
       assert Config.new(%{repo: TestRepo}) == {:error, {:invalid_config, %{repo: TestRepo}}}
       assert Config.new([:repo]) == {:error, {:invalid_config, [:repo]}}
     end
+  end
+
+  defp needs do
+    [
+      store: elem(Storage.new(Storage.InMemory, []), 1),
+      executor: fn _effect, _context -> :ok end,
+      resolver: fn _scope, _document -> {:error, :none} end,
+      chart_resolver: fn _content_hash -> :error end
+    ]
   end
 
   describe "table/2" do

@@ -34,6 +34,23 @@ defmodule StatifierRouter.DeliveryFixtures do
   </scxml>
   """
 
+  # One invoke in the initial configuration and one behind the impression:
+  # the create path and the step path each enter exactly one of them, so a
+  # declared invoke-type snapshot that reaches only one door is visible.
+  @invoked """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="opening">
+    <state id="opening">
+      <invoke type="adserver:verify"/>
+      <transition event="impression" target="billing"/>
+    </state>
+    <state id="billing">
+      <invoke type="adserver:bill"/>
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
   # A chart that is finished as soon as it is initialized.
   @instant """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="done">
@@ -69,7 +86,11 @@ defmodule StatifierRouter.DeliveryFixtures do
   @doc "The compiled charts, by document."
   @spec machines() :: %{String.t() => Machine.t()}
   def machines do
-    for {document, source} <- [{"impression_click_join", @join}, {"instant_join", @instant}],
+    for {document, source} <- [
+          {"impression_click_join", @join},
+          {"instant_join", @instant},
+          {"invoked_join", @invoked}
+        ],
         into: %{} do
       {:ok, machine} = Statifier.compile(source)
       {document, machine}
