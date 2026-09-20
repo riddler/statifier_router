@@ -357,3 +357,54 @@ horizon and `order: :by_key`. Under the scope `"7c1e"`:
 - This record leaves to the code half: the dedupe table's migration and
   name, the reaper's name, the id format, and the exact field that carries
   the scope in `route/3`'s argument.
+
+## Note (2026-09-20, sr-5pi): the snapshot options a delivery carries, the store's repo, and what section 1's resolver error is actually called
+
+A Note, not an amendment: it decides nothing above, and section 1
+stands as written. It records one new option and corrects one sentence.
+
+- **The delivery carries the host's per-call snapshot options.** Until
+  now `:executor` was the only option this package passed to
+  `StatifierPersistence.Executions.create/4` and
+  `StatifierPersistence.Executions.step/5`, so a chart needing a custom
+  invoke type, a send route or a registered send type could not be
+  delivered at all: statifier_persistence defaults each snapshot to
+  `nil`, and, from its 0.13.0 release on, a `<send>` whose type the
+  execution was not given classifies as unsupported (its `create/4` and
+  `step/5` option docs, at statifier_persistence 9cd192b). `StatifierRouter.Config` gains
+  `:persistence_options`, a keyword list over `:routes`,
+  `:invoke_types` and `:send_types`, empty by default, carried onto
+  every create and every step of every delivery. It is a standing
+  snapshot, one per configuration, so it takes none of the per-execution
+  options (`:initialize`, `:metadata`) and none of the configuration's
+  own.
+- **A create takes the snapshot inside `initialize:`; a step takes it
+  beside the event.** `Statifier.MachineState.new/2` is the one writer
+  of the fields the snapshot sets, and a create has no stored position
+  to stamp, so an option passed top-level to `create/4` type-checks and
+  is ignored for the execution's whole life. statifier_persistence says
+  so in its `create/4` option docs and places `invoke_types:` that way
+  in its own driver. The two doors are not symmetric, and
+  `StatifierRouter.Delivery` builds their option lists separately.
+- **The store must be built over the configuration's repo, and `new/1`
+  now says so where it can see it.** Section 1 requires one transaction
+  per delivery over the host's repo, with both doors writing through
+  it; a store over another repo writes outside it, and a rollback then
+  leaves the execution behind. `StatifierRouter.Config.new/1` refuses a
+  store whose resolved adapter options name a different repo. Only
+  statifier_persistence's Ecto storage resolves a `:repo` into those
+  options, so on any other adapter the rule is stated and not checked.
+- **A resolver error is `{:error, {:unresolved_document, document,
+  reason}}`.** Section 1's own prose calls it `route/3`'s
+  `{:error, reason}`. The code wraps it - `StatifierRouter.Delivery`'s
+  `resolve/3` - beside `{:error, {:chart_not_resolved, content_hash}}`
+  for a chart resolver that answers `:error`, which is the shape
+  ADR-0004, section 7 asks for. Read section 1's sentence as naming the
+  wrapped term.
+- **`:resolver` and `:executor` are checked to different depths on
+  purpose.** `StatifierRouter.Resolver` is this package's behaviour, so
+  a resolver module is required to be loadable and to export
+  `resolve/2`. `StatifierPersistence.Executor` is the dependency's, and
+  it normalizes a module or an arity-2 fun itself, so this package
+  checks the option's shape and leaves the dispatch rule to its owner.
+  `StatifierRouter.Config`'s documentation carries the same paragraph.

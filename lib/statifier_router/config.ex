@@ -13,6 +13,7 @@ defmodule StatifierRouter.Config do
   | `:repo` | the host's `Ecto.Repo` module | required |
   | `:delivery` | the module `StatifierRouter.route/3` hands each delivery to | `StatifierRouter.Delivery` |
   | `:store` | a `%StatifierPersistence.Storage{}` built over the same repo | required by `StatifierRouter.Delivery` |
+  | `:persistence_options` | the per-call statifier_persistence snapshot options every create and every step carries: `:routes`, `:invoke_types`, `:send_types` | `[]` |
   | `:executor` | the `StatifierPersistence.Executor` effects are handed to: a module or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:resolver` | the `StatifierRouter.Resolver` naming the chart a new execution starts on: a module implementing it or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:chart_resolver` | a fun of `(content_hash)` compiling the chart an existing execution started on | required by `StatifierRouter.Delivery` |
@@ -23,7 +24,36 @@ defmodule StatifierRouter.Config do
   `StatifierRouter` documents what a delivery module must answer, and
   `StatifierRouter.Delivery` what the four options it requires must be.
   A configuration that names another delivery module may leave those four
-  out; one it gives is checked all the same.
+  out; one it gives is checked all the same. `:persistence_options` is
+  never required: a configuration that omits it carries no snapshot, which
+  is what statifier_persistence reads as "the built-in set only".
+
+  ## What the checks here do and do not catch
+
+  `:store` must be built over this configuration's own `:repo`, so that
+  `StatifierPersistence.Executions.create/4` and
+  `StatifierPersistence.Executions.step/5` write through the delivery's
+  transaction rather than opening their own (ADR-0003, section 1). A store
+  over another repo writes outside that transaction, and the delivery's
+  rollback then leaves the execution behind. `new/1` catches the case it
+  can see: a store whose resolved adapter options carry a `:repo` that is
+  not this configuration's is refused with
+  `{:error, {:invalid_value, :store, store}}`. Those options are
+  statifier_persistence's own, and only its Ecto storage resolves a
+  `:repo` into them, so a store built on any other adapter passes this
+  check without being checked. On such a store the rule is the host's to
+  keep, and keeping it is not optional.
+
+  `:resolver` and `:executor` are checked to different depths, on purpose.
+  `StatifierRouter.Resolver` is this package's own behaviour, so a resolver
+  module is held to it: loadable and exporting `resolve/2`
+  (`StatifierRouter.Resolver.valid?/1`). `StatifierPersistence.Executor` is
+  the dependency's, normalized per effect by
+  `StatifierPersistence.Executor.run/3`, so an executor is checked for the
+  shape that option takes - a module name or an arity-2 fun - and the
+  dependency's own dispatch rule is left to it. A host that wants the
+  deeper check on its executor gets it from statifier_persistence, not from
+  here.
 
   Each binding is built with `StatifierRouter.Binding.new/1`, in the order
   given, and the resolved configuration keeps that order: it is the order
@@ -52,6 +82,7 @@ defmodule StatifierRouter.Config do
       "routing"
   """
 
+  alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
   alias StatifierRouter.Schema
 
@@ -65,6 +96,7 @@ defmodule StatifierRouter.Config do
     :chart_resolver,
     :prefix,
     bindings: [],
+    persistence_options: [],
     table_prefix: "statifier_router_"
   ]
 
@@ -91,6 +123,7 @@ defmodule StatifierRouter.Config do
           resolver: resolver() | nil,
           chart_resolver: chart_resolver() | nil,
           bindings: [Binding.t()],
+          persistence_options: keyword(),
           table_prefix: String.t(),
           prefix: String.t() | nil
         }
@@ -110,7 +143,8 @@ defmodule StatifierRouter.Config do
   @tables [:addresses, :dedupe, :routing_ledger]
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
-  @known [:repo, :delivery, :bindings | @delivery_keys ++ @storage_keys]
+  @persistence_option_keys [:routes, :invoke_types, :send_types]
+  @known [:repo, :delivery, :bindings, :persistence_options | @delivery_keys ++ @storage_keys]
 
   @schemas %{
     Schema.Address => :addresses,
@@ -125,7 +159,9 @@ defmodule StatifierRouter.Config do
   Returns `{:ok, config}`, or `{:error, reason}` naming the first fault:
   an unknown option, then a missing or malformed `:repo`, then a malformed
   `:delivery`, then a missing or malformed `:store`, `:executor`,
-  `:resolver` or `:chart_resolver`, in that order, then a storage value the
+  `:resolver` or `:chart_resolver`, in that order, then a `:store` whose
+  adapter options name another repo, then a malformed
+  `:persistence_options`, then a storage value the
   table does not allow, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
   with `index` counted from zero, then the first duplicated binding `id`.
@@ -142,12 +178,19 @@ defmodule StatifierRouter.Config do
          {:ok, repo} <- fetch_module(opts, :repo),
          {:ok, delivery} <- fetch_delivery(opts),
          {:ok, needs} <- delivery_needs(opts, delivery),
+         :ok <- same_repo(needs[:store], repo),
+         {:ok, persistence_options} <- persistence_options(opts),
          {:ok, storage} <- storage(opts),
          {:ok, bindings} <- bindings(opts) do
       {:ok,
        struct!(
          __MODULE__,
-         [{:repo, repo}, {:delivery, delivery}, {:bindings, bindings} | needs ++ storage]
+         [
+           {:repo, repo},
+           {:delivery, delivery},
+           {:bindings, bindings},
+           {:persistence_options, persistence_options} | needs ++ storage
+         ]
        )}
     end
   end
@@ -239,7 +282,7 @@ defmodule StatifierRouter.Config do
     end
   end
 
-  # The four options StatifierRouter.Delivery reads. They are required when
+  # The four options StatifierRouter.Delivery requires. They are required when
   # it is the delivery module, and checked whenever they are given.
   defp delivery_needs(opts, delivery) do
     required? = delivery == StatifierRouter.Delivery
@@ -262,11 +305,43 @@ defmodule StatifierRouter.Config do
   defp delivery_need(name, :error, true), do: {:error, {:missing_key, name}}
   defp delivery_need(_name, :error, false), do: {:ok, nil}
 
-  defp delivery_value?(:store, value), do: is_struct(value, StatifierPersistence.Storage)
+  defp delivery_value?(:store, value), do: is_struct(value, Storage)
   defp delivery_value?(:executor, value) when is_function(value, 2), do: true
   defp delivery_value?(:executor, value), do: module?(value)
   defp delivery_value?(:resolver, value), do: StatifierRouter.Resolver.valid?(value)
   defp delivery_value?(:chart_resolver, value), do: is_function(value, 1)
+
+  # ADR-0003, section 1: the store has to write through the delivery's own
+  # transaction, which it does only when it is built over the same repo.
+  # Only statifier_persistence's Ecto storage resolves a `:repo` into its
+  # adapter options, so this refuses the mismatch it can see and passes
+  # everything else through; the moduledoc says so.
+  defp same_repo(%Storage{opts: opts} = store, repo) when is_list(opts) do
+    if Keyword.keyword?(opts) and Keyword.has_key?(opts, :repo) and
+         Keyword.fetch!(opts, :repo) != repo,
+       do: {:error, {:invalid_value, :store, store}},
+       else: :ok
+  end
+
+  defp same_repo(_store, _repo), do: :ok
+
+  # The per-call snapshot options StatifierRouter.Delivery carries onto
+  # every create and every step. Only the keys this package knows how to
+  # place are accepted: `:initialize` and `:metadata` are per-execution
+  # host data rather than a standing snapshot, and `:executor` is the
+  # configuration's own option.
+  defp persistence_options(opts) do
+    given = Keyword.get(opts, :persistence_options, [])
+
+    if snapshot?(given),
+      do: {:ok, given},
+      else: {:error, {:invalid_value, :persistence_options, given}}
+  end
+
+  defp snapshot?(given) do
+    is_list(given) and Keyword.keyword?(given) and
+      Enum.all?(given, fn {name, _value} -> name in @persistence_option_keys end)
+  end
 
   defp module?(value), do: is_atom(value) and not is_nil(value) and not is_boolean(value)
 

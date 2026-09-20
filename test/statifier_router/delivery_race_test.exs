@@ -57,12 +57,12 @@ defmodule StatifierRouter.DeliveryRaceTest do
     impression =
       Task.async(fn -> StatifierRouter.route(config, scoped(impression()), now: @now) end)
 
-    assert_receive {:resolving, winner}, 5_000
+    assert_receive {:resolving, winner, holder}, 5_000
 
     # The click finds no committed row, and its insert waits on the
     # impression's uncommitted one.
     click = Task.async(fn -> StatifierRouter.route(config, scoped(click()), now: @now) end)
-    wait_for_lock_wait()
+    wait_for_lock_wait(holder)
 
     send(winner, :resolve)
 
@@ -72,7 +72,7 @@ defmodule StatifierRouter.DeliveryRaceTest do
     assert {:ok, [_, {:delivered, "clicks_to_join", ^execution_id}]} = Task.await(click, 5_000)
 
     # The loser never asked for a chart: it never created.
-    refute_received {:resolving, _}
+    refute_received {:resolving, _, _}
 
     assert [%Address{execution_id: ^execution_id}] =
              TestRepo.all(from(a in Config.queryable(config, Address), where: a.scope == @scope))
@@ -100,11 +100,11 @@ defmodule StatifierRouter.DeliveryRaceTest do
     # The first delivery claims the message and then waits, inside its
     # open transaction, in the resolver.
     first = Task.async(fn -> StatifierRouter.route(config, scoped(impression()), now: @now) end)
-    assert_receive {:resolving, winner}, 5_000
+    assert_receive {:resolving, winner, holder}, 5_000
 
     # The second's claim waits on the first's uncommitted dedupe row.
     second = Task.async(fn -> StatifierRouter.route(config, scoped(impression()), now: @now) end)
-    wait_for_lock_wait()
+    wait_for_lock_wait(holder)
 
     send(winner, :resolve)
 
@@ -112,7 +112,7 @@ defmodule StatifierRouter.DeliveryRaceTest do
              Task.await(first, 5_000)
 
     assert {:ok, [{:duplicate, "impressions_to_join"}, _]} = Task.await(second, 5_000)
-    refute_received {:resolving, _}
+    refute_received {:resolving, _, _}
 
     assert inputs(config, execution_id) == [{0, "step", "impression"}]
 
@@ -126,14 +126,17 @@ defmodule StatifierRouter.DeliveryRaceTest do
              )
   end
 
-  # A resolver that tells the test which process is resolving, then waits
-  # for the word to answer.
+  # A resolver that tells the test which process is resolving and which
+  # database backend its open transaction holds, then waits for the word
+  # to answer. It runs inside that transaction, on that connection, so
+  # `pg_backend_pid()` here is the backend every row this delivery has
+  # written is locked by.
   defp holding_resolver(test_pid) do
     [machine] = Map.take(machines(), ["impression_click_join"]) |> Map.values()
     content_hash = Statifier.Machine.identity(machine).content_hash
 
     fn _scope, "impression_click_join" ->
-      send(test_pid, {:resolving, self()})
+      send(test_pid, {:resolving, self(), backend_pid()})
 
       receive do
         :resolve -> {content_hash, machine}
@@ -143,24 +146,40 @@ defmodule StatifierRouter.DeliveryRaceTest do
     end
   end
 
-  # Bounded: until a backend of this database waits on a lock, or 5s.
-  defp wait_for_lock_wait(attempts \\ 500)
+  defp backend_pid do
+    %{rows: [[pid]]} = SQL.query!(TestRepo, "SELECT pg_backend_pid()")
+    pid
+  end
 
-  defp wait_for_lock_wait(0), do: flunk("the second delivery never waited on a lock")
+  # Bounded: until a backend blocked by `holder` waits on a lock, or 5s.
+  #
+  # `holder` is the first delivery's own backend, so the row this counts
+  # is the second delivery's wait and nothing else. Counting every lock
+  # wait in the database instead was sound only while this module stayed
+  # `async: false` and nothing else used the server: any other waiter -
+  # a second test file, another checkout's suite on the same Postgres -
+  # would let the poll return before the delivery under test had reached
+  # its lock at all.
+  defp wait_for_lock_wait(holder, attempts \\ 500)
 
-  defp wait_for_lock_wait(attempts) do
+  defp wait_for_lock_wait(_holder, 0),
+    do: flunk("the second delivery never waited on a lock the first one held")
+
+  defp wait_for_lock_wait(holder, attempts) do
     %{rows: [[waiting]]} =
       SQL.query!(
         TestRepo,
         "SELECT count(*) FROM pg_stat_activity " <>
-          "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+          "WHERE datname = current_database() AND wait_event_type = 'Lock' " <>
+          "AND $1 = ANY(pg_blocking_pids(pid))",
+        [holder]
       )
 
     if waiting > 0 do
       :ok
     else
       Process.sleep(10)
-      wait_for_lock_wait(attempts - 1)
+      wait_for_lock_wait(holder, attempts - 1)
     end
   end
 

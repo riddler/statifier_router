@@ -228,3 +228,35 @@ A host with a publish store implements both callbacks over it: the
 resolver reads which revision of a document is active, and the chart
 resolver reads a chart by its content hash. The option that carries the
 chart resolver is the code half's.
+
+## Note (2026-09-20, sr-5pi): the hash an execution is recorded under, and the hash a resolver answers
+
+A Note, not an amendment: it decides nothing and changes no decision.
+Section 4 and the Amendment above stand as written; this records what
+the code already does, so that the next reader does not have to derive
+it.
+
+- **The recorded hash comes from the machine, never from the resolver's
+  answer.** `StatifierRouter.Delivery` hands the resolver's machine to
+  `StatifierPersistence.Executions.create/4` and discards the
+  `content_hash` beside it. statifier_persistence derives the hash it
+  stores on the execution record from that machine's own
+  `Statifier.Machine.identity/1` (statifier_persistence 0.12.0,
+  `StatifierPersistence.Executions`, the persist tail its `create/4`
+  and `step/5` share; `StatifierPersistence.Storage.save_chart/3` says
+  the same of a stored chart - "never a caller-supplied hash").
+- **So the two hashes have to be equal, and equality is the host's to
+  keep.** The hash the Amendment hands `:chart_resolver` for an
+  existing execution is the recorded one. A resolver that answers a
+  hash its own machine does not derive is asking, one delivery later,
+  for a chart under a hash it never issued, and the delivery ends in
+  `{:error, {:chart_not_resolved, content_hash}}`.
+  `StatifierRouter.Resolver`'s own documentation already states the
+  rule and its example builds the hash with
+  `Statifier.Machine.identity/1`; this Note is where the record says
+  it.
+- **Not checked in code, deliberately.** Refusing a mismatch would need
+  a new term in the error vocabulary ADR-0004 owns, for a fault only a
+  host that ignored the documented rule can produce, and the check
+  would run on the create path of every delivery. The rule is stated
+  instead, here and in `StatifierRouter.Resolver`.

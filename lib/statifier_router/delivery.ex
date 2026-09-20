@@ -4,8 +4,8 @@ defmodule StatifierRouter.Delivery do
   binding's delivery of one event, as one transaction on the host's repo
   (ADR-0003, section 1).
 
-  `deliver/4` is the seam `StatifierRouter.route/3` calls. It reads four
-  options of the configuration:
+  `deliver/4` is the seam `StatifierRouter.route/3` calls. It reads five
+  options of the configuration, four of them required:
 
     * `:store` - the `%StatifierPersistence.Storage{}` executions are kept
       in. It must be built over the configuration's own `:repo`, so that
@@ -20,11 +20,24 @@ defmodule StatifierRouter.Delivery do
       `{:error, reason}` for `(scope, document)`: the chart a new
       execution of `document` starts on (ADR-0002, section 4). It is
       called only when the delivery is about to create an execution.
+      The `content_hash` it answers is not carried anywhere: the machine
+      is handed on, and statifier_persistence records the hash
+      `Statifier.Machine.identity/1` derives from that machine, which is
+      the hash `:chart_resolver` is later asked for (ADR-0002, the
+      2026-09-20 Note).
     * `:chart_resolver` - `(content_hash) -> {:ok, machine}` or `:error`:
       the compiled chart an existing execution started on, which `step/5`
       is handed. An existing execution keeps the chart it started on, so
       this is looked up by the content hash its record carries, never by
       its document.
+    * `:persistence_options` - the per-call snapshot options both doors
+      carry, `:routes`, `:invoke_types` and `:send_types`. They reach a
+      `step/5` beside the event and a `create/4` inside its
+      `initialize:`: `Statifier.MachineState.new/2` is the one writer of
+      the fields they set, and a create has no stored position to stamp
+      (statifier_persistence's `create/4` option docs, at
+      statifier_persistence 9cd192b; its own driver places
+      `invoke_types:` the same way).
 
   ## What one delivery does
 
@@ -187,7 +200,7 @@ defmodule StatifierRouter.Delivery do
   defp create(config, binding, key, delivery, execution_id, row) do
     with {:ok, machine} <- resolve(config, delivery.scope, binding.document),
          {:ok, execution, _state} <-
-           Executions.create(config.store, execution_id, machine, executor: config.executor) do
+           Executions.create(config.store, execution_id, machine, create_options(config)) do
       if execution.status in @terminal do
         finished(config, binding, key, delivery, execution_id, row)
       else
@@ -214,7 +227,7 @@ defmodule StatifierRouter.Delivery do
   defp step(config, binding, key, delivery, {execution_id, row}, machine, outcome) do
     event = Event.external(delivery.name, data: delivery.data)
 
-    case Executions.step(config.store, execution_id, machine, event, executor: config.executor) do
+    case Executions.step(config.store, execution_id, machine, event, step_options(config)) do
       {:ok, _execution, _state} ->
         record(config, binding, key, delivery, Atom.to_string(outcome), execution_id)
         {:ok, {outcome, binding.id, execution_id}}
@@ -232,6 +245,16 @@ defmodule StatifierRouter.Delivery do
     record(config, binding, key, delivery, "dropped: finished", execution_id)
     {:ok, {:dropped, binding.id, :finished}}
   end
+
+  # The two doors take the snapshot in different places, and a helper that
+  # treated them as one shape would leave a created execution without the
+  # host's types for its whole life: on `create/4` the snapshot travels
+  # inside `initialize:`, on `step/5` beside the event.
+  defp create_options(config),
+    do: [executor: config.executor, initialize: config.persistence_options]
+
+  defp step_options(config),
+    do: [{:executor, config.executor} | config.persistence_options]
 
   defp resolve(config, scope, document) do
     case Resolver.call(config.resolver, scope, document) do
