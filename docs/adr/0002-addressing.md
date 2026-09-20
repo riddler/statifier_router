@@ -260,3 +260,50 @@ it.
   host that ignored the documented rule can produce, and the check
   would run on the create path of every delivery. The rule is stated
   instead, here and in `StatifierRouter.Resolver`.
+
+## Note (2026-09-20, sr-rh9): what one reap is called with and answers, and the row whose execution is gone
+
+A Note, not an amendment: it decides nothing and changes no decision.
+Section 6 stands as written; it names `reap/2` without saying what the
+function is called with or what it answers, and it does not describe one
+row shape the code meets. Both are recorded here so the next reader does
+not have to derive them.
+
+- **Its third argument is optional, and so is every option in it.**
+  `StatifierRouter.Addresses.reap/2` takes the configuration, the host's
+  current bindings, and a keyword list of three keys: `:now`, the reap's
+  time as a UTC `DateTime`, defaulting to `DateTime.utc_now/0`; `:limit`,
+  a positive integer, the most rows one call examines, defaulting to
+  1000; and `:after`, `nil` or a positive integer, examining only rows
+  whose id is greater than it. A key outside those three, a list that is
+  not a keyword list, or a malformed value is refused before anything is
+  read.
+- **It answers with a count of each write it made and a cursor.**
+  `{:ok, %{stamped: s, deleted: d, next: n}}`: `s` is how many rows this
+  call stamped `terminal_seen_at` on, `d` how many it deleted, and `n` the
+  id of the last row it examined when it examined a full `:limit` of them,
+  `nil` at the end of the table. A host sweeps the whole table by calling
+  again with `after: n` until `n` is `nil`; a host that always calls with
+  no options examines the first `:limit` rows every time and frees nothing
+  behind them. Section 6 leaves the schedule to the host, and this is what
+  the host has to schedule.
+- **A row whose execution the store no longer holds is deleted at the reap
+  that first reads it.** Section 5 counts a row's horizon from
+  `terminal_seen_at`, the first time this package read the execution's
+  status as terminal. An execution the store no longer holds has no status
+  to read - `StatifierPersistence.Storage.fetch_execution/2` answers
+  `{:error, :execution_not_found}` - so there is no horizon to start. The
+  horizon exists so that a late event for the address resolves to the
+  finished execution and is recorded as a drop (section 5); once the
+  execution is gone no delivery can reach it and no drop can be recorded,
+  so keeping the row keeps nothing, and it is deleted whatever the
+  document's horizon. Every other `{:error, reason}` from that read still
+  ends the call before it writes anything, as it always did. A row already
+  stamped is never read again, so an execution removed after its row was
+  stamped is freed by its horizon rather than by this rule.
+- **It is latent, and it is not only about tidiness.**
+  statifier_persistence 0.12.0 has no path that deletes an execution, so
+  no host reaches this today. It is recorded because the refusal it
+  replaces carried no cursor: one such row would have ended every sweep
+  that reached it, and the rows behind it would never have been examined
+  again.

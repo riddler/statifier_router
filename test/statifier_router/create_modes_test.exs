@@ -9,8 +9,10 @@ defmodule StatifierRouter.CreateModesTest do
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.Delivery
+  alias StatifierRouter.FailingStore
   alias StatifierRouter.Schema
   alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.StampingRepo
   alias StatifierRouter.TestRepo
 
   @now ~U[2026-09-19 08:00:00.000000Z]
@@ -224,9 +226,8 @@ defmodule StatifierRouter.CreateModesTest do
 
     # sabotage: terminal/3 treated every status as terminal -> the active
     # execution's row was stamped, red; restored, green. (A row already
-    # stamped is never in stamp/3's list, so its is_nil guard, kept for a
-    # delivery stamping the row between the read and the write, stayed
-    # green when dropped: this test pins the read, not that guard.)
+    # stamped is never in stamp/3's list, so this test pins the read, not
+    # stamp/3's is_nil guard; the guard has its own test below.)
     test "stamps a row first seen terminal, leaves an active one alone and never moves a stamp" do
       config = config(self())
       finished_execution(config, "imp_done")
@@ -318,13 +319,38 @@ defmodule StatifierRouter.CreateModesTest do
       assert ["imp_a", "imp_b"] = addresses(config) |> Enum.map(& &1.key) |> Enum.sort()
     end
 
-    # sabotage: terminal_rows/3 skipped a row whose read failed -> the due
+    # sabotage: classify_rows/3 skipped a row whose read failed -> the due
     # row before it was deleted and the call answered :ok, red; restored,
     # green.
     test "a failed status read ends the call before it writes anything" do
       config = config(self())
       finished_execution(config, "imp_7f3a")
       {:ok, %{stamped: 1}} = Addresses.reap(config, config.bindings, now: @now)
+
+      # A second, unstamped row: the stamped one is never read again, so
+      # this is the row whose read fails, and the due row before it is the
+      # one the halt protects.
+      unread = %Address{
+        scope: "7c1e",
+        document: "impression_click_join",
+        key: "imp_unread",
+        execution_id: "ex_unread",
+        inserted_at: @now
+      }
+
+      TestRepo.insert!(Config.put_meta(config, unread))
+
+      failing = %{config | store: %{config.store | adapter: FailingStore}}
+
+      assert Addresses.reap(failing, [], now: @now) == {:error, {:adapter, :unreachable}}
+      assert length(addresses(config)) == 2
+    end
+
+    # sabotage: classify/3 returned {:error, :execution_not_found} for a
+    # missing execution again -> the reap refused, left the orphan in place
+    # and never reached the row behind it, red; restored, green.
+    test "deletes a row whose execution the store no longer holds, and examines the rows behind it" do
+      config = config(self())
 
       orphan = %Address{
         scope: "7c1e",
@@ -335,9 +361,32 @@ defmodule StatifierRouter.CreateModesTest do
       }
 
       TestRepo.insert!(Config.put_meta(config, orphan))
+      finished_execution(config, "imp_7f3a")
 
-      assert Addresses.reap(config, [], now: @now) == {:error, :execution_not_found}
-      assert length(addresses(config)) == 2
+      # The bindings give the document a three-day horizon: it keeps the
+      # finished execution's row, and it does not keep the orphan.
+      assert Addresses.reap(config, config.bindings, now: @now) ==
+               {:ok, %{stamped: 1, deleted: 1, next: nil}}
+
+      assert [%Address{key: "imp_7f3a", terminal_seen_at: @now}] = addresses(config)
+    end
+
+    # sabotage: stamp/3 dropped `and is_nil(a.terminal_seen_at)` -> the
+    # reap moved the stamp the other writer had already set to @now and
+    # answered stamped: 1, red; restored, green.
+    test "never moves a terminal_seen_at another writer set between the read and the write" do
+      config = config(self())
+      finished_execution(config, "imp_7f3a")
+
+      # StampingRepo stamps every unstamped row it reads, at a time before
+      # this reap's, and hands the reaper the rows as the read found them.
+      stamping = %{config | repo: StampingRepo}
+      earlier = StampingRepo.stamped_at()
+
+      assert Addresses.reap(stamping, config.bindings, now: @now) ==
+               {:ok, %{stamped: 0, deleted: 0, next: nil}}
+
+      assert [%Address{terminal_seen_at: ^earlier}] = addresses(config)
     end
 
     # sabotage: options/1 dropped reject_unknown -> the unknown option was

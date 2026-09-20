@@ -100,11 +100,16 @@ defmodule StatifierRouter.Broadway do
   from the message. `:scope`, `:message_id` and `:source` are read from the
   message's metadata, and the message's data is the event's `data`.
 
-  A message that does not carry all four is not refused here:
-  `StatifierRouter.route/3` refuses the event it produces with
-  `{:error, {:invalid_event, event}}`, and the message fails. A producer
-  whose messages carry them elsewhere is paired with a `:normalize` of the
-  host's own.
+  A message that does not carry all four is not refused here: the event
+  this function builds carries `nil` for what the metadata did not hold,
+  and `StatifierRouter.route/3` refuses it. A message with no
+  `:message_id` in its metadata is refused with
+  `{:error, :no_message_id}`, which `route/3` checks before anything else;
+  a message whose metadata holds no `:scope` or no `:source`, or whose
+  data is not a map, is refused with
+  `{:error, {:invalid_event, event}}`. Either way the message fails. A
+  producer whose messages carry them elsewhere is paired with a
+  `:normalize` of the host's own.
 
       iex> message = %Broadway.Message{
       ...>   data: %{"kind" => "click", "impression_id" => "imp_7f3a"},
