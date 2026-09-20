@@ -18,6 +18,8 @@ defmodule StatifierRouter do
     * Dedupe on `(binding, message_id)` with a horizon.
     * The recorded outcome vocabulary: every delivery attempt ends in one
       named outcome.
+    * The webhook front, `StatifierRouter.Webhook`: a Plug-shaped helper
+      a host calls from its own controller or plug.
 
   ## What it does not own
 
@@ -25,7 +27,6 @@ defmodule StatifierRouter do
     * Execution-to-execution sends.
     * The source invoke.
     * Any queue adapter.
-    * The webhook helper.
     * Timers: those are `statifier_oban`'s.
     * A publish store: a host callback resolves a document to its active
       chart.
