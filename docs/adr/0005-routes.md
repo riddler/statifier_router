@@ -43,19 +43,23 @@ open them:
   `lib/statifier_persistence/executor.ex`, and its lifecycle,
   `lib/statifier_persistence/executions.ex`.
 
-The versions those surfaces were read at, because two of them are **ahead of
-what this package pins today**. The engine surfaces - `Statifier.Effect.Send`,
+The versions those surfaces were read at, because neither is in this
+package's dependency tree today, and the two dependencies are short of them
+for **different reasons**. The engine surfaces - `Statifier.Effect.Send`,
 `SendDelayed` and `Cancel`, `Statifier.Send.Processor`,
 `Statifier.Send.Event`, `Statifier.Send.Types`,
-`Statifier.Session.failed_send/3`, st-ADR-0054 and st-ADR-0069 - were read at
-statifier **2.6.0**, and this package pins `~> 2.5`. The persistence surfaces
-- `StatifierPersistence.Executor`, `StatifierPersistence.Executions`'s
-contract order and persist tail, and the `send_types:` option decision 6
-rests on - were read at statifier_persistence **0.13.0**, and this package
-pins `~> 0.12.0`. So decisions 4, 5 and 6 are written against surfaces a
-reader will not find in this package's current dependency tree. Moving those
-constraints is a separate piece of work with its own record trail; this
-record only states what it read and where.
+`Statifier.Session.failed_send/3`, st-ADR-0054 and st-ADR-0069 - were read
+at statifier **2.6.0**. This package's constraint, `~> 2.5`, already admits
+2.6.0; what holds the tree at 2.5.0 is `mix.lock`, so statifier needs a
+**dependency update and no constraint change at all**. The persistence
+surfaces - `StatifierPersistence.Executor`,
+`StatifierPersistence.Executions`'s contract order and persist tail, and the
+`send_types:` option decision 6 rests on - were read at
+statifier_persistence **0.13.0**, which the constraint `~> 0.12.0` excludes
+outright, so that one needs a **constraint bump as well as the update**.
+Either way a reader will not find these surfaces in the current tree until
+that work lands; it is separate from this record, which only states what it
+read and where.
 
 ### What the engine already decided
 
@@ -302,7 +306,16 @@ On the process-less shape the handler owns delayed sends and their
 `<cancel>` **itself**, because no session holds anything across a resume:
 those holds are the live session's own state and are not part of
 `Statifier.Position`, and this package resumes on every delivery.
-Concretely:
+
+**Only the process-less shape writes the durable queue.** On the
+send-processor shape the live session holds its own timers, and this
+record leaves them where they are; the scope named for that shape below
+exists so the key is DEFINED on both shapes, not because a live session
+also writes rows. A host that does keep such a send across a resume - which
+the engine's durable-timer record contemplates - keys it the same way, and
+that is why the definition is given for both.
+
+Concretely, on the process-less shape:
 
 - A `%Statifier.Effect.SendDelayed{}` is recorded on the **host's own
   durable timer queue, keyed by `(scope, send_id)`** - `scope` being
@@ -346,10 +359,16 @@ entry each registered type gets and
 top-level `send_types:` on `create/4` type-checks and is ignored, and the
 execution then lacks the host's types for its whole life.
 
-The `Config` surface itself is not added by this record. It is the
-dependency this record names: the route-registry bead adds it, and this
-record's foot takes a dated Note citing that surface's own record when it
-lands.
+The carrier for it is on `main` as this record is written:
+`StatifierRouter.Config`'s `:persistence_options`, a keyword list over
+`:routes`, `:invoke_types` and `:send_types`, carried onto every create and
+every step of every delivery, with the create-side placement inside
+`initialize:` that the paragraph above requires. What is **not** there yet
+is decision 2's route registry - route name to adapter - and the derivation
+of a `Statifier.Send.Types` snapshot from it. That is the dependency this
+record names: the route-registry bead adds it and hands its snapshot through
+`:persistence_options`, and this record's foot takes a dated Note citing
+that surface's own record when it lands.
 
 ### 7. A route the host has not registered
 
