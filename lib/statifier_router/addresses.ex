@@ -34,7 +34,15 @@ defmodule StatifierRouter.Addresses do
       it in the same reap;
     * a row whose execution is terminal is deleted once its horizon has
       elapsed since `terminal_seen_at`: when `terminal_seen_at` plus the
-      horizon is not later than the reap's time.
+      horizon is not later than the reap's time;
+    * a row not yet stamped whose execution the store no longer holds -
+      `fetch_execution/2` answers `{:error, :execution_not_found}` - is
+      deleted at this reap, whatever its horizon. The row's only use is to
+      reach that execution, and a late event for its address can no longer
+      be resolved to it and recorded as a drop, so nothing is kept by
+      keeping the row. A row already stamped is not read again, so an
+      execution removed after its row was stamped frees the row by its
+      horizon rather than by this rule.
 
   The horizon of a row is the longest dedupe horizon, `horizon_ms`, of any
   enabled binding among `bindings` whose `document` is the row's document.
@@ -60,7 +68,10 @@ defmodule StatifierRouter.Addresses do
   nothing behind them.
 
   An `{:error, reason}` from `fetch_execution/2` for any examined row ends
-  the call before it writes anything, and is returned.
+  the call before it writes anything, and is returned. The one exception is
+  `:execution_not_found`, which the rules above make a deletion rather than
+  a refusal: without it one orphaned row would end every sweep that reaches
+  it, and the rows behind it would never be examined again.
 
   This package runs no process to call it: the host schedules it, as it
   schedules `StatifierRouter.Dedupe.reap/2` (ADR-0002, section 6).
@@ -102,7 +113,8 @@ defmodule StatifierRouter.Addresses do
       is greater. Defaults to `nil`, the start of the table.
 
   Returns `{:ok, result}`, `{:error, reason}` from
-  `StatifierPersistence.Storage.fetch_execution/2`, or
+  `StatifierPersistence.Storage.fetch_execution/2` other than
+  `:execution_not_found`, which deletes the row instead, or
   `{:error, reason}` for a malformed option (`{:invalid_opts, opts}`,
   `{:unknown_key, name}`, `{:invalid_value, name, value}`).
   """
@@ -110,9 +122,9 @@ defmodule StatifierRouter.Addresses do
   def reap(%Config{store: %Storage{}} = config, bindings, opts \\ []) when is_list(bindings) do
     with {:ok, now, limit, after_id} <- options(opts),
          rows = examine(config, after_id, limit),
-         {:ok, terminal} <- terminal_rows(config, rows, now) do
+         {:ok, acted} <- classify_rows(config, rows, now) do
       horizons = horizons(bindings)
-      {due, kept} = Enum.split_with(terminal, &due?(&1, horizons, now))
+      {due, kept} = Enum.split_with(acted, &due?(&1, horizons, now))
 
       {:ok,
        %{
@@ -133,13 +145,14 @@ defmodule StatifierRouter.Addresses do
     )
   end
 
-  # Every examined row whose execution is terminal, as {row, :seen} when it
-  # was already stamped and {row, :new} when this reap is the first to see
-  # it. Nothing is written until every read has succeeded.
-  defp terminal_rows(config, rows, now) do
+  # Every examined row this reap acts on, as {row, :seen} when it was
+  # already stamped terminal, {row, :new} when this reap is the first to
+  # see it terminal, and {row, :orphan} when the store no longer holds its
+  # execution. Nothing is written until every read has succeeded.
+  defp classify_rows(config, rows, now) do
     rows
     |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
-      case terminal(config, row, now) do
+      case classify(config, row, now) do
         {:ok, nil} -> {:cont, {:ok, acc}}
         {:ok, entry} -> {:cont, {:ok, [entry | acc]}}
         {:error, _reason} = error -> {:halt, error}
@@ -151,16 +164,19 @@ defmodule StatifierRouter.Addresses do
     end
   end
 
-  defp terminal(_config, %Address{terminal_seen_at: %DateTime{}} = row, _now),
+  defp classify(_config, %Address{terminal_seen_at: %DateTime{}} = row, _now),
     do: {:ok, {row, :seen}}
 
-  defp terminal(config, %Address{} = row, now) do
+  defp classify(config, %Address{} = row, now) do
     case Storage.fetch_execution(config.store, row.execution_id) do
       {:ok, %{status: status}} when status in @terminal ->
         {:ok, {%{row | terminal_seen_at: now}, :new}}
 
       {:ok, _active} ->
         {:ok, nil}
+
+      {:error, :execution_not_found} ->
+        {:ok, {row, :orphan}}
 
       {:error, _reason} = error ->
         error
@@ -175,6 +191,10 @@ defmodule StatifierRouter.Addresses do
       acc -> Map.update(acc, document, ms, &max(&1, ms))
     end
   end
+
+  # An orphan has no terminal_seen_at to count a horizon from, and keeping
+  # it serves nothing: it is due at the reap that first reads it.
+  defp due?({%Address{}, :orphan}, _horizons, _now), do: true
 
   defp due?({%Address{document: document, terminal_seen_at: seen_at}, _how}, horizons, now) do
     horizon_ms = Map.get(horizons, document, 0)
