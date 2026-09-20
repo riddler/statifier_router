@@ -149,7 +149,7 @@ defmodule StatifierRouter.ConfigTest do
     test "carries the statifier_persistence snapshot options, and only those" do
       snapshot = [
         routes: Routes.new(),
-        invoke_types: Types.new(types: ["adserver:verify"])
+        invoke_types: Types.new(types: ["myapp:authorize"])
       ]
 
       assert {:ok, %Config{persistence_options: ^snapshot}} =

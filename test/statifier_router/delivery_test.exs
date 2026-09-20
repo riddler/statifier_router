@@ -161,33 +161,33 @@ defmodule StatifierRouter.DeliveryTest do
   describe "the statifier_persistence snapshot options" do
     # sabotage: create_options/1 passed the snapshot beside the machine
     # instead of inside initialize: -> the create ran with no declaration,
-    # the undeclared adserver:verify emitted its effect anyway, red;
+    # the undeclared myapp:authorize emitted its effect anyway, red;
     # restored, green.
     test "reach the create inside initialize:, which is where the core reads them" do
-      config = invoked_config(self(), ["adserver:bill"])
+      config = invoked_config(self(), ["myapp:capture"])
 
       assert {:ok, [{:created_and_delivered, "impressions_to_join", _execution_id}, _]} =
                StatifierRouter.route(config, impression(), now: @now)
 
       # The impression's step entered billing, whose type is declared.
-      assert_received {:effect, {:invoke, %Invoke{type: "adserver:bill"}}}
+      assert_received {:effect, {:invoke, %Invoke{type: "myapp:capture"}}}
 
       # The initial configuration's invoke is not declared, so the create
       # rejected it rather than emitting it.
-      refute_received {:effect, {:invoke, %Invoke{type: "adserver:verify"}}}
+      refute_received {:effect, {:invoke, %Invoke{type: "myapp:authorize"}}}
     end
 
     # sabotage: step_options/1 dropped the snapshot and passed only the
     # executor -> the step ran with no declaration, the undeclared
-    # adserver:bill emitted its effect anyway, red; restored, green.
+    # myapp:capture emitted its effect anyway, red; restored, green.
     test "reach the step beside the event" do
-      config = invoked_config(self(), ["adserver:verify"])
+      config = invoked_config(self(), ["myapp:authorize"])
 
       assert {:ok, [{:created_and_delivered, "impressions_to_join", _execution_id}, _]} =
                StatifierRouter.route(config, impression(), now: @now)
 
-      assert_received {:effect, {:invoke, %Invoke{type: "adserver:verify"}}}
-      refute_received {:effect, {:invoke, %Invoke{type: "adserver:bill"}}}
+      assert_received {:effect, {:invoke, %Invoke{type: "myapp:authorize"}}}
+      refute_received {:effect, {:invoke, %Invoke{type: "myapp:capture"}}}
     end
   end
 
