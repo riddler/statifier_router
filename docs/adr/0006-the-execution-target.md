@@ -1,0 +1,437 @@
+# ADR-0006: The execution target: a send whose params name a document and a key resolves through the address table, the scope is the sender's and never a param, delivery is the same one transaction a binding's delivery uses, the miss follows a `create` param that offers two of the three modes and is reported to the sender as well as recorded, the event is the engine's builder's, and a send to the sender's own address is refused
+
+Status: proposed
+
+## Context
+
+ADR-0002, section 8 names three future readers of the address table:
+sinks, timers and execution-to-execution sends, and says none of them is
+in that release. This record opens the third of those three. An execution
+that has finished its own work often has to hand something to another
+execution: the impression-and-click join tells a placement counter that a
+pair joined; a screen in one signup tells the enrolment that owns it that
+it is done. Today the only way into a durable execution is an inbound
+event through a binding, which means a host has to turn one execution's
+output into a source event and route it back in.
+
+What is already decided bounds the answer, and the bounds are unusually
+tight.
+
+- **The engine refuses an unregistered send type and hands a registered
+  one to the host.** A `<send>` whose `type` resolves to a string the
+  session was not started with raises `error.execution` and builds no
+  effect; a registered one produces the ordinary send effect plus the
+  event the library would have delivered (st-ADR-0069,
+  `docs/adr/0069-host-registered-send-types.md` in statifier-ex,
+  decisions 1, 3 and 4, read at statifier-ex 2105a44).
+- **The engine names three things an opening record owes.** The record
+  that deferred durable delivery between sessions listed the event
+  carrier, the miss semantics and the identity story, so that the record
+  firing on its trigger would not rediscover them (st-ADR-0055,
+  `docs/adr/0055-non-self-delayed-send-routes-stay-the-librarys.md` in
+  statifier-ex, decision 3). Its trigger has since fired and been
+  answered in general for every host processor; what is owed here is this
+  package's answer to each.
+- **This package's outbound sends already have a spelling, a return and
+  a key.** ADR-0005 puts the host's registered processor in a send's
+  `type` and a route name in its `target` (section 1), makes the route
+  one-way with `error.communication` carrying the `sendid` as the one
+  event it can cause in the sending execution (section 3), composes the
+  idempotency key from the send effect's deterministic half and the
+  shape's context (section 4), and puts both entry points in one handler
+  module (section 5). This record reuses all four rather than inventing a
+  second set.
+- **An execution created under `always_new` has no address.** That mode
+  writes no address row (ADR-0002, section 7), so such an execution has
+  no `(scope, document, key)` and cannot be named by one.
+  `StatifierRouter.Delivery`'s `by_mode` clause for `:always_new` says
+  the same in code: it creates under a freshly minted id and passes no
+  row.
+- **The seam context carries no scope.** The executor seam hands the
+  handler an execution id and a content hash. The scope rides with an
+  inbound event, as a field of the event the host passes to `route/3`
+  (ADR-0003, section 8), and there is no inbound event here.
+- **The ledger's `scope` column is `NOT NULL`.**
+  `StatifierRouter.Migrations.V01.up/1` adds `scope` to `routing_ledger`
+  with `null: false`, so a fault discovered before this record has a
+  scope in hand has no ledger row available to it. Section 6 is written
+  around that.
+
+**What this record was written against.** It was drafted on 2026-09-20
+against a tree that still resolved statifier 2.5.0 and
+statifier_persistence 0.12.0, and rebased the same day onto a main whose
+`mix.exs` carries `~> 2.6` and `~> 0.13` and whose `mix.lock` resolves
+statifier 2.6.0 and statifier_persistence 0.13.0. The sections below rest
+on three engine surfaces, and all three are in that tree:
+`Statifier.Send.Event.build/3` and `Statifier.Session.failed_send/3`
+(statifier 2.6.0), and `StatifierPersistence.Executions`' documented
+executor-failure re-entry (statifier_persistence 0.13.0). A fourth,
+`Statifier.Interpreter.deliver_internal/5`, appears once in section 3,
+inside that documentation's own words rather than as a claim of this
+record's; it is public in statifier 2.6.0 too. Where a section below
+rests on an implementation detail rather than on a documented surface, it
+says so and names the version it was read at. The records
+this one cites in statifier-ex were read at 2105a44. What is **not** in
+the tree is anything that calls those surfaces: no module in this package
+implements the engine's send-processor behaviour, and section 2 says
+where that handler comes from.
+
+## Decision
+
+### 1. The spelling: the host's processor in `type`, the reserved name `execution` in `target`, the address in params
+
+An execution-to-execution send is written with the host's registered
+processor in `type` and the reserved name `execution` in `target`, which
+is ADR-0005, section 1's spelling with one name reserved out of it:
+
+    <send type="myapp:router" target="execution" event="pair.joined">
+      <param name="document" expr="'placement_counter'"/>
+      <param name="key" expr="placement"/>
+      <param name="create" expr="'never'"/>
+    </send>
+
+`document` and `key` are required and each must resolve to a non-empty
+string; `create` is optional and defaults to `if_absent`, ADR-0001,
+section 1's default for a binding's `create`. **`execution` is a reserved
+name**: a host registry that offers a route under it is refused when the
+router's configuration is validated, so a chart that writes it always
+means this record's target and never a host's transport.
+
+**The scope is the sender's, never a param.** The router reads the
+sending execution's own address row by its execution id and takes the
+`scope` from it, so a chart can address only inside the scope it is
+running in, and ADR-0002, section 2's partition holds without the author
+being trusted to keep it. That read is the handler's first step, and
+everything in sections 2, 3 and 6 assumes it has happened.
+
+Two things that read relies on, said here rather than left to be derived:
+
+- **One address row per execution is an invariant of the create path, not
+  a constraint the schema enforces.** ADR-0002, section 1's unique index
+  is on `(scope, document, key)`; the `execution_id` index
+  `StatifierRouter.Migrations.V01.up/1` adds is not unique, and that
+  module's own documentation says it exists so that the rows naming one
+  execution are found without a scan. What keeps the count at one is that
+  each create mints a fresh id and writes at most one row for it.
+- **A sender with no address row has no scope and no key of its own.**
+  That is exactly what `always_new` produces (ADR-0002, section 7), and
+  such a send is a refusal (section 6).
+
+### 2. Resolution and delivery are the ones this package already has
+
+Resolution is the address table's `(scope, document, key)` lookup
+(ADR-0002, section 1), and delivery is the same single transaction
+ADR-0003, section 1 describes, in the same order: the dedupe row, the
+address insert-or-lookup, `create/4` when the mode calls for one,
+`step/5`, and the ledger row. An execution-to-execution send therefore
+gets get-or-create, the unique index's race settlement, the dedupe row
+and the ledger without a second write path to the address table.
+
+**Who plays the binding on the ledger row.** The ledger row (ADR-0004,
+section 4) takes the reserved name `execution` as its `binding_id`, the
+same one name the chart wrote in `target`; a host binding whose `id` is
+`execution` is refused for the same reason a host route under that name
+is. Its `scope` is the sender's, its `key` the resolved `key` param, and
+its `execution_id` the resolved target.
+
+**What plays the message id, and why a retried step cannot deliver
+twice.** The `message_id` is ADR-0005, section 4's idempotency key. That
+record composes it, and this one inherits it rather than defining a
+second: its effect half is the send effect's `send_id`, step counters,
+`c_index`, `owner` and `ordinal`, and its scope half is the sender's
+execution id at the executor seam or its session id on the send-processor
+shape. Composing it is ADR-0005, section 5's one handler module's job at
+both entry points. **That handler is not in `lib/` yet** - nothing in
+this package composes a key today - and the bead that adds it is where
+this record's code half lives.
+
+Every component of that key's effect half is a counter or a static
+content position stamped when the send was executed, so re-running the
+sender's step after a crash composes a byte-identical key; the dedupe row
+for `("execution", that key)` is then present and unexpired, and the
+second delivery is a duplicate that writes its ledger row and nothing
+else (ADR-0003, section 6). The dedupe row's horizon is ADR-0001, section
+1's default, 259_200_000 milliseconds, since no binding supplies one
+here.
+
+**The one case where it does not hold, stated rather than papered over.**
+If the sender itself was created inside a transaction that then rolled
+back, the redelivery creates the sender again under a newly minted id
+(ADR-0002, section 3 forbids deriving that id from anything stable), so
+the scope half of the key differs and the second firing is new work. That
+is the documented cost of stepping inside the transaction (ADR-0003,
+section 2), and ADR-0005, section 4 states the same limit for a route.
+
+### 3. The miss follows the `create` param, which offers two of the three modes, and the sender is told
+
+| `create` | No row for the address | The row's execution is active | The row's execution is terminal |
+|---|---|---|---|
+| `if_absent` (default) | insert the row, `create/4`, `step/5`: created_and_delivered | `step/5`: delivered | stamp `terminal_seen_at` if empty, no step: dropped: finished |
+| `never` | no row, no create, no step: dropped: no_execution | `step/5`: delivered | stamp `terminal_seen_at` if empty, no step: dropped: finished |
+
+Those are ADR-0003, section 4's rows for the two modes, unchanged.
+**`always_new` is not offered.** A send that names a document and a key
+is asking for the execution that address holds; a mode that writes no
+address row would create an execution the named key does not address, so
+the next send with the same params would create another, and the chart's
+key would mean nothing. A `create` param resolving to anything but
+`if_absent` or `never` is a refusal (section 6).
+
+**A miss is reported to the sender, and the ledger row records that it
+was reported.** When the address does not resolve under `never`, and when
+the target is terminal under either mode, the send did not reach an
+execution. The router reports it the two ways ADR-0005, section 7 already
+reports an unregistered route: on the process-less shape by returning
+`{:error, reason}` from the handler's `execute/2`, which does not roll the
+sender's step back and is re-entered as `error.communication` carrying the
+send's `sendid` (ADR-0005, section 3's path); on a live session through
+`Statifier.Session.failed_send/3` (statifier 2.6.0). That is what
+st-ADR-0069, `docs/adr/0069-host-registered-send-types.md` in
+statifier-ex, decision 5 requires of any processor that cannot deliver
+while the sender still exists.
+
+**The ledger row is written as well, and it is a record OF that report,
+not a replacement for it.** The difference is the whole of this rule. The
+row is how an operator finds, per scope and per key, which sends did not
+land; the `error.communication` is how the chart finds out that its send
+did not go. Neither stands in for the other, and a handler that wrote the
+row without reporting would leave the chart believing the send landed.
+
+**When the chart hears it differs by shape, and only one of the two is
+this package's.** At the executor seam the `{:error, reason}` re-enters
+the sending execution inside the same `step/5`, as its own wave, before
+that step's position is written: `StatifierPersistence.Executions`'
+documentation says executor failures on actionable effects re-enter the
+chart as `error.communication` through
+`Statifier.Interpreter.deliver_internal/5` and that re-entry is
+single-wave per step (statifier_persistence 0.13.0). ADR-0005 attaches
+"in the same step" to that arm alone, and this record does the same. On a
+live session the report goes through `Statifier.Session.failed_send/3`,
+which is a cast (statifier 2.6.0), so the write lands in a later message
+and the chart does not hear inside the sending step; that record says
+nothing about the live arm's timing and neither does this one beyond
+that. **This package is driven process-less**, so the seam arm is the one
+it actually drives; the live arm is served because ADR-0005, section 5's
+one handler serves both shapes.
+
+**Why the report rather than a row alone.** An earlier draft of this
+record reported nothing under `never`, on the ground that an address that
+does not resolve is an addressing outcome rather than a transport failure
+and so falls outside C.1's `error.communication`. That distinction is
+real, but st-ADR-0069 decision 5 is accepted upstream and draws no such
+line: its only carve-out is a processor "whose route creates its target
+on a miss (get-or-create)", which is `if_absent` and not `never`. A
+record at proposed does not silently override an accepted one, and two
+records disagreeing leaves a reader unable to tell which governs, so this
+record conforms. The distinction is raised as a question for the engine
+rather than decided here.
+
+**Under `if_absent` there is no miss at all**, which is that carve-out
+exactly: the target is created and stepped in the same transaction, so
+nothing is reported and the ledger row is an ordinary
+created_and_delivered.
+
+**A chart that needs an answer still binds one back.** An
+`error.communication` is a transport failure and not an answer (ADR-0005,
+section 3). A receiver's result comes back as its own event, routed in
+through an ordinary binding whose `key` program names the original
+sender's key: a second, independent delivery with its own address, its
+own dedupe row and its own ledger row.
+
+### 4. The event carrier is the engine's builder, and the envelope params do not travel
+
+The delivered event is built by `Statifier.Send.Event.build/3` (statifier
+2.6.0) from the send effect and the sender's session id, which at this
+package's seam is the sender's execution id. `name` is the send's `event`
+and the rest of the stamps are the builder's. Two things are this
+record's:
+
+- **`origin` and `origintype`.** The router passes no `:origin`, so the
+  builder's default stands and `origin` names the sender's execution
+  (`#_scxml_<execution id>`), which survives a resume because a resumed
+  session keeps its `_sessionid` (st-ADR-0069 decision 5, sender half).
+  It passes `:origintype` as the type string the host registered its
+  processor under, so a receiver that answers "via the Event I/O
+  Processor specified in 'origintype'" reaches this processor rather than
+  the engine's; that answer is a send of its own, addressed by its own
+  params, and never a reply to this one.
+- **The envelope params are consumed.** `document`, `key` and `create`
+  name the envelope, not the message, and are removed from the delivered
+  event's `data`. A chart that wants the key in the payload writes it
+  again under another param name, so the receiver never has to know
+  whether a field addressed it or was meant for it.
+
+### 5. This package's answer to the three items the engine's record says an opening record owes
+
+st-ADR-0055
+(`docs/adr/0055-non-self-delayed-send-routes-stay-the-librarys.md` in
+statifier-ex), decision 3 names three; st-ADR-0069
+(`docs/adr/0069-host-registered-send-types.md` in statifier-ex), decision
+5 answers them in general for any host processor. This package's answers:
+
+- **The event carrier** is that record's decision 4 builder,
+  `Statifier.Send.Event.build/3`, called by this package with the
+  sender's execution id and this record's `origintype` (section 4).
+- **The miss semantics** are section 3's, and they are decision 5's
+  unchanged: under `never` and for a terminal target the miss is reported
+  to the sender as `error.communication` with the `sendid`, through
+  ADR-0005, section 7's two shapes, and the committed ledger row records
+  that report rather than standing in for it; under `if_absent` there is
+  no miss, which is decision 5's get-or-create carve-out.
+- **The identity story** is section 1's and section 4's: the target half
+  is the host address `(scope, document, key)` resolved through
+  ADR-0002's table, exactly the target half decision 5 describes, and the
+  sender half is the sender's own execution id, which is stable across a
+  resume and is what the builder's default `origin` names.
+
+### 6. A send to the sender's own address is refused, and which refusals reach the ledger
+
+The outcomes of an execution-to-execution send are this record's, not
+ADR-0004, section 1's seven, which are scoped to one routing attempt per
+binding. Five of ADR-0004's terms are reused verbatim for the states they
+already name: delivered, created_and_delivered, duplicate, dropped:
+no_execution and dropped: finished. `no_match` and `key_refused` have no
+meaning here, because there is no `match` and no `key` program. One term
+is added, `send_refused`.
+
+**How an outcome is spelled.** These outcomes are not `route/3` tuples:
+`route/3` routes an inbound event and this is a send. The handler's own
+return is ADR-0005, section 3's `:ok | {:error, reason}`, and the outcome
+word is what the ledger row's `outcome` column holds, spelled as in
+ADR-0004, section 4 and in the paragraph above.
+
+**`send_refused`'s reasons, and which of them can be recorded.** A
+refusal is reported to the sender by section 3's two shapes in every
+case. Whether it also reaches the ledger depends on one thing: the
+ledger's `scope` is `NOT NULL`, and the scope is the sending execution's,
+read from its address row as section 1's first step.
+
+| Reason | Means | Ledger row |
+|---|---|---|
+| `unaddressed_sender` | the sending execution has no address row, so there is no scope | none: reported only |
+| `document` | the `document` param is absent or is not a non-empty string | one row, `key` and `execution_id` empty |
+| `key` | the `key` param is absent or is not a non-empty string | one row, `key` and `execution_id` empty |
+| `create` | the `create` param resolves to neither `if_absent` nor `never` | one row, `key` set, `execution_id` empty |
+| `self_address` | the resolved `(scope, document, key)` holds the sending execution's own id | one row, `key` and `execution_id` set |
+
+The first is the only one discovered before the scope is in hand, and it
+is the only one the schema cannot record. The other four are discovered
+after it, so each writes one row and is reported. Nothing is left to
+infer: a refusal with no ledger row is `unaddressed_sender` and nothing
+else.
+
+**Why a self-addressed send is refused rather than delivered.** `step/5`
+would be asked for the lock the sender's own delivery already holds, and
+a chart that means to send to itself has the engine's own `:self` route
+for it.
+
+**A cycle between two executions is the charts' business.** The router
+detects none: A sending to B and B sending back to A is two sends, each
+from a different sender, each advancing its own step counters and
+ordinal, so each composes a different idempotency key and is genuinely
+new work. What the dedupe key bounds is the other storm, the one the
+router causes: a delivery that rolls back and is retried composes the
+same key every time, so a crash-retry loop delivers once however often it
+runs (section 2).
+
+### The example: the impression-and-click join tells a placement counter
+
+The join of ADR-0001's example finishes when an impression and its click
+have both arrived. The impression binding projects `placement` into the
+chart's data, so the join holds one. Its final state writes:
+
+    <send type="myapp:router" target="execution" event="pair.joined">
+      <param name="document" expr="'placement_counter'"/>
+      <param name="key" expr="placement"/>
+      <param name="placement_id" expr="placement"/>
+    </send>
+
+The sender is an execution of `impression_click_join` in the scope
+`"7c1e"`, so the router reads its address row, takes the scope `"7c1e"`,
+and resolves `("7c1e", "placement_counter", "home_top")`. No row exists
+the first time, `create` defaults to `if_absent`, and the counter
+execution is created on the chart the host's resolver names for
+`("7c1e", "placement_counter")` and stepped with `pair.joined`, whose
+data is `%{"placement_id" => "home_top"}`: the third param, the two
+envelope params having been consumed. The ledger gains one row:
+`binding_id` `execution`, `scope` `"7c1e"`, `key` `"home_top"`, outcome
+created_and_delivered. The next join on the same placement resolves
+through the row to the same counter and is a delivered. If the sender's
+step is replayed after a crash, the idempotency key is unchanged, the
+dedupe row is present, and the outcome is a duplicate with no second
+step.
+
+Had the send written `create` as `never` before any counter existed, the
+outcome would be dropped: no_execution, the ledger would hold that row,
+and the join would take `error.communication` with the send's `sendid`.
+The join is a durable execution stepped at the executor seam, so it takes
+it inside the same step, before that step's position is written, and a
+transition armed on it fires in that step.
+
+### Enumeration is a test's, not this record's
+
+This record states rules. Which params a given chart writes, which
+refusals a given misconfiguration produces, and that every path above
+lands the outcome it names are enumerated by the execution-target tests
+the code half adds, not claimed here over a live codebase.
+
+## Consequences
+
+- ADR-0002's third named future reader exists. The address table gains
+  one more resolver beside delivery from a binding, and no second writer:
+  an execution-to-execution send inserts and reads through the same
+  get-or-create the delivery record owns.
+- An `always_new` execution can neither be sent to nor send: with no
+  address row it has no key to be addressed by (ADR-0002, section 7) and
+  no scope to send from (section 1). A host that wants such an execution
+  to send gives it an address by using another create mode.
+- A chart can reach another execution without the host turning its output
+  into a source event, and it still cannot reach outside its own scope,
+  because the scope is read from the sender's row rather than written by
+  the author.
+- **Three of the ledger's columns are read differently now, and section
+  4 of ADR-0004 is where a reader learns the old reading.** That section
+  says `reason` is "empty otherwise", meaning for every outcome but
+  key_refused; `key` is "empty for key_refused"; and `execution_id` is
+  "empty for duplicate, key_refused and dropped: no_execution". Section
+  6's refusal rows add to all three: `send_refused` puts a second
+  outcome's reason in `reason`, leaves `key` empty for its `document` and
+  `key` reasons, and leaves `execution_id` empty for its `document`, `key`
+  and `create` reasons. No column's shape changes and no row already
+  written means anything different. What changes is that an empty `key`
+  or an empty `execution_id` no longer identifies the outcome on its own:
+  a reader asks which outcome the row carries first, and section 6's
+  table says what each refusal reason leaves empty.
+- The ledger becomes the one place both directions are visible: an
+  inbound delivery and an execution-to-execution send write rows of the
+  same shape, and the reserved `execution` binding id is how they are
+  told apart. One refusal is invisible there by construction, and section
+  6 names it.
+- **At the executor seam, which is the shape this package drives, a
+  chart hears about a miss inside the step that sent.** The executor's
+  `{:error, reason}` re-enters as `error.communication` in its own wave
+  within the same `step/5`, before the position is written, and the step
+  the sender took stands (`StatifierPersistence.Executions`'
+  documentation, statifier_persistence 0.13.0). So a chart there can arm
+  a transition on `error.communication` and have it fire in that step,
+  and conforming to the upstream record costs it nothing it could
+  otherwise have had. **On a live session it costs a step**:
+  `Statifier.Session.failed_send/3` is a cast, so the chart hears in a
+  later message and cannot act inside the sending step. The property
+  belongs to the seam, not to the rule.
+- The reserved name costs a host one name in two places: it may not
+  register a route called `execution` and may not give a binding that
+  `id`. Both refusals are configuration-time, so no chart discovers them
+  at run time.
+- This record leaves to later records and to the code half: the handler
+  that composes ADR-0005, section 4's key and both entry points that call
+  it, the configuration-time validation that refuses the reserved name,
+  the encoding of `send_refused`'s reason in the ledger's `reason`
+  column, and whether a send may address a document in a scope the host
+  declares equivalent to the sender's, which this record simply does not
+  allow.
+- Whether an unresolved address is genuinely transport failure, or a
+  third thing that C.1's `error.communication` was not written for, is
+  left open for the engine to decide. This record conforms to the
+  accepted answer and records the argument it set aside (section 3) so
+  that the question survives the conforming.

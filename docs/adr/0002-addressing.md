@@ -307,3 +307,40 @@ not have to derive them.
   replaces carried no cursor: one such row would have ended every sweep
   that reached it, and the rows behind it would never have been examined
   again.
+
+## Note (2026-09-20, sr-99d): the first of section 8's future readers
+
+A Note, not an amendment: it decides nothing, and this record stays at
+proposed with its Decision untouched.
+
+Section 8 names sinks, timers and execution-to-execution sends as the
+address table's **future** readers and says none of them is in that
+release. [ADR-0006](0006-the-execution-target.md) opens the third of
+them, at proposed. What that record adds to this one, and what it
+deliberately does not:
+
+- **A second reader, no second writer.** An execution-to-execution send
+  resolves `(scope, document, key)` through this table and, when its
+  `create` calls for one, creates through the same get-or-create inside
+  the delivery transaction, which is the first of the two writers section
+  8 names; the other is `reap/2`. Nothing in it writes an address row by
+  another path, so section 8's list of writers is unchanged.
+- **The scope comes from this table, not from the chart.** That record
+  reads the sending execution's own address row by its execution id and
+  takes the `scope` from it, so a chart never names a scope and section
+  2's partition holds without the author being trusted to keep it. The
+  `execution_id` index the code half added is what makes that read
+  cheap; the unique index of section 1 is on the triple, so the one
+  address row per execution that read relies on is an invariant of the
+  create path rather than a constraint the schema enforces.
+- **Section 7 is load-bearing there.** An `always_new` execution has no
+  row, so it has no scope and no key: that record refuses its sends for
+  the same reason this one gives it no address. Section 7's closing
+  sentence, that a later record wanting to reach such executions by key
+  has to decide a different address for them, still stands undecided.
+- **Timers are still future, and the sink is not a reader of this
+  table.** This Note narrows section 8 by one reader and nothing else.
+  [ADR-0005](0005-routes.md) has since decided the outbound half, and a
+  sink there resolves through a per-host route registry rather than
+  through an address; what section 8 anticipated for sinks is that
+  record's to answer, not this Note's.
