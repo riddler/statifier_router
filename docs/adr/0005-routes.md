@@ -432,11 +432,21 @@ package hosts through `StatifierPersistence.Executions.create/4` and
 `step/5`, carrying `:executor` and `Config`'s `:persistence_options` -
 `:routes`, `:invoke_types` and `:send_types` - and **no driver-side invoke
 door**. `:invoke_types` is the option a reader chasing this trigger checks
-first, and it is not the missing piece: it declares which invoke types a
-chart may use, not how a child's answer gets back. What is missing is a
-door, and that package's driver-side invoke doors are outside the
-caller's-transaction contract this package's ADR-0003 section 1 depends on. This record names that as an open trigger
-and designs nothing for it.
+first, and it is not the missing piece: it declares the invoke types a
+deployment implements **beyond the built-in handler**, and a chart may use
+the built-in spellings with nothing in the snapshot at all. What it does
+not do is carry a child's answer back. What is missing is a door, and that
+package's driver-side invoke doors are outside the caller's-transaction
+contract this package's ADR-0003 section 1 depends on.
+
+ADR-0007, `docs/adr/0007-the-source-invoke.md`, specifies the other half of
+`<invoke>` in this package - the source invoke, where an invocation's
+lifetime is a subscription's - and reaches the same conclusion about this
+one from its own side: it too declares the router-hosted invoke answer path
+unbuilt, for the same reason, and designs nothing for it either. A reader
+following this trigger should read that record beside this one.
+
+This record names the trigger and designs nothing for it.
 
 Three further questions are open for the operator and are recorded here so
 a later reader does not mistake this record's silence for an answer. Each
