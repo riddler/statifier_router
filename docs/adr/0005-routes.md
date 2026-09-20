@@ -32,12 +32,30 @@ open them:
   that a rollback does not un-fire the effects the executor was handed.
 - `docs/adr/0004-the-refusal-and-drop-vocabulary.md` - the refusal and drop
   vocabulary, and the routing ledger a refusal is recorded on.
+- The engine's durable-timer record, `statifier-ex`'s
+  `docs/adr/0054-durable-timers-consume-the-effect-vocabulary.md`
+  (st-ADR-0054), which fixes the cancellation key `{session scope, send_id}`
+  and the separate dedup key, and says the two are not one key.
 - The engine's send-type record, `statifier-ex`'s
   `docs/adr/0069-host-registered-send-types.md` (st-ADR-0069), which put the
   Event I/O Processor slot on `type`.
 - statifier_persistence's executor seam,
   `lib/statifier_persistence/executor.ex`, and its lifecycle,
   `lib/statifier_persistence/executions.ex`.
+
+The versions those surfaces were read at, because two of them are **ahead of
+what this package pins today**. The engine surfaces - `Statifier.Effect.Send`,
+`SendDelayed` and `Cancel`, `Statifier.Send.Processor`,
+`Statifier.Send.Event`, `Statifier.Send.Types`,
+`Statifier.Session.failed_send/3`, st-ADR-0054 and st-ADR-0069 - were read at
+statifier **2.6.0**, and this package pins `~> 2.5`. The persistence surfaces
+- `StatifierPersistence.Executor`, `StatifierPersistence.Executions`'s
+contract order and persist tail, and the `send_types:` option decision 6
+rests on - were read at statifier_persistence **0.13.0**, and this package
+pins `~> 0.12.0`. So decisions 4, 5 and 6 are written against surfaces a
+reader will not find in this package's current dependency tree. Moving those
+constraints is a separate piece of work with its own record trail; this
+record only states what it read and where.
 
 ### What the engine already decided
 
@@ -111,7 +129,12 @@ engine names the components itself: `Statifier.Send.Processor`'s moduledoc
 requires a processor to be idempotent "on the ADR-0054 decision 3 dedup
 key's components read off the effect: the send id, the step counters,
 `c_index`, `owner`, and `ordinal` ... with the session scope the host
-supplies".
+supplies". The bare `ADR-0054` inside that quotation is the engine's own
+record, st-ADR-0054, `statifier-ex`'s
+`docs/adr/0054-durable-timers-consume-the-effect-vocabulary.md` - not a
+record of this repository, which has 0001 to 0005 only. That record also
+fixes the **cancellation** key, `{session scope, send_id}`, which is a
+different key from the dedup key quoted here; decision 5 uses both.
 
 ### Delayed sends do not survive a resume
 
@@ -282,11 +305,26 @@ those holds are the live session's own state and are not part of
 Concretely:
 
 - A `%Statifier.Effect.SendDelayed{}` is recorded on the **host's own
-  durable timer queue, keyed by the send id**, with its composed key and
-  `delay_ms` beside it. The handler schedules nothing in memory.
-- A `%Statifier.Effect.Cancel{}` deletes that queue's rows for its
-  `send_id`. The send id is the only key a cancel offers: a
-  `%Statifier.Effect.Cancel{}` carries no `event`, `target` or `type`.
+  durable timer queue, keyed by `(scope, send_id)`** - `scope` being
+  decision 4's scope half, `execution_id` at the executor seam and
+  `session_id` on the send-processor shape. The send id alone is **not** a
+  key: it is unique within one execution and not across a host, because a
+  generated one is minted off a per-execution counter and an author-written
+  one is reused verbatim, so `send_1` recurs in every execution on the host.
+  This is st-ADR-0054's cancellation key, `{session scope, send_id}`, and
+  that record says in terms that a package keying stored jobs on `send_id`
+  alone "would be nonconformant with this record on day one". Decision 4's
+  full composed key and `delay_ms` ride beside the row, the composed key as
+  the dedup key: the cancellation key and the dedup key are two keys, not
+  one. The handler schedules nothing in memory.
+- A `%Statifier.Effect.Cancel{}` deletes **that scope's** rows for its
+  `send_id`, and no other scope's. It may legitimately match more than one
+  row - spec 6.3 cancels every delayed send under an id - and a cancel that
+  matches nothing is a no-op, not an error. A cancel carries nothing that
+  identifies the **route**: a `%Statifier.Effect.Cancel{}` has `c_index`,
+  `owner`, the three counters and `ordinal`, but no `event`, `target` or
+  `type`, so the queue row must carry the route name it was scheduled
+  against.
 - A cancel for a send already fired is a no-op, and a fire for a send
   already cancelled must not happen: the queue row is the single decision
   point, and both operations are writes against it.
