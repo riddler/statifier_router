@@ -37,14 +37,16 @@ defmodule StatifierRouter.DeliveryFixtures do
   # One invoke in the initial configuration and one behind the impression:
   # the create path and the step path each enter exactly one of them, so a
   # declared invoke-type snapshot that reaches only one door is visible.
+  # The two types are the credit-card domain's authorization and capture,
+  # which is where this family's example invoke types come from.
   @invoked """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="opening">
     <state id="opening">
-      <invoke type="adserver:verify"/>
+      <invoke type="myapp:authorize"/>
       <transition event="impression" target="billing"/>
     </state>
     <state id="billing">
-      <invoke type="adserver:bill"/>
+      <invoke type="myapp:capture"/>
       <transition event="click" target="clicked"/>
     </state>
     <final id="clicked"/>
