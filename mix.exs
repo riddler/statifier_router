@@ -72,8 +72,8 @@ defmodule StatifierRouter.MixProject do
       # Required, not optional: the Broadway front is the package's entry
       # point, and the host starts it in its own tree.
       {:broadway, "~> 1.3"},
-      {:statifier, "~> 2.5"},
-      {:statifier_persistence, "~> 0.12.0"},
+      {:statifier, "~> 2.6"},
+      {:statifier_persistence, "~> 0.13"},
       {:predicator, "~> 9.4"},
       {:ecto_sql, "~> 3.14"},
       # The execution ids the router mints (ADR-0002, section 3): the same
