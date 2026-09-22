@@ -345,7 +345,7 @@ type's send reaches a host in. The routing-ledger row for a route refusal
 is the one piece of ADR-0005 that is not built: the reported miss and the
 step that still commits are, and `StatifierRouter.SendHandler` says which
 column values are unruled. Each piece lands behind the decision record
-that fixes it, in [docs/adr/](docs/adr/README.md).
+that fixes it, in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
 
 ## Installation
 
