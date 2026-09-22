@@ -1,6 +1,6 @@
 # ADR-0002: Addressing: one table from (scope, document, key) to an execution id the router mints, scope an opaque host string, the host's chart resolver, a row that outlives its execution for the longest dedupe horizon, reaping as a plain function, and no row for always_new
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -194,7 +194,7 @@ after the next reap past it the address is free again.
 
 ## Amendment (2026-09-19, sr-v56): the chart an existing execution is stepped on
 
-Status: proposed
+Status: accepted
 
 Section 4 decides which chart a new execution starts on, and says the
 router asks the host's resolver only when it is about to create one. It
@@ -344,3 +344,32 @@ deliberately does not:
   sink there resolves through a per-host route registry rather than
   through an address; what section 8 anticipated for sinks is that
   record's to answer, not this Note's.
+
+## Note (2026-09-22, sr-52v): accepted
+
+This record and its 2026-09-19 Amendment are **accepted**. Both status
+lines were flipped in place on the operator's word of 2026-09-22, after
+statifier_router 0.2.0 was published; nothing above this Note changed.
+Every claim either makes was re-verified at `0cea19c` on `main`, against
+the dependency versions `mix.lock` pins there (statifier 2.6.0,
+statifier_persistence 0.13.0, read at its `v0.13.0` tag).
+
+Three sentences above speak of a status and are met by this Note rather
+than edited:
+
+- The 2026-09-20 Note (sr-99d) opens "A Note, not an amendment: it decides
+  nothing, and this record stays at proposed with its Decision untouched."
+  Its first half still holds: that Note decided nothing, and the Decision
+  is untouched by this flip too. Its "stays at proposed" is what this Note
+  supersedes.
+- The same Note says [ADR-0006](0006-the-execution-target.md) opens the
+  third of section 8's future readers "at proposed". ADR-0006 is accepted
+  on `main` as of merge `0cea19c`. The sentence is left as written.
+- Section 8 reads "In this release the only resolver is delivery from a
+  binding", which was true of 0.1.0; the sr-99d Note already narrows it by
+  naming the execution-to-execution send as the second reader, and the
+  code has one (`StatifierRouter.Addresses.by_execution/2`).
+
+The status cell for this record in `docs/adr/README.md` is flipped by a
+later bead, after all seven records, so the index lags this file until
+then.
