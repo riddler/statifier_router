@@ -77,8 +77,10 @@ defmodule StatifierRouter.Route do
   send-processor shape (`Statifier.Send.Processor`'s `t:ctx/0`); it is
   the only part of the key that differs by host shape.
 
-  `ordinal` is `nil` only for a send of a type the session did not
-  register, which this handler never sees.
+  `ordinal` is `nil` in two cases: a send of a type the session did not
+  register, which this handler never sees, and
+  `StatifierRouter.Config`'s `:on_complete` hook, which is not a `<send>`
+  at all and has no ordinal to carry.
   """
   @type idempotency_key ::
           {scope :: String.t(), position :: position(), ordinal :: pos_integer() | nil}

@@ -389,6 +389,29 @@ defmodule StatifierRouter.SendHandler do
     :ok
   end
 
+  # The adapter path, opened for `StatifierRouter.Delivery`'s completion
+  # hook. It is the same three steps `hand_off/3` takes for a `<send>` -
+  # mark the route as running under the sending execution, resolve the name
+  # in the delivery's scope, hand the event and the key to the adapter -
+  # so a completion reaches an adapter exactly as a send does, and a route
+  # that tries to step the completing execution is refused by
+  # `StatifierRouter.Delivery.deliver/4`'s reentrancy arm rather than
+  # discovering a half-written position. `@doc false`: the hook is
+  # configured with `:on_complete` and this is the seam it is served
+  # through, not a door a host calls.
+  @doc false
+  @spec deliver_to_route(
+          Config.t(),
+          String.t(),
+          String.t(),
+          Statifier.Event.t(),
+          Route.idempotency_key()
+        ) :: :ok | {:error, reason()}
+  def deliver_to_route(%Config{} = config, name, execution_id, event, key)
+      when is_binary(name) and is_binary(execution_id) do
+    in_route(execution_id, fn -> route(config, name, event, key) end)
+  end
+
   # -------------------------------------------------------------------
 
   @spec mine?(Config.t(), Send.t() | SendDelayed.t()) :: boolean()

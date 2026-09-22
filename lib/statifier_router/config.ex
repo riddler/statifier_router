@@ -21,6 +21,7 @@ defmodule StatifierRouter.Config do
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
+  | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it | `nil` |
   | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
   | `:prefix` | the Postgres schema the tables live in, as a string | `nil` (the repo's default) |
@@ -51,6 +52,14 @@ defmodule StatifierRouter.Config do
   adapter and holds no type string. A configuration that gives both
   `:send_type` and a `:send_types` of its own is refused with
   `{:declared_send_types, send_type}` rather than one silently winning.
+
+  `:on_complete` names one route in that same registry, and a name absent
+  from `:route_adapters` is refused with `{:unregistered_on_complete,
+  name}` rather than missed on the one delivery that would have used it.
+  It is what `StatifierRouter.Delivery` hands an execution's donedata to
+  on the delivery that finishes the execution; the README's "A finished
+  execution reaches a sink" says what that delivery does and what it
+  cannot do.
 
   ## What the checks here do and do not catch
 
@@ -125,6 +134,7 @@ defmodule StatifierRouter.Config do
     :chart_resolver,
     :prefix,
     :send_type,
+    :on_complete,
     :timer_queue,
     bindings: [],
     persistence_options: [],
@@ -160,6 +170,7 @@ defmodule StatifierRouter.Config do
           route_adapters: %{optional(String.t()) => Route.t()},
           route_overrides: %{optional(String.t()) => %{optional(String.t()) => map()}},
           send_type: String.t() | nil,
+          on_complete: String.t() | nil,
           timer_queue: TimerQueue.t() | nil,
           table_prefix: String.t(),
           prefix: String.t() | nil
@@ -178,6 +189,7 @@ defmodule StatifierRouter.Config do
           | {:duplicate_binding_id, String.t()}
           | {:unregistered_route, String.t(), String.t()}
           | {:declared_send_types, String.t()}
+          | {:unregistered_on_complete, String.t()}
           | {:reserved_route, String.t()}
           | {:reserved_binding_id, String.t()}
 
@@ -185,7 +197,7 @@ defmodule StatifierRouter.Config do
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
   @persistence_option_keys [:routes, :invoke_types, :send_types]
-  @route_keys [:route_adapters, :route_overrides, :send_type, :timer_queue]
+  @route_keys [:route_adapters, :route_overrides, :send_type, :on_complete, :timer_queue]
   @known [
     :repo,
     :delivery,
@@ -214,6 +226,10 @@ defmodule StatifierRouter.Config do
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
   with `index` counted from zero, then a binding whose `id` is the
   reserved name, then the first duplicated binding `id`.
+
+  An `:on_complete` naming a route the host did not register is refused
+  with `{:unregistered_on_complete, name}`, after the registry itself is
+  resolved.
 
   ADR-0006, section 1 reserves one name for the execution target,
   `StatifierRouter.SendHandler.execution_target/0`. A `:route_adapters`
@@ -443,12 +459,14 @@ defmodule StatifierRouter.Config do
     with {:ok, adapters} <- route_adapters(opts),
          {:ok, overrides} <- route_overrides(opts, adapters),
          {:ok, send_type} <- send_type(opts),
+         {:ok, on_complete} <- on_complete(opts, adapters),
          {:ok, timer_queue} <- timer_queue(opts) do
       {:ok,
        [
          route_adapters: adapters,
          route_overrides: overrides,
          send_type: send_type,
+         on_complete: on_complete,
          timer_queue: timer_queue
        ]}
     end
@@ -514,6 +532,28 @@ defmodule StatifierRouter.Config do
       nil -> {:ok, nil}
       value when is_binary(value) and value != "" -> {:ok, value}
       value -> {:error, {:invalid_value, :send_type, value}}
+    end
+  end
+
+  # The completion hook's route. It is resolved against the registry here,
+  # at configuration time, because the delivery that would use it is the
+  # one that finishes an execution: a name checked only at run time would
+  # miss on the single delivery that had something to hand over, and there
+  # is no second chance at a completion. The reserved execution-target name
+  # can never be a registry entry (`route_adapters/1` refuses it), so it is
+  # refused here as an unregistered name.
+  defp on_complete(opts, adapters) do
+    case Keyword.get(opts, :on_complete) do
+      nil ->
+        {:ok, nil}
+
+      name when is_binary(name) and name != "" ->
+        if Map.has_key?(adapters, name),
+          do: {:ok, name},
+          else: {:error, {:unregistered_on_complete, name}}
+
+      value ->
+        {:error, {:invalid_value, :on_complete, value}}
     end
   end
 
