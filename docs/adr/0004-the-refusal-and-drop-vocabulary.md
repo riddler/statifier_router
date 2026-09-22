@@ -1,6 +1,6 @@
 # ADR-0004: The refusal and drop vocabulary: seven outcomes of one routing attempt, their spellings, where each is recorded, the ledger row, no_match left off the ledger, and what route/3 returns
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -289,3 +289,42 @@ click: the duplicate, the refusal and the drop never reached it.
   between two first events, the create modes and the dedupe table; and to
   the code half: the ledger's migration, the encoding of `reason`, and the
   telemetry event's name.
+
+## Note (2026-09-22, sr-nyl): accepted
+
+This record's status was flipped from proposed to accepted on the
+operator's word, after statifier_router 0.2.0 was published. The Note
+decides nothing and changes no decision above it.
+
+Every claim this record makes about the code half was verified against
+`main` at `251abb7` before the flip: the seven outcome tuples and the
+`reason` term (`StatifierRouter`'s `@type outcome` and
+`@type refusal_reason`); the fixed order match, key, duplicate, then the
+address and `create` (`StatifierRouter.route_binding/4` and
+`StatifierRouter.Delivery.claimed/4`); the drop that follows a
+`{:discarded, execution}` answer and the `terminal_seen_at` stamp
+(`StatifierRouter.Delivery.finished/6`); the ledger's eight columns and
+its per-binding index (`StatifierRouter.Migrations.V01.up/1` and
+`StatifierRouter.Schema.Ledger`); a no_match writing no row and reporting
+telemetry instead (`StatifierRouter.no_match/2`); and the shape `route/3`
+returns, including the first delivery error ending the attempt
+(`StatifierRouter.route/3`).
+
+Section 8 holds as written: nothing in the package names
+`dropped: unmatched_event`, and its sentence "a later record may add it"
+is the only sentence above that speaks of what this release does rather
+than of what the vocabulary is. It is met, not edited: the outcome is
+still deferred, and `sr-020` carries it.
+
+Section 4's reading of the ledger's `key`, `execution_id` and `reason`
+columns is the inbound-routing reading. ADR-0006, section 6 adds the
+`send_refused` outcome for a send this package refuses and gives a table
+of what each of its reasons leaves empty; ADR-0006's Consequences say
+that section 4 is where a reader learns the older reading. No column's
+shape changes and no row already written reads differently, so this
+record is accepted as it stands and ADR-0006 is the forward pointer a
+reader reaching this record first should follow for the outbound case.
+
+The status cell for this record in `docs/adr/README.md` still reads
+proposed; it is flipped for all seven records together in a later bead,
+so the index lags this file by design until then.
