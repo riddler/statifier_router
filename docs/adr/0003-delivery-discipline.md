@@ -417,9 +417,15 @@ release overtook.
 
 - **A front that does not acknowledge a message does not thereby get it
   back.** Section 1's closing sentence says a front "does not acknowledge
-  the message, and the source hands it over again", and the consequence
-  list's "a redelivery of the same message" reads the same way. That holds
-  only for a source that redelivers what it was not acknowledged for.
+  the message, and the source hands it over again", and four later
+  passages assume that handover rather than supposing it: section 2's
+  "The redelivery would then find the dedupe row"; its rollback
+  consequence, where "the redelivery steps the same event from the same
+  position"; the bullet after it, "A rollback after `create/4` rolls back
+  the execution. The redelivery creates again under a newly minted id";
+  and section 6's "its redelivery is attempted again rather than taken
+  for a duplicate". That holds only for a source that redelivers what it
+  was not acknowledged for.
   Broadway, the front this package ships, provides no retries of its own
   and acknowledges a failed message as failed immediately (Broadway's own
   documentation, "Acknowledgements and failures"), so redelivery is the
@@ -428,15 +434,18 @@ release overtook.
   `BroadwayKafka.Producer` always acknowledges a message even when it
   fails and advances the group's offset past it, leaving reprocessing to
   the host (BroadwayKafka's own documentation, "Handling failed
-  messages"). Read section 1's sentence, and every "the redelivery"
-  elsewhere in this record, as conditional on a source that redelivers.
-  Nothing else in the record changes: the dedupe horizon of section 6 and
-  the rollback behaviour of section 2 are the same whether or not a
-  message comes back, and a message that never comes back is one delivery
-  that did not happen, which this record already treats as a rolled-back
-  delivery that left nothing behind. `StatifierRouter.Broadway`'s module
-  documentation says the same, and neither this package nor its front
-  holds or retries a failed message.
+  messages"). Read section 1's sentence, and every later passage that
+  speaks of "the redelivery" or "its redelivery", as conditional on a
+  source that redelivers. The Consequences list's "after the horizon, a
+  redelivery of the same message is handled again" needs no such reading:
+  it is already conditional, saying what happens if a redelivery arrives
+  rather than that one does. Nothing else in the record changes: the
+  dedupe horizon of section 6 and the rollback behaviour of section 2 are
+  the same whether or not a message comes back, and a message that never
+  comes back is one delivery that did not happen, which this record
+  already treats as a rolled-back delivery that left nothing behind.
+  `StatifierRouter.Broadway`'s module documentation says the same, and
+  neither this package nor its front holds or retries a failed message.
 - **Section 6's last bullet is half stale: the webhook helper now ships.**
   That bullet says "This package ships no source adapter and no webhook
   helper". The webhook half stopped being true when
