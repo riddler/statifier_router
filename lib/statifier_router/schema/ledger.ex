@@ -6,9 +6,10 @@ defmodule StatifierRouter.Schema.Ledger do
   `key` is empty for key_refused, `execution_id` is empty where the
   outcome names no execution, and `reason` is empty for every outcome but
   two. For key_refused it holds the reason term as `inspect/1` renders it
-  (see `StatifierRouter`); for send_refused, the outcome ADR-0006 adds for
-  an execution-to-execution send, it holds that record's own word for the
-  refusal (see `StatifierRouter.SendHandler`). An empty `key` or an empty
+  (see `StatifierRouter`); for send_refused, the outcome ADR-0006 adds
+  and its 2026-09-21 Note widens to any send this package refuses, it
+  holds that record's own word for the refusal (see
+  `StatifierRouter.SendHandler`). An empty `key` or an empty
   `execution_id` therefore no longer names the outcome on its own: the
   `outcome` column is read first, and ADR-0006, section 6 says what each
   refusal reason leaves empty. See `StatifierRouter.Schema` for how a row

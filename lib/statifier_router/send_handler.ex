@@ -146,14 +146,34 @@ defmodule StatifierRouter.SendHandler do
   chart hears that its send did not go; the step it just took stands.
 
   ADR-0005 section 7 also has the handler record that refusal on the
-  routing ledger, and this module does not write that row yet. The
-  ledger's `binding_id` and `message_id` are both `NOT NULL`
-  (`StatifierRouter.Migrations.V01`) and an outbound route refusal has
-  neither a binding nor an inbound message, and ADR-0004 section 4 fixes
-  the `outcome` column to that record's inbound vocabulary, which has no
-  word for a send refusal. Minting one is record surface. `refusal/2`
-  below is where that write goes when the values are ruled; the reported
-  miss and the committed step are built and pinned today.
+  routing ledger, and it writes one. What the row's columns hold was
+  ruled rather than minted here, and the ruling extends ADR-0006,
+  section 6's send convention rather than opening a second one:
+  `binding_id` is the reserved name `execution`, which is what tells an
+  outbound send's row from an inbound delivery's; `message_id` is
+  ADR-0005, section 4's composed key, written out as every other row on
+  this path writes it; `outcome` is `send_refused`; and `reason` is one
+  added word, `route`, naming the target that resolved to no registered
+  route. `key` and `execution_id` stay empty, as they do for every
+  refusal discovered before a target is resolved. `scope` is the host's
+  partition, read from the sending execution's own address row as
+  ADR-0006, section 1 reads it, so a sender with no address row is
+  reported and not recorded, the same gap section 6 names for
+  `unaddressed_sender` and for the same reason: the ledger's `scope` is
+  `NOT NULL`. The send-processor shape is that case as well, since its
+  scope half is a session id no address row answers to.
+
+  The row records that the sender was told and does not stand in for
+  telling it: the return is `{:error, {:unregistered_route, name}}` on
+  both shapes, unchanged, and the sending step still commits.
+
+  The write is bracketed in a SQL savepoint of its own, for the reason
+  `StatifierRouter.Delivery.deliver_event/4` documents at length: this
+  handler runs at the executor seam inside the sending execution's own
+  transaction, and a failed insert there leaves that transaction aborted,
+  which would take the sender's step down with it. A ledger write that
+  fails rolls back to its own savepoint and nothing else, and the miss is
+  reported either way.
   """
 
   @behaviour Statifier.Send.Processor
@@ -175,6 +195,11 @@ defmodule StatifierRouter.SendHandler do
 
   @execution_target "execution"
   @envelope_params ["document", "key", "create"]
+
+  # RF062-R1: the one reason word added under `send_refused` for a target
+  # that names no registered route (ADR-0005, section 7), in the shape
+  # ADR-0006, section 6's four reasons already have.
+  @unregistered_route_reason "route"
 
   # ADR-0006, section 2: no binding supplies a horizon here, so the claim
   # takes ADR-0001, section 1's default, the same one
@@ -361,7 +386,7 @@ defmodule StatifierRouter.SendHandler do
   defp route(config, name, event, key) do
     case Config.route(config, override_scope(), name) do
       {:ok, {module, route_config}} -> module.deliver(route_config, event, key)
-      :error -> refusal(name, key)
+      :error -> refusal(config, name, key)
     end
   end
 
@@ -544,7 +569,7 @@ defmodule StatifierRouter.SendHandler do
 
     case Config.route(config, override_scope(), send.target) do
       {:ok, {_module, route_config}} -> schedule(config, send, scope, route_config, key)
-      :error -> refusal(send.target, key)
+      :error -> refusal(config, send.target, key)
     end
   end
 
@@ -579,13 +604,77 @@ defmodule StatifierRouter.SendHandler do
     end
   end
 
-  # ADR-0005 section 7's run-time miss. The reported miss and the step
-  # that still commits are here; the routing-ledger row is not, and the
-  # moduledoc's "The unregistered route" section says which column values
-  # are unruled and why minting them is not this module's to do. The row
-  # is written here when they are ruled.
-  @spec refusal(String.t() | nil, Route.idempotency_key()) :: {:error, reason()}
-  defp refusal(name, _key), do: {:error, {:unregistered_route, name}}
+  # ADR-0005 section 7's run-time miss, both halves: the ledger row that
+  # records the refusal and the error the sender hears. Recording is
+  # attempted first and never governs the return, because section 7 owes
+  # the sender the report whatever the ledger does. The moduledoc's "The
+  # unregistered route" section says what each column holds and who ruled
+  # it.
+  @spec refusal(Config.t(), String.t() | nil, Route.idempotency_key()) :: {:error, reason()}
+  defp refusal(config, name, key) do
+    record_refusal(config, key, DateTime.utc_now())
+    {:error, {:unregistered_route, name}}
+  end
+
+  # The ledger's `scope` is the host's partition (ADR-0004, section 4),
+  # never an execution id, so it is read from the sender's own address row
+  # exactly as ADR-0006, section 1 reads it. A sender with no such row has
+  # no scope, and the ledger's `scope` is `NOT NULL`, so its refusal is
+  # reported and not recorded - the same gap ADR-0006, section 6 names for
+  # `unaddressed_sender`, for the same reason. On the send-processor shape
+  # the key's scope half is a session id and no address row answers to it,
+  # which is the same case.
+  @spec record_refusal(Config.t(), Route.idempotency_key(), DateTime.t()) :: :ok
+  defp record_refusal(config, {sender, _position, _ordinal} = key, now) do
+    case Addresses.by_execution(config, sender) do
+      %Address{scope: scope} -> insert_refusal(config, scope, message_id(key), now)
+      nil -> :ok
+    end
+  end
+
+  @spec insert_refusal(Config.t(), String.t(), String.t(), DateTime.t()) :: :ok
+  defp insert_refusal(config, scope, message_id, now) do
+    row = %Ledger{
+      binding_id: @execution_target,
+      message_id: message_id,
+      scope: scope,
+      outcome: "send_refused",
+      key: nil,
+      execution_id: nil,
+      reason: @unregistered_route_reason,
+      inserted_at: now
+    }
+
+    # The transaction is what gives the savepoint something to live in
+    # when this handler is called outside one, as it is on the
+    # send-processor shape; at the executor seam it nests and the
+    # savepoint is what settles this insert on its own.
+    config.repo.transaction(fn -> insert_guarded(config, row) end)
+    :ok
+  end
+
+  # A failed ledger write must not take the sender's step down with it,
+  # and inside the sender's transaction any failed statement would: the
+  # transaction is left aborted whether or not the caller handles the
+  # error. So the insert gets its own savepoint and its failure is
+  # rolled back to it. Reporting the miss is the obligation ADR-0005
+  # section 7 puts first, and it is met either way. A connection that is
+  # gone raises out of the rollback too, and that raise stands.
+  @spec insert_guarded(Config.t(), Ledger.t()) :: :ok | :error
+  defp insert_guarded(config, row) do
+    savepoint = "sr_route_refusal_#{System.unique_integer([:positive])}"
+    config.repo.query!("SAVEPOINT " <> savepoint)
+
+    try do
+      config.repo.insert!(Config.put_meta(config, row))
+      config.repo.query!("RELEASE SAVEPOINT " <> savepoint)
+      :ok
+    rescue
+      _insert_failed ->
+        config.repo.query!("ROLLBACK TO SAVEPOINT " <> savepoint)
+        :error
+    end
+  end
 
   @spec key(Send.t() | SendDelayed.t(), String.t()) :: Route.idempotency_key()
   defp key(effect, scope) do
