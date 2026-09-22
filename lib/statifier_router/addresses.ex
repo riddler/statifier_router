@@ -1,8 +1,9 @@
 defmodule StatifierRouter.Addresses do
   @moduledoc """
-  The address reaper: `reap/2`, the plain function that removes address
+  The address table's own two functions: `reap/2`, which removes address
   rows whose execution finished longer ago than their horizon (ADR-0002,
-  sections 5 and 6).
+  sections 5 and 6), and `by_execution/2`, which reads the row naming one
+  execution.
 
   ## The two handles it works on
 
@@ -97,6 +98,33 @@ defmodule StatifierRouter.Addresses do
           deleted: non_neg_integer(),
           next: pos_integer() | nil
         }
+
+  @doc """
+  The address row naming `execution_id`, or `nil` when no row names it.
+
+  ADR-0002, section 1's unique index is on `(scope, document, key)`, and
+  the `execution_id` index `StatifierRouter.Migrations.V01.up/1` adds is
+  not unique; what keeps the count at one row per execution is that each
+  create mints a fresh id and writes at most one row for it (ADR-0006,
+  section 1). This function reads the first row in id order rather than
+  asserting that invariant, so a second row cannot turn a read into a
+  raise.
+
+  An execution created under `:always_new` has no row at all (ADR-0002,
+  section 7), and so has neither a scope nor a key of its own: that is the
+  `nil` an execution-to-execution send is refused for as
+  `unaddressed_sender` (ADR-0006, section 6).
+  """
+  @spec by_execution(Config.t(), String.t()) :: Address.t() | nil
+  def by_execution(%Config{} = config, execution_id) when is_binary(execution_id) do
+    config.repo.one(
+      from(a in Config.queryable(config, Address),
+        where: a.execution_id == ^execution_id,
+        order_by: a.id,
+        limit: 1
+      )
+    )
+  end
 
   @doc """
   Stamps and deletes the address rows under `config` as the module
