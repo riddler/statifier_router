@@ -354,8 +354,8 @@ Every claim either makes was re-verified at `0cea19c` on `main`, against
 the dependency versions `mix.lock` pins there (statifier 2.6.0,
 statifier_persistence 0.13.0, read at its `v0.13.0` tag).
 
-Three sentences above speak of a status and are met by this Note rather
-than edited:
+Four sentences above are met by this Note rather than edited - the first
+two speak of a status, the last two of what this release holds:
 
 - The 2026-09-20 Note (sr-99d) opens "A Note, not an amendment: it decides
   nothing, and this record stays at proposed with its Decision untouched."
@@ -369,6 +369,17 @@ than edited:
   binding", which was true of 0.1.0; the sr-99d Note already narrows it by
   naming the execution-to-execution send as the second reader, and the
   code has one (`StatifierRouter.Addresses.by_execution/2`).
+- Section 8 also says of sinks, timers and execution-to-execution sends
+  that "none of them is in this release". That is no longer true of the
+  execution-to-execution send:
+  [ADR-0006](0006-the-execution-target.md), accepted on `main` as of merge
+  `0cea19c`, decides it, and `StatifierRouter.SendHandler` implements it
+  over the reserved execution target, reading the sender's address row
+  through `StatifierRouter.Addresses.by_execution/2`. Sinks and timers
+  remain future readers of this table: a sink resolves through the route
+  registry ADR-0005 decides, and nothing under `lib/` reads an address for
+  a timer. The clause is left as written, under the rule that a later
+  record on `main` naming the change carries it.
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
 later bead, after all seven records, so the index lags this file until
