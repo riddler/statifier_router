@@ -408,3 +408,46 @@ stands as written. It records one new option and corrects one sentence.
   it normalizes a module or an arity-2 fun itself, so this package
   checks the option's shape and leaves the dispatch rule to its owner.
   `StatifierRouter.Config`'s documentation carries the same paragraph.
+
+## Note (2026-09-21, sr-bv1): redelivery is the producer's contract, and this package now ships a webhook helper
+
+A Note, not an amendment: it decides nothing above. It corrects one
+sentence that assumes a producer, and one half of one bullet that a later
+release overtook.
+
+- **A front that does not acknowledge a message does not thereby get it
+  back.** Section 1's closing sentence says a front "does not acknowledge
+  the message, and the source hands it over again", and the consequence
+  list's "a redelivery of the same message" reads the same way. That holds
+  only for a source that redelivers what it was not acknowledged for.
+  Broadway, the front this package ships, provides no retries of its own
+  and acknowledges a failed message as failed immediately (Broadway's own
+  documentation, "Acknowledgements and failures"), so redelivery is the
+  **producer's** contract: a queue-style producer that leaves an
+  unacknowledged message invisible for a timeout hands it over again, and
+  `BroadwayKafka.Producer` always acknowledges a message even when it
+  fails and advances the group's offset past it, leaving reprocessing to
+  the host (BroadwayKafka's own documentation, "Handling failed
+  messages"). Read section 1's sentence, and every "the redelivery"
+  elsewhere in this record, as conditional on a source that redelivers.
+  Nothing else in the record changes: the dedupe horizon of section 6 and
+  the rollback behaviour of section 2 are the same whether or not a
+  message comes back, and a message that never comes back is one delivery
+  that did not happen, which this record already treats as a rolled-back
+  delivery that left nothing behind. `StatifierRouter.Broadway`'s module
+  documentation says the same, and neither this package nor its front
+  holds or retries a failed message.
+- **Section 6's last bullet is half stale: the webhook helper now ships.**
+  That bullet says "This package ships no source adapter and no webhook
+  helper". The webhook half stopped being true when
+  `StatifierRouter.Webhook.handle/3` landed: it takes a request the host
+  has already verified, chooses the message id by the rule the two bullets
+  above it state, and hands the event to `StatifierRouter.route/3`
+  (`lib/statifier_router/webhook.ex`, read at 4fb206b). **The
+  source-adapter half still stands**: this package ships no source
+  adapter, and the structural message id of a queue source is still
+  derived by whoever builds it. The two message-id rules themselves are
+  unchanged by the helper - it implements the webhook one rather than
+  replacing it - and a host's own webhook controller, which section 5 and
+  the outcome-vocabulary record both mention, stays the host's: the helper
+  is a Plug-shaped function a controller calls, not a controller.

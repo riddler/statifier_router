@@ -38,10 +38,28 @@ defmodule StatifierRouter.Broadway do
   `StatifierRouter.route/3`, which returns once every delivery's
   transaction has ended. `{:ok, outcomes}` returns the message unchanged,
   so Broadway acknowledges it after the transactions committed.
-  `{:error, reason}` returns it failed with `reason`, so it is not
-  acknowledged and the source hands it over again. A raise inside
+  `{:error, reason}` returns it failed with `reason`. A raise inside
   `route/3` is not rescued here either: Broadway fails the message it
-  raised on, and it is not acknowledged (ADR-0003, section 1).
+  raised on (ADR-0003, section 1).
+
+  ## Redelivery is the producer's contract
+
+  A failed message is not redelivered by this pipeline and not by
+  Broadway, which "does not provide any sort of retries out of the box"
+  and acknowledges a failed message as failed immediately. Whether the
+  event comes back is the producer's contract:
+
+  - a queue-style producer that leaves an unacknowledged message
+    invisible for a timeout and then hands it over again, Amazon SQS the
+    example Broadway itself names, redelivers it;
+  - `BroadwayKafka.Producer`, the producer this module's example uses,
+    "will always ack the messages even when they fail" and advances the
+    group's offset past the failed one, so nothing hands it over again
+    and reprocessing is, in its own words, a strategy the host rolls.
+
+  A host that needs a failed delivery retried therefore chooses a
+  producer that gives it back, or arranges the replay itself. Nothing in
+  this package retries, and nothing in it holds a failed message.
 
   ## Partitioning
 
@@ -78,6 +96,7 @@ defmodule StatifierRouter.Broadway do
       [key | _] -> raise ArgumentError, "unknown option #{inspect(key)}"
     end
 
+    name = fetch!(opts, :name, &(is_atom(&1) and not is_nil(&1)), "an atom")
     router = fetch!(opts, :router, &match?(%Config{}, &1), "a %StatifierRouter.Config{}")
     producer = fetch!(opts, :producer, &producer?/1, "{module, opts}: a Broadway producer")
 
@@ -87,7 +106,7 @@ defmodule StatifierRouter.Broadway do
       |> fetch!(:normalize, &is_function(&1, 1), "a fun of one argument")
 
     Broadway.start_link(__MODULE__,
-      name: Keyword.get(opts, :name),
+      name: name,
       producer: [module: producer],
       processors: Keyword.get(opts, :processors, default: []),
       partition_by: &partition(&1, router, normalize),
