@@ -32,6 +32,8 @@ defmodule StatifierRouter.MigrationsTest do
     Sandbox.mode(TestRepo, :auto)
     on_exit(fn -> Sandbox.mode(TestRepo, :manual) end)
 
+    clear_leftovers()
+
     :ok = migrate(:up)
     on_exit(fn -> :ok = migrate(:down) end)
 
@@ -44,6 +46,26 @@ defmodule StatifierRouter.MigrationsTest do
       )
 
     {:ok, config: config}
+  end
+
+  # A run that goes red between the DDL and `on_exit` strands the kx tables:
+  # the down that would have removed them either never runs or removes only
+  # part of the set. `migrate/1` cannot recover from that on its own, because
+  # it folds `:already_up` into `:ok` - the version row outlives the tables,
+  # so the next `migrate(:up)` reports success and creates nothing, and every
+  # test then fails on a missing relation. Clearing both halves is what makes
+  # the run after a red one start clean: the three tables by their
+  # schema-qualified names, and the `schema_migrations` row `migrate/1` reads.
+  # The migrator is called with no `:prefix`, so that row is in the repo's
+  # default schema rather than under @schema.
+  defp clear_leftovers do
+    for table <- @tables do
+      SQL.query!(TestRepo, ~s(DROP TABLE IF EXISTS "#{@schema}"."#{table}"), [])
+    end
+
+    SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = $1", [@version])
+
+    :ok
   end
 
   defp migrate(direction) do
@@ -66,7 +88,11 @@ defmodule StatifierRouter.MigrationsTest do
     List.flatten(rows)
   end
 
-  defp unique_index_columns(table) do
+  # Every index on the table, primary key included, so the assertion below is
+  # a complete snapshot rather than a subset: an index V01 stops creating and
+  # an index a later version adds both turn it red. Filtering on
+  # `indisunique` here is what hid V01's three plain indexes from the suite.
+  defp index_columns(table) do
     %{rows: rows} =
       SQL.query!(
         TestRepo,
@@ -78,7 +104,7 @@ defmodule StatifierRouter.MigrationsTest do
         JOIN pg_namespace n ON n.oid = t.relnamespace
         CROSS JOIN LATERAL unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-        WHERE n.nspname = $1 AND t.relname = $2 AND x.indisunique AND NOT x.indisprimary
+        WHERE n.nspname = $1 AND t.relname = $2
         GROUP BY i.relname
         """,
         [@schema, table]
@@ -96,18 +122,29 @@ defmodule StatifierRouter.MigrationsTest do
       assert tables_present() == @tables
     end
 
-    # sabotage: V01's addresses unique index on (scope, document) only ->
-    # red on the column list; restored, green.
-    test "names the two unique indexes and their columns" do
-      assert unique_index_columns("kx_router_addresses") == %{
-               "kx_router_addresses_scope_document_key_index" => ["scope", "document", "key"]
+    # sabotage: dropped V01's `create(index(addresses, [:execution_id], ...))`
+    # -> red on the addresses index list, which the old indisunique filter had
+    # hidden; restored, green.
+    test "names every index on the three tables and its columns" do
+      assert index_columns("kx_router_addresses") == %{
+               "kx_router_addresses_pkey" => ["id"],
+               "kx_router_addresses_scope_document_key_index" => ["scope", "document", "key"],
+               "kx_router_addresses_execution_id_index" => ["execution_id"]
              }
 
-      assert unique_index_columns("kx_router_dedupe") == %{
-               "kx_router_dedupe_binding_id_message_id_index" => ["binding_id", "message_id"]
+      assert index_columns("kx_router_dedupe") == %{
+               "kx_router_dedupe_pkey" => ["id"],
+               "kx_router_dedupe_binding_id_message_id_index" => ["binding_id", "message_id"],
+               "kx_router_dedupe_expires_at_index" => ["expires_at"]
              }
 
-      assert unique_index_columns("kx_router_routing_ledger") == %{}
+      assert index_columns("kx_router_routing_ledger") == %{
+               "kx_router_routing_ledger_pkey" => ["id"],
+               "kx_router_routing_ledger_binding_id_inserted_at_index" => [
+                 "binding_id",
+                 "inserted_at"
+               ]
+             }
     end
 
     # sabotage: dropped V01's routing_ledger scope column -> the insert
@@ -198,8 +235,9 @@ defmodule StatifierRouter.MigrationsTest do
       assert error.constraint == "kx_router_dedupe_binding_id_message_id_index"
     end
 
-    # sabotage: V01's down/1 dropped only the ledger table -> the second up
-    # raised (relation already exists); restored, green.
+    # sabotage: V01's down/1 dropped only the ledger table -> red at
+    # `assert tables_present() == []`, which still saw the other two;
+    # restored, green.
     test "runs down and up again cleanly" do
       :ok = migrate(:down)
       assert tables_present() == []
