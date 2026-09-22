@@ -329,6 +329,42 @@ config :my_app, Oban,
   ]
 ```
 
+## Versioning
+
+statifier_persistence retires a chart it can prove nothing still needs, and
+`StatifierPersistence.Executions.retire_chart/4` refuses the retirement while
+anything pins the chart's content hash. It counts the pins in its own tables
+itself and asks the host's pin sources for the ones it cannot see. An address
+row is one it cannot see: the row lives in this package's table, and it is why
+a later event still reaches the execution it names, so a chart retired under
+it would leave that event routed to an execution whose chart is gone.
+
+`StatifierRouter.PinSource` is this package's answer. It writes the module a
+host names at the retire call:
+
+```elixir
+defmodule MyApp.RouterPins do
+  # MyApp.Router.config/0 is the host's own: it returns the
+  # %StatifierRouter.Config{} the host routes events with.
+  use StatifierRouter.PinSource, config: MyApp.Router.config()
+end
+
+StatifierPersistence.Executions.retire_chart(store, content_hash, [MyApp.RouterPins],
+  retired_by: "myapp:publisher"
+)
+```
+
+The module answers `%{addresses: n}`: the number of address rows naming one of
+the active executions on the hash, which the retire call hands every source as
+`:execution_ids`. An address row carries an `execution_id` and no content hash,
+so those ids are the only handle this table can answer on, and the hash itself
+is not read.
+
+The pin releases when the address does. Nothing in the pin source retains a
+row or deletes one: an execution finishes, `StatifierRouter.Addresses.reap/2`
+stamps its row terminal and deletes it once the horizon has elapsed, and the
+next retire call counts one address fewer.
+
 ## Status
 
 Every piece named under "What this package owns" is built in this release.
