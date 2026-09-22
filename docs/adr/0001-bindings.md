@@ -1,6 +1,6 @@
 # ADR-0001: Bindings: the schema, match and key as predicator programs over the normalized event, a three-valued match, the key refusal, one event to N bindings to N deliveries, data as a projection, and the reserved keys
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -257,3 +257,33 @@ here so the next reader does not have to derive them.
   Section 5's consequence therefore covers this case too: the chart
   condition reading it sees predicator's `:undefined`, and no refusal
   is recorded.
+
+## Note (2026-09-22, sr-6cs): accepted
+
+A Note, not an amendment: it decides nothing and changes no decision above
+it. The status on line 3 was flipped from `proposed` to `accepted` on the
+operator's word of 2026-09-22, after statifier_router 0.2.0 was published.
+
+Every claim this record makes about the package was re-verified at
+`0cea19c` before the flip: the binding schema, its defaults and the order
+of the construction refusals against `StatifierRouter.Binding`, `new/1`;
+the three-valued match against `StatifierRouter.Binding`, `match/2`; the
+key refusal against `StatifierRouter.Binding`, `key/2`; the projection and
+the dropped path against `StatifierRouter.Binding`, `project/2`; the
+duplicate-id refusal against `StatifierRouter.Config`, its
+`{:duplicate_binding_id, id}` refusal; the fan-out over enabled bindings of
+the event's source against `StatifierRouter`, `route/3`; and the absence of
+any binding storage against the package's schemas, which hold addresses,
+dedupe rows, the ledger and subscriptions and no binding. The two external
+facts in Context were re-read at the versions this release pins:
+`Predicator.compile/1` and `Predicator.evaluate/3` at predicator 9.4.1, and
+the caller-supplied execution id at `StatifierPersistence.Executions`,
+`create/4`, at statifier_persistence 0.13.0. Predicator's own guide files
+are not shipped in its hex package, so the three-valued rules cited from
+them were re-verified against this package's own behaviour instead.
+
+No sentence in the body speaks of this record's own status, so nothing
+above this Note was edited.
+
+The status cell for this record in `docs/adr/README.md` is flipped by a
+separate bead after all seven records; the index lags by design until then.
