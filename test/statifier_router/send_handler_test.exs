@@ -15,6 +15,8 @@ defmodule StatifierRouter.SendHandlerTest do
   alias StatifierRouter.RecordingRoute
   alias StatifierRouter.RecordingTimerQueue
   alias StatifierRouter.Resolver.Static
+  alias StatifierRouter.SavepointFailingRepo
+  alias StatifierRouter.Schema.Address
   alias StatifierRouter.Schema.Ledger
   alias StatifierRouter.SendHandler
   alias StatifierRouter.TestPersistence
@@ -331,6 +333,42 @@ defmodule StatifierRouter.SendHandlerTest do
              ) == {:error, {:unregistered_route, "audit_log"}}
 
       assert DeliveryFixtures.ledger(config) == []
+    end
+
+    # The third exit of the refusal's savepoint bracket, and the one that
+    # can invert it: a savepoint statement that raises AFTER the insert
+    # has already landed. SavepointFailingRepo raises on the release and
+    # on the rollback, leaving the insert itself untouched.
+    #
+    # sabotage: RELEASE SAVEPOINT moved back inside insert_guarded/2's
+    # `try` (the shape before this cure) -> the rescue fired on the
+    # release and issued ROLLBACK TO SAVEPOINT, whose own raise escaped
+    # handle_effect/3 and took the sender's step with it, red; restored,
+    # green.
+    test "a savepoint statement that raises after the insert does not reach the sender" do
+      :ok = Sandbox.checkout(TestRepo)
+      config = handler_config()
+
+      TestRepo.insert!(
+        Config.put_meta(config, %Address{
+          scope: @scope,
+          document: "sink_join",
+          key: "ad_events/3/2201",
+          execution_id: "ex_2",
+          inserted_at: @now
+        })
+      )
+
+      assert SendHandler.handle_effect(
+               %{config | repo: SavepointFailingRepo},
+               {:send, send_effect(target: "audit_log")},
+               seam("ex_2")
+             ) == {:error, {:unregistered_route, "audit_log"}}
+
+      # The row the insert wrote is still there: a release that cannot
+      # run does not roll back what already landed.
+      assert [%Ledger{outcome: "send_refused", reason: "route", scope: @scope}] =
+               DeliveryFixtures.ledger(config)
     end
 
     # sabotage: in_route/2 deleted the key before calling the fun ->
