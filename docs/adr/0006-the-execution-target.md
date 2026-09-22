@@ -1,6 +1,6 @@
 # ADR-0006: The execution target: a send whose params name a document and a key resolves through the address table, the scope is the sender's and never a param, delivery is the same one transaction a binding's delivery uses, the miss follows a `create` param that offers two of the three modes and is reported to the sender as well as recorded, the event is the engine's builder's, and a send to the sender's own address is refused
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -500,3 +500,54 @@ handler return - an unregistered route still answers
 `{:error, {:unregistered_route, name}}` - and leaves this record at
 proposed. The code half is `StatifierRouter.SendHandler`, whose
 documentation carries the same reading where an implementer will find it.
+
+## Note (2026-09-22, sr-9gp): accepted
+
+The status on line 3 reads `accepted`. The flip was made on the
+operator's word of 2026-09-22, taken after statifier_router 0.2.0 was
+published, and nothing above this Note changed but that one word.
+
+**Where the claims were verified.** Every claim this record makes about
+`lib/` was re-read by anchor at
+`251abb7f8b71b673e0f59b0e2eb00dac08606a57`, the 0.2.0 release commit
+tagged `v0.2.0`: the `:always_new` clause of `StatifierRouter.Delivery`'s
+`by_mode`, which mints an id and passes no row; the `scope`,
+`binding_id` and `message_id` columns declared `null: false` and the
+non-unique `execution_id` index, all created by
+`StatifierRouter.Migrations.V01.up/1`, whose own `@moduledoc` gives that
+index the reason section 1 quotes; `StatifierRouter.Addresses.by_execution/2`;
+the two configuration-time refusals `StatifierRouter.Config.new/1`
+answers with, `{:reserved_route, name}` and `{:reserved_binding_id,
+name}`, both taking the reserved name from
+`StatifierRouter.SendHandler.execution_target/0`; the three envelope
+params and the five refusal reasons carried by
+`StatifierRouter.SendHandler`; and the unregistered-route return quoted
+in the sr-p6u Note above, `{:error, {:unregistered_route, name}}`. The
+dependency sentence above holds unchanged: `mix.exs` carries `~> 2.6`
+and `~> 0.13`, and `mix.lock` resolves statifier 2.6.0 and
+statifier_persistence 0.13.0.
+
+**Two sentences are older than the tree, and this Note meets them
+rather than editing them.** The Context's closing sentence says that no
+module in this package implements the engine's send-processor
+behaviour, and section 2 says in bold that the handler "is not in
+`lib/` yet". The code half has since landed as
+`StatifierRouter.SendHandler`, which the sr-p6u Note above already
+names as this record's code half and which declares
+`@behaviour Statifier.Send.Processor`. Both sentences are read as
+describing the tree the record was drafted against, which the paragraph
+they sit beside says plainly, and neither is reworded here.
+
+**Two sentences speak of this record's own status, and both are met by
+this Note rather than edited.** Section 3 argues that "a record at
+proposed does not silently override an accepted one ... so this record
+conforms" to st-ADR-0069, decision 5. That argument is unchanged by the
+flip: the record conformed while it was proposed and conforms now, and
+the question it set aside is still open for the engine, exactly as the
+last consequence says. The sr-p6u Note above closes by saying it
+"leaves this record at proposed"; that was true of that Note, which
+decided nothing about the status, and this Note is what moves it.
+
+The status column for this record in `docs/adr/README.md` still reads
+`proposed`. That index is flipped once for all seven records by a
+separate bead, so it lags this file by design until then.
