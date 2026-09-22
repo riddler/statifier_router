@@ -62,8 +62,8 @@ defmodule StatifierRouter.FinalStateTest do
   </scxml>
   """
 
-  # A final with nothing in it: the hook still fires, and the donedata it
-  # hands over is `nil`.
+  # A final with nothing in it: the hook still fires, and what it hands
+  # over is statifier's no-value marker, `:undefined`, not `nil`.
   @bare """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
     <state id="waiting">
@@ -73,7 +73,25 @@ defmodule StatifierRouter.FinalStateTest do
   </scxml>
   """
 
-  @documents %{"sinking_join" => @sinking, "plain_join" => @plain, "bare_join" => @bare}
+  # A chart whose initial configuration is already a <final>: the execution
+  # is terminal on the answer to `Executions.create/4` and never takes a
+  # step, so that create answer is the only place its donedata ever exists.
+  @at_init """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="joined">
+    <final id="joined">
+      <donedata>
+        <param name="via" expr="'at_init'"/>
+      </donedata>
+    </final>
+  </scxml>
+  """
+
+  @documents %{
+    "sinking_join" => @sinking,
+    "plain_join" => @plain,
+    "bare_join" => @bare,
+    "at_init_join" => @at_init
+  }
 
   setup do
     :ok = Sandbox.checkout(TestRepo)
@@ -200,6 +218,35 @@ defmodule StatifierRouter.FinalStateTest do
       # there is no `<donedata>`, and the hook carries what the step
       # answered rather than normalizing it.
       assert event.data == :undefined
+    end
+
+    # sabotage: the `:ok <- complete(config, execution, state)` clause was
+    # removed from create/6 outright, leaving the create door with no hook
+    # at all -> this test alone went red, on the assert_received below, and
+    # the other eleven in this file stayed green; restored, green. That is
+    # the mutation this test exists for: before it the create door's arm
+    # had no coverage, and the whole suite passed without it.
+    test "fires on the create answer for a chart already final at initialization" do
+      config = config("at_init_join", on_complete: @route)
+
+      # `create/4` answers terminal and the delivery never reaches `step/5`,
+      # so this event is the created execution's first and last.
+      assert {:dropped, "impressions_to_join", :finished} = routed(config, impression())
+
+      assert_received {:routed, _route_config, event, key}
+      assert event.name == "done.execution"
+      assert event.data == %{"via" => "at_init"}
+
+      assert {execution_id, position, nil} = key
+      assert event.origin == execution_id
+      assert {:ok, %{status: :completed}} = Storage.fetch_execution(config.store, execution_id)
+
+      assert %{send_id: nil, c_index: nil, owner: nil} = position
+      assert is_integer(position.macrostep)
+      assert is_integer(position.microstep)
+      assert is_integer(position.round)
+
+      refute_received {:routed, _route_config, _event, _key}
     end
 
     test "fires nothing when no route is configured" do
