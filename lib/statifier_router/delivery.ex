@@ -96,6 +96,27 @@ defmodule StatifierRouter.Delivery do
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
 
+  ## The completion hook
+
+  `StatifierRouter.Config`'s `:on_complete` names a registered route an
+  execution's donedata is handed to on the delivery that finishes it. It
+  fires from the call that produced the termination - the `create/4` or
+  the `step/5` whose answer carries a terminal execution - and from no
+  other, because that answer is the only place the donedata exists:
+  `StatifierPersistence.Execution.from_record/1`'s own documentation says
+  a stored record carries none (its ADR-0008 decision 3), so it sets the
+  field to `nil` on every struct built from a row. A delivery to an
+  execution that was already terminal answers
+  `{:dropped, binding_id, :finished}` and never reaches the hook.
+
+  The route is handed a `done.execution` event whose `data` is the
+  donedata verbatim - `:undefined`, statifier's no-value marker, for a
+  `<final>` that carries none - and whose `origin` is the execution id, under an idempotency key of that execution
+  id, the counters the answering state reports, and no ordinal. It runs
+  inside this delivery's transaction like any other route, and an
+  `{:error, reason}` from it settles the delivery as
+  `{:error, {:on_complete, route_name, reason}}`.
+
   ## What a route may not do while a delivery runs
 
   A route called at the executor seam runs inside this transaction, under
@@ -137,6 +158,7 @@ defmodule StatifierRouter.Delivery do
 
   alias Statifier.Event
   alias Statifier.Machine
+  alias Statifier.MachineState
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
@@ -148,6 +170,11 @@ defmodule StatifierRouter.Delivery do
   alias StatifierRouter.SendHandler
 
   @terminal [:completed, :failed, :cancelled]
+
+  # The name of the event `:on_complete` hands a route. A completion is not
+  # a `<send>`, so no chart named it; it is written here once and the README
+  # documents it.
+  @done_event "done.execution"
 
   @typedoc """
   What one delivery settles, past the event itself: the name its ledger row
@@ -370,8 +397,9 @@ defmodule StatifierRouter.Delivery do
   # :always_new, which writes none (ADR-0002, section 7).
   defp create(config, plan, key, delivery, execution_id, row) do
     with {:ok, machine} <- resolve(config, delivery.scope, plan.document),
-         {:ok, execution, _state} <-
-           Executions.create(config.store, execution_id, machine, create_options(config)) do
+         {:ok, execution, state} <-
+           Executions.create(config.store, execution_id, machine, create_options(config)),
+         :ok <- complete(config, execution, state) do
       if execution.status in @terminal do
         finished(config, plan, key, delivery, execution_id, row)
       else
@@ -403,9 +431,11 @@ defmodule StatifierRouter.Delivery do
            delivery.event,
            step_options(config)
          ) do
-      {:ok, _execution, _state} ->
-        record(config, plan, key, delivery, Atom.to_string(outcome), execution_id)
-        {:ok, {outcome, plan.id, execution_id}}
+      {:ok, execution, state} ->
+        with :ok <- complete(config, execution, state) do
+          record(config, plan, key, delivery, Atom.to_string(outcome), execution_id)
+          {:ok, {outcome, plan.id, execution_id}}
+        end
 
       {:discarded, _execution} ->
         finished(config, plan, key, delivery, execution_id, row)
@@ -430,6 +460,65 @@ defmodule StatifierRouter.Delivery do
 
   defp step_options(config),
     do: [{:executor, config.executor} | config.persistence_options]
+
+  # `:on_complete`'s hook. It fires on the one call that produced the
+  # termination and on no other, because that call's answer is the only
+  # place the donedata exists: `StatifierPersistence.Execution.from_record/1`
+  # sets `donedata` to `nil` on every struct built from a stored row, so a
+  # hook that re-read the execution afterwards would hand a route `nil`
+  # every time, with no error and no warning. A delivery to an execution
+  # that was already terminal takes the `finished/6` path, which never
+  # reaches here, so a finished execution's route is called once for the
+  # completion and never again.
+  #
+  # The route is called inside this delivery's transaction, under the
+  # execution's lock, like any other route. An `{:error, reason}` from it
+  # is returned as this delivery's error rather than swallowed: the
+  # sending execution is terminal and has no `error.communication`
+  # transition left to take, so the only way a failed hand-off is not lost
+  # is for the delivery to roll back and be redriven - which is what the
+  # adapter's at-most-once obligation on the key is for.
+  @spec complete(Config.t(), StatifierPersistence.Execution.t(), MachineState.t()) ::
+          :ok | {:error, term()}
+  defp complete(%Config{on_complete: nil}, _execution, _state), do: :ok
+
+  defp complete(%Config{on_complete: name} = config, %{status: status} = execution, state)
+       when status in @terminal do
+    event =
+      Event.external(@done_event, data: execution.donedata, origin: execution.execution_id)
+
+    case SendHandler.deliver_to_route(
+           config,
+           name,
+           execution.execution_id,
+           event,
+           {execution.execution_id, position(state), nil}
+         ) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:on_complete, name, reason}}
+    end
+  end
+
+  defp complete(%Config{}, _execution, _state), do: :ok
+
+  # A completion sits at no `<send>`, so the key's effect half is where in
+  # the step the execution finished, read off the state the step answered:
+  # the counters are the position's, and the three fields that belong to a
+  # send element - its id, its content index and its owner - are empty. A
+  # redriven step reaches the same counters from the same stored position,
+  # so the key is stable across a redrive, which is what the route's
+  # at-most-once obligation needs.
+  @spec position(MachineState.t()) :: StatifierRouter.Route.position()
+  defp position(%MachineState{} = state) do
+    %{
+      send_id: nil,
+      macrostep: state.macrostep,
+      microstep: state.microstep,
+      round: state.round,
+      c_index: nil,
+      owner: nil
+    }
+  end
 
   defp resolve(config, scope, document) do
     case Resolver.call(config.resolver, scope, document) do

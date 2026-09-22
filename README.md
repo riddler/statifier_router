@@ -188,6 +188,74 @@ process-less host calls `handle_effect/3` from its executor, a live
 `StatifierRouter.TimerQueue` is the durable queue a delayed route send is
 recorded on, keyed by `{scope, send_id}`. The rules are ADR-0005's.
 
+### A finished execution reaches a sink
+
+There are two ways to tell a sink that an execution has ended, one written
+in the chart and one configured in the host.
+
+**In the chart**, a `<final>` sends on its way in. `<onentry>` on a
+top-level `<final>` runs as part of the step that finishes the execution,
+so the send is emitted on that step and reaches the route inside that
+delivery's transaction:
+
+```xml
+<final id="joined">
+  <onentry>
+    <send type="myapp:sink" target="joined_records" event="pair.joined">
+      <param name="impression_id" expr="impression_id"/>
+    </send>
+  </onentry>
+</final>
+```
+
+Nothing else is needed: the send is an ordinary route send, the chart
+chooses what travels in its `<param>`s, and a chart that ends in several
+finals can send a different shape from each. What this pattern does not
+reach is the execution's donedata, which is not addressable from
+executable content; that is the second way.
+
+**In the host**, `:on_complete` names a registered route that every
+finished execution's donedata is handed to, whichever `<final>` it settled
+in:
+
+```elixir
+StatifierRouter.Config.new(
+  repo: MyApp.Repo,
+  store: store,
+  resolver: resolver,
+  chart_resolver: chart_resolver,
+  bindings: bindings,
+  send_type: "myapp:sink",
+  route_adapters: %{"joined_records" => {MyApp.OutboxRoute, %{queue: "joined"}}},
+  on_complete: "joined_records",
+  executor: &MyApp.Executor.execute/2
+)
+```
+
+The route is handed a `done.execution` event whose `data` is the donedata
+verbatim - `:undefined`, statifier's no-value marker, for a `<final>` that
+carries none - and whose `origin` is the execution id, under an idempotency key of that execution id, the
+counters the finishing step reported, and no ordinal.
+
+The hook fires on the delivery that finishes the execution and on no
+other. A later delivery to the same execution is
+`{:dropped, binding_id, :finished}` and fires nothing. That is not a
+convenience: donedata exists only on the answer of the call that produced
+it, and a hook that re-read the execution record afterwards would be
+handed `nil` every time, with no error and no warning -
+`StatifierPersistence.Execution.from_record/1` sets the field to `nil` on
+every struct built from a stored row, because a position that has reached
+a final state has no configuration left to carry one.
+
+A route named by `:on_complete` must be in `:route_adapters`;
+`StatifierRouter.Config.new/1` refuses an unregistered name rather than
+missing on the one delivery that had something to hand over. An
+`{:error, _}` from the route settles that delivery as
+`{:error, {:on_complete, route_name, reason}}`, which rolls it back: a
+terminal execution has no `error.communication` transition left to take,
+so rolling back and being redriven is the only way the hand-off is not
+lost.
+
 ## A webhook front
 
 A provider that posts rather than queues reaches the same `route/3`. This
