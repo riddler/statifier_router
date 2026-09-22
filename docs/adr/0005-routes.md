@@ -1,6 +1,6 @@
 # ADR-0005: Routes: the send type names the host's processor and the route name rides in `target`, a per-host registry whose scopes override a route's config and never its existence, one-way delivery whose only chart-visible outcome is a transport failure, an idempotency key the router composes from the effect's deterministic identity and the seam's context, one handler module for both host shapes, and the unregistered-route miss
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -686,3 +686,50 @@ sender's step down.
 section on the unregistered route says the same thing where an
 implementer will read it, and whose own tests pin the row's columns and
 the committed step together. This record stays at proposed.
+
+## Note (2026-09-22, sr-a14): accepted
+
+A Note, not an amendment: it decides nothing and changes no decision above
+it. The status on line 3 moved from `proposed` to `accepted` on the
+operator's word of 2026-09-22, taken after statifier_router 0.2.0 was
+published. Nothing else above this foot was edited.
+
+Every claim this record makes about the package's own code was verified by
+anchor at `251abb7`, the 0.2.0 release commit. Each decision's surface is
+in the tree: the registry and its scope overrides on
+`StatifierRouter.Config` (`:route_adapters`, `:route_overrides`, resolved
+by `StatifierRouter.Config.route/3`); the one-way adapter contract
+(`c:StatifierRouter.Route.deliver/3`, answering `:ok | {:error, term()}`);
+the composed key (`t:StatifierRouter.Route.idempotency_key/0`, the scope
+half, the step position and the ordinal); the one handler serving both
+shapes (`StatifierRouter.SendHandler`, `handle_effect/3` at the executor
+seam and `deliver/3`, `cancel/2`, `perform/2` on the send-processor
+shape); the snapshot built from the single type string
+(`StatifierRouter.Config.new/1`, which refuses a configuration declaring
+`:send_types` of its own); the host-registered timer queue
+(`c:StatifierRouter.TimerQueue.cancel/3`, taking the scope and the send id
+separately); and the unregistered-route miss, reported as
+`{:error, {:unregistered_route, name}}` with its ledger row written under
+its own savepoint. The ledger's `binding_id`, `message_id` and `scope` are
+`NOT NULL` in `StatifierRouter.Migrations.V01.up/1`, as the two Notes
+above state.
+
+**The body sentence that names this record's own status.** The Note above
+this one ends, under its heading `Where the code is.`, with the sentence
+`This record stays at proposed.` It is not edited or removed: this Note
+names it and records that it is superseded by the flip, which is how this
+repository amends a record by addition.
+
+**The Context paragraph on the dependency tree is time-stamped and is now
+stale.** The subsection `The records this one reads` says those engine and
+persistence surfaces are not in this package's dependency tree, and names
+the constraints `~> 2.5` and `~> 0.12.0`. That statement was true when it
+was written and is no longer: `mix.exs` carries `~> 2.6` and `~> 0.13` and
+`mix.lock` resolves statifier 2.6.0 and statifier_persistence 0.13.0.
+ADR-0006, a later dated record in this directory, names that same change
+under its own `What this record was written against.` heading. The
+paragraph is left as written, being a dated account of what the record was
+read against rather than a decision.
+
+The status cell for this record in `docs/adr/README.md` is flipped by a
+separate bead after all seven records; the index lags by design until then.
