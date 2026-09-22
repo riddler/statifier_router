@@ -29,6 +29,14 @@ defmodule StatifierRouter.CorpusTest do
       # "delivered" in place of "duplicate" -> that case red, the other five
       # green; restored, green. Second mutation: Delivery.duplicate/4
       # recorded "delivered" -> redelivered-impression red; restored, green.
+      # Third mutation: `<cancel sendid="orphan"/>` deleted from
+      # charts/impression_click_join.scxml -> click-then-impression red, the
+      # uncancelled orphan timer still pending in its expected timers;
+      # restored, green. That catch depends on click-then-impression's last
+      # advance keeping the clock STRICTLY under the orphan send's 1 hour
+      # deadline: the runner's fire_due/3 compares with `!= :gt`, so a send
+      # due exactly at the boundary fires and the case goes green again with
+      # the cancel gone. Any case rewrite must keep that advance sub-1h.
       test "#{Path.basename(path, ".json")} holds what it expects" do
         kase = CorpusRunner.load!(@path)
         assert CorpusRunner.run(kase) == kase["expected"]
