@@ -24,23 +24,23 @@
     }
   ],
   "script": [
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/6/1042", "data": {"kind": "impression", "impression_id": "imp_5a7d", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/6/1042", "data": {"kind": "impression", "impression_id": "imp_5a7d", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
     {"advance": "PT1H"},
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1107", "data": {"kind": "click", "impression_id": "imp_7f3a", "clicked_at": "2026-09-19T09:00:00Z", "url": "https://example.com/offer"}}},
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/7/0019", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/6/1107", "data": {"kind": "click", "impression_id": "imp_5a7d", "clicked_at": "2026-09-19T09:00:00Z", "url": "https://example.com/offer"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/6/1042", "data": {"kind": "impression", "impression_id": "imp_5a7d", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/7/0019", "data": {"kind": "impression", "impression_id": "imp_5a7d", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
     {"advance": "PT1H"},
-    {"deliver": {"source": "ad_events", "message_id": "ad_events/3/1042", "data": {"kind": "impression", "impression_id": "imp_7f3a", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}}
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/6/1042", "data": {"kind": "impression", "impression_id": "imp_5a7d", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}}
   ],
   "expected": {
     "ledger": [
-      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "created_and_delivered", "key": "imp_7f3a"},
-      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"},
-      {"binding": "clicks_to_join", "message_id": "ad_events/3/1107", "outcome": "delivered", "key": "imp_7f3a"},
-      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"},
-      {"binding": "impressions_to_join", "message_id": "ad_events/7/0019", "outcome": "delivered", "key": "imp_7f3a"},
-      {"binding": "impressions_to_join", "message_id": "ad_events/3/1042", "outcome": "duplicate", "key": "imp_7f3a"}
+      {"binding": "impressions_to_join", "message_id": "ad_events/6/1042", "outcome": "created_and_delivered", "key": "imp_5a7d"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/6/1042", "outcome": "duplicate", "key": "imp_5a7d"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/6/1107", "outcome": "delivered", "key": "imp_5a7d"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/6/1042", "outcome": "duplicate", "key": "imp_5a7d"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/7/0019", "outcome": "delivered", "key": "imp_5a7d"},
+      {"binding": "impressions_to_join", "message_id": "ad_events/6/1042", "outcome": "duplicate", "key": "imp_5a7d"}
     ],
     "status": "completed",
     "configuration": [],
