@@ -71,6 +71,28 @@ defmodule StatifierRouter.BroadwayTest do
         StatifierRouter.Broadway.start_link(:not_a_keyword_list)
       end
     end
+
+    # sabotage: start_link/1 read :name with Keyword.get again, as it did
+    # before this bead -> the omitted name started an unnamed pipeline
+    # instead of raising, red; restored, green.
+    test "requires :name, which its options table has always called required" do
+      config = config(self())
+
+      assert_raise ArgumentError, "missing required option :name", fn ->
+        StatifierRouter.Broadway.start_link(
+          producer: {Broadway.DummyProducer, []},
+          router: config
+        )
+      end
+
+      assert_raise ArgumentError, ~r/invalid value for :name/, fn ->
+        start(config, name: "MyApp.AdEventsRouter")
+      end
+
+      assert_raise ArgumentError, ~r/invalid value for :name/, fn ->
+        start(config, name: nil)
+      end
+    end
   end
 
   describe "a pipeline with four processors" do

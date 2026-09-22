@@ -53,8 +53,16 @@ Supervisor.start_link(children, strategy: :one_for_one)
 `scope`, `message_id` and `source` are read from its metadata and its data is
 the normalized event; a producer that carries them elsewhere is paired with a
 `:normalize` function of the host's own. A message whose routing returns an
-error, or raises, is failed rather than acknowledged, so the source hands it
-over again. A binding whose `order` is `:none` is not partitioned by its key.
+error, or raises, is failed rather than passed on as a success. Whether it is
+handed over again is the **producer's** contract, not Broadway's: Broadway
+provides no retries of its own and acknowledges a failed message as failed
+immediately. A queue-style producer that leaves an unacknowledged message
+invisible for a timeout, Amazon SQS the example Broadway itself names, gives
+the event back; `BroadwayKafka.Producer`, the producer in the snippet above,
+acknowledges failed messages too and advances the group's offset past them, so
+reprocessing is a strategy the host rolls. A host that needs a failed delivery
+retried picks a producer that gives it back, or arranges the replay itself. A
+binding whose `order` is `:none` is not partitioned by its key.
 
 ## What this package owns
 
