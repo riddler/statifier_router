@@ -716,9 +716,11 @@ the session schedules nothing: the processor owns the delay, and spec
   this shape.
 
 - **The code half is bead `sr-4hw`.** `perform/2` answers a delayed send
-  with an error today, which is what the foot Note of 2026-09-21 records.
-  This Amendment decides what shall be done; that bead does it. A record
-  may lead the code it governs.
+  with an error today, which is what the sr-5em Note of 2026-09-21 records
+  in its last bullet: on the send-processor shape the handler "writes no
+  row and holds no timer, and answers a delayed send with an error rather
+  than dropping it". This Amendment decides what shall be done; that bead
+  does it. A record may lead the code it governs.
 
 ## Note (2026-09-22, sr-a14): accepted
 
