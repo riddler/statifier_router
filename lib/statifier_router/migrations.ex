@@ -39,7 +39,12 @@ defmodule StatifierRouter.Migrations do
   A fault in the options raises `ArgumentError`: a migration has no caller
   to hand an `{:error, reason}` to.
 
-  `StatifierRouter.Migrations.V01` records what the first version creates.
+  `StatifierRouter.Migrations.V01` records what the first version creates,
+  and `StatifierRouter.Migrations.V02` what the second adds.
+
+  `:from` is **inclusive**: `up(from: 2)` runs V02, and a host already on
+  V01 that writes it gets the subscription table without V01's
+  `CREATE TABLE` running a second time (ADR-0007, section 6).
   """
 
   alias StatifierRouter.Config
@@ -47,7 +52,8 @@ defmodule StatifierRouter.Migrations do
   @initial_version 1
 
   @migrations %{
-    1 => StatifierRouter.Migrations.V01
+    1 => StatifierRouter.Migrations.V01,
+    2 => StatifierRouter.Migrations.V02
   }
 
   # Read off the map rather than written beside it, so the default target

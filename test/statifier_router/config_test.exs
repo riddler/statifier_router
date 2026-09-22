@@ -8,7 +8,7 @@ defmodule StatifierRouter.ConfigTest do
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.RecordingDelivery
-  alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Subscription}
   alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
 
@@ -224,8 +224,11 @@ defmodule StatifierRouter.ConfigTest do
     test "names each table under the table prefix" do
       {:ok, config} = Config.new(repo: TestRepo, delivery: @delivery, table_prefix: "ads_")
 
-      assert Enum.map([:addresses, :dedupe, :routing_ledger], &Config.table(config, &1)) ==
-               ["ads_addresses", "ads_dedupe", "ads_routing_ledger"]
+      assert Enum.map(
+               [:addresses, :dedupe, :routing_ledger, :subscriptions],
+               &Config.table(config, &1)
+             ) ==
+               ["ads_addresses", "ads_dedupe", "ads_routing_ledger", "ads_subscriptions"]
     end
   end
 
@@ -258,6 +261,13 @@ defmodule StatifierRouter.ConfigTest do
               outcome: "created_and_delivered",
               key: "imp_7f3a",
               execution_id: "ex_9k2q"
+            },
+            %Subscription{
+              binding_id: "clicks_to_join",
+              execution_id: "ex_9k2q",
+              invoke_id: "inv_1",
+              scope: "7c1e",
+              key: "imp_7f3a"
             }
           ] do
         %schema{id: id} = TestRepo.insert!(Config.put_meta(config, row))

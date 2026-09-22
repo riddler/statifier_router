@@ -9,12 +9,34 @@ defmodule StatifierRouter.MigrationsTest do
   alias Ecto.Migrator
   alias StatifierRouter.Config
   alias StatifierRouter.Migrations
-  alias StatifierRouter.Schema.{Address, Dedupe, Ledger}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Subscription}
   alias StatifierRouter.TestRepo
 
   # A host's one-line delegating migration, under a table prefix and a
   # Postgres schema of its own, so these tests never touch the tables the
   # bootstrap created for the rest of the suite.
+  defmodule MigrateKxV01 do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [table_prefix: "kx_router_", prefix: "kx_router_schema"]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [version: 1])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 1, version: 1])
+  end
+
+  # What a host already running V01 writes for V02: `from:` names the first
+  # version it has not run, and the walk includes it.
+  defmodule MigrateKxV02 do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [table_prefix: "kx_router_", prefix: "kx_router_schema"]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
+  end
+
   defmodule MigrateKx do
     use Ecto.Migration
 
@@ -25,8 +47,12 @@ defmodule StatifierRouter.MigrationsTest do
   end
 
   @version 20_260_919_000_201
+  @v01_version 20_260_922_000_202
+  @v02_version 20_260_922_000_203
   @schema "kx_router_schema"
-  @tables ["kx_router_addresses", "kx_router_dedupe", "kx_router_routing_ledger"]
+  @v01_tables ["kx_router_addresses", "kx_router_dedupe", "kx_router_routing_ledger"]
+  @v02_tables ["kx_router_subscriptions"]
+  @tables Enum.sort(@v01_tables ++ @v02_tables)
 
   setup_all do
     Sandbox.mode(TestRepo, :auto)
@@ -54,7 +80,7 @@ defmodule StatifierRouter.MigrationsTest do
   # it folds `:already_up` into `:ok` - the version row outlives the tables,
   # so the next `migrate(:up)` reports success and creates nothing, and every
   # test then fails on a missing relation. Clearing both halves is what makes
-  # the run after a red one start clean: the three tables by their
+  # the run after a red one start clean: every version's tables by their
   # schema-qualified names, and the `schema_migrations` row `migrate/1` reads.
   # The migrator is called with no `:prefix`, so that row is in the repo's
   # default schema rather than under @schema.
@@ -63,9 +89,19 @@ defmodule StatifierRouter.MigrationsTest do
       SQL.query!(TestRepo, ~s(DROP TABLE IF EXISTS "#{@schema}"."#{table}"), [])
     end
 
-    SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = $1", [@version])
+    SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = ANY($1)", [
+      [@version, @v01_version, @v02_version]
+    ])
 
     :ok
+  end
+
+  defp migrate_step(direction, version, module) do
+    case apply(Migrator, direction, [TestRepo, version, module, [log: false]]) do
+      :ok -> :ok
+      :already_up -> :ok
+      :already_down -> :ok
+    end
   end
 
   defp migrate(direction) do
@@ -115,17 +151,17 @@ defmodule StatifierRouter.MigrationsTest do
 
   defp unique_suffix, do: Integer.to_string(System.unique_integer([:positive]))
 
-  describe "V01 through a host's delegating migration" do
+  describe "every version through a host's delegating migration" do
     # sabotage: V01 named the ledger table "<prefix>ledger" -> red on the
     # table list; restored, green.
-    test "creates the three tables in the configured Postgres schema" do
+    test "creates every version's tables in the configured Postgres schema" do
       assert tables_present() == @tables
     end
 
     # sabotage: dropped V01's `create(index(addresses, [:execution_id], ...))`
     # -> red on the addresses index list, which the old indisunique filter had
     # hidden; restored, green.
-    test "names every index on the three tables and its columns" do
+    test "names every index on every version's tables and its columns" do
       assert index_columns("kx_router_addresses") == %{
                "kx_router_addresses_pkey" => ["id"],
                "kx_router_addresses_scope_document_key_index" => ["scope", "document", "key"],
@@ -143,6 +179,15 @@ defmodule StatifierRouter.MigrationsTest do
                "kx_router_routing_ledger_binding_id_inserted_at_index" => [
                  "binding_id",
                  "inserted_at"
+               ]
+             }
+
+      assert index_columns("kx_router_subscriptions") == %{
+               "kx_router_subscriptions_pkey" => ["id"],
+               "kx_router_subscriptions_execution_id_binding_id_invoke_id_index" => [
+                 "execution_id",
+                 "binding_id",
+                 "invoke_id"
                ]
              }
     end
@@ -191,6 +236,21 @@ defmodule StatifierRouter.MigrationsTest do
 
       assert %Ledger{key: nil, execution_id: nil, outcome: "key_refused"} =
                TestRepo.get!(Config.queryable(config, Ledger), ledger.id)
+
+      subscription =
+        TestRepo.insert!(
+          Config.put_meta(config, %Subscription{
+            binding_id: "clicks_to_join",
+            execution_id: "ex_" <> suffix,
+            invoke_id: "inv_" <> suffix,
+            scope: "7c1e",
+            key: "imp_" <> suffix,
+            inserted_at: now
+          })
+        )
+
+      assert %Subscription{binding_id: "clicks_to_join", scope: "7c1e"} =
+               TestRepo.get!(Config.queryable(config, Subscription), subscription.id)
     end
 
     # sabotage: V01's addresses unique index made a plain index -> the
@@ -235,6 +295,68 @@ defmodule StatifierRouter.MigrationsTest do
       assert error.constraint == "kx_router_dedupe_binding_id_message_id_index"
     end
 
+    # sabotage: V02's subscriptions unique index made a plain index -> the
+    # second insert succeeded, red; restored, green.
+    test "refuses a second subscription row for one (execution, binding, invocation)", %{
+      config: config
+    } do
+      suffix = unique_suffix()
+
+      row = %Subscription{
+        binding_id: "clicks_to_join",
+        execution_id: "ex_" <> suffix,
+        invoke_id: "inv_" <> suffix,
+        scope: "7c1e",
+        key: "imp_" <> suffix,
+        inserted_at: DateTime.utc_now()
+      }
+
+      TestRepo.insert!(Config.put_meta(config, row))
+
+      error =
+        assert_raise Ecto.ConstraintError, fn ->
+          TestRepo.insert!(Config.put_meta(config, row))
+        end
+
+      assert error.constraint ==
+               "kx_router_subscriptions_execution_id_binding_id_invoke_id_index"
+
+      # A second invocation of the same binding in the same execution is a
+      # second row, not a conflict (ADR-0007, section 6).
+      assert %Subscription{} =
+               TestRepo.insert!(Config.put_meta(config, %{row | invoke_id: "inv_b_" <> suffix}))
+    end
+
+    # This is the boundary a host upgrading across a version lands on, and
+    # both ways of getting it wrong are silent: a `from:` read as exclusive
+    # never runs V02 for them, and a `from:` that walks from V01 re-runs
+    # V01's CREATE TABLE against tables they already have.
+    #
+    # sabotage: span!/3 made `from + 1` for :up -> the V02 step created no
+    # subscriptions table, red on its assertion; restored, green.
+    test "from: is inclusive, so a host on V01 reaches V02 with from: 2 and re-runs nothing" do
+      :ok = migrate(:down)
+      assert tables_present() == []
+
+      :ok = migrate_step(:up, @v01_version, MigrateKxV01)
+      assert tables_present() == @v01_tables
+
+      # Inclusive of `from`: this call runs V02 itself, and only V02 - a
+      # walk that included V01 would raise on the tables already there.
+      :ok = migrate_step(:up, @v02_version, MigrateKxV02)
+      assert tables_present() == @tables
+
+      # And back down the same way, one version at a time.
+      :ok = migrate_step(:down, @v02_version, MigrateKxV02)
+      assert tables_present() == @v01_tables
+
+      :ok = migrate_step(:down, @v01_version, MigrateKxV01)
+      assert tables_present() == []
+
+      :ok = migrate(:up)
+      assert tables_present() == @tables
+    end
+
     # sabotage: V01's down/1 dropped only the ledger table -> red at
     # `assert tables_present() == []`, which still saw the other two;
     # restored, green.
@@ -273,8 +395,8 @@ defmodule StatifierRouter.MigrationsTest do
     # sabotage: validate_version! accepted any integer -> the call reached
     # the DDL and raised RuntimeError, red; restored, green.
     test "a version this package does not know raises" do
-      assert_raise ArgumentError, ~r/unknown migration version 2/, fn ->
-        Migrations.up(version: 2)
+      assert_raise ArgumentError, ~r/unknown migration version 3/, fn ->
+        Migrations.up(version: 3)
       end
 
       assert_raise ArgumentError, ~r/unknown migration from 0/, fn -> Migrations.down(from: 0) end
