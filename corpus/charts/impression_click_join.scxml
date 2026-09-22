@@ -6,22 +6,33 @@
   impression. Either way the execution then holds a 1 hour grace period, in
   the state closed, before it finishes in done.
 
-  Where the join's design sends a result to a sink, this chart assigns the
-  result to the datamodel instead: outcome is joined, expired or
-  orphan_click, and a click that arrives during the grace period is
-  appended to late_clicks. The timers are the host's: every delay below
-  reaches the host as a delayed send, and a cancel as a cancel.
+  The join hands its result out as a send rather than keeping it: a
+  completed join reaches the route joined_records, and a click no
+  impression joined - a click whose hour ran out, an impression whose
+  window closed, and a click that arrives once the join has closed -
+  reaches dead_letter. Each names the host's send type in type and the
+  route name in target, which is how ADR-0005 spells an outbound send. A
+  click that arrives during the grace period is also appended to
+  late_clicks, which is what the execution still holds rather than a
+  result it hands out.
+
+  The timers are the host's: every delay below reaches the host as a
+  delayed send, carrying no target, and a cancel as a cancel.
 -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="predicator" initial="empty">
   <datamodel>
-    <data id="outcome" expr="null"/>
+    <data id="impression_id" expr="null"/>
     <data id="late_clicks" expr="[]"/>
   </datamodel>
 
   <state id="empty">
-    <transition event="impression" target="awaiting_click"/>
-    <transition event="click" target="awaiting_impression"/>
+    <transition event="impression" target="awaiting_click">
+      <assign location="impression_id" expr="_event.data.impression_id"/>
+    </transition>
+    <transition event="click" target="awaiting_impression">
+      <assign location="impression_id" expr="_event.data.impression_id"/>
+    </transition>
   </state>
 
   <state id="awaiting_click">
@@ -38,7 +49,9 @@
     </onentry>
     <transition event="impression" target="joined"/>
     <transition event="orphan.timeout" target="closed">
-      <assign location="outcome" expr="'orphan_click'"/>
+      <send type="myapp:sink" target="dead_letter" event="orphaned">
+        <param name="impression_id" expr="impression_id"/>
+      </send>
     </transition>
   </state>
 
@@ -46,14 +59,18 @@
     <onentry>
       <cancel sendid="window"/>
       <cancel sendid="orphan"/>
-      <assign location="outcome" expr="'joined'"/>
+      <send type="myapp:sink" target="joined_records" event="joined">
+        <param name="impression_id" expr="impression_id"/>
+      </send>
     </onentry>
     <transition target="closed"/>
   </state>
 
   <state id="expired">
     <onentry>
-      <assign location="outcome" expr="'expired'"/>
+      <send type="myapp:sink" target="dead_letter" event="expired">
+        <param name="impression_id" expr="impression_id"/>
+      </send>
     </onentry>
     <transition target="closed"/>
   </state>
@@ -64,6 +81,10 @@
     </onentry>
     <transition event="click">
       <assign location="late_clicks" expr="concat(late_clicks, [_event.data])"/>
+      <send type="myapp:sink" target="dead_letter" event="late_click">
+        <param name="impression_id" expr="impression_id"/>
+        <param name="click" expr="_event.data"/>
+      </send>
     </transition>
     <transition event="impression"/>
     <transition event="grace.over" target="done"/>

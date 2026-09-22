@@ -1,8 +1,9 @@
 {
   "id": "click-then-impression",
-  "description": "A click arrives before its impression, and the impression follows within the hour: the execution joins, cancels the orphan timer and holds the grace period.",
+  "description": "A click arrives before its impression, and the impression follows within the hour: the execution joins, hands the join to joined_records, cancels the orphan timer and holds the grace period.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -37,6 +38,9 @@
     "status": "active",
     "configuration": ["closed"],
     "timers": ["grace.over"],
-    "datamodel": {"outcome": "joined", "late_clicks": []}
+    "sends": [
+      {"route": "joined_records", "event": {"name": "joined", "data": {"impression_id": "imp_9b21"}}}
+    ],
+    "datamodel": {"late_clicks": []}
   }
 }

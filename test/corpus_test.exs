@@ -3,7 +3,9 @@ defmodule StatifierRouter.CorpusTest do
   Runs every case under `corpus/cases/` through `StatifierRouter.CorpusRunner`
   against the real delivery, and checks that the corpus keeps the rules
   `corpus/README.md` sets for it: every case is language-neutral JSON named
-  for its id, and no chart carries a `<send>` with a `target`.
+  for its id, no timer carries a `<send>` with a `target`, and every
+  `target` a chart does write names a route the corpus registers rather
+  than a host scheme.
 
   Each case runs in its own SQL sandbox: the runner routes, fires timers
   and reads back from the test's one process, so every write is ordered by
@@ -45,14 +47,16 @@ defmodule StatifierRouter.CorpusTest do
   end
 
   describe "the corpus" do
-    test "carries the six cases corpus/README.md lists" do
+    test "carries the eight cases corpus/README.md lists" do
       ids = Enum.map(CorpusRunner.case_paths(), &Path.basename(&1, ".json"))
 
       assert ids == [
                "click-then-impression",
                "click-then-orphan-timeout",
+               "grace-click-after-expiry",
                "impression-then-click",
                "impression-then-expiry",
+               "reaped-address-drop",
                "redelivered-impression",
                "two-clicks-for-one-impression"
              ]
@@ -81,9 +85,48 @@ defmodule StatifierRouter.CorpusTest do
       end
     end
 
-    test "sends to no target from any chart" do
-      for path <- CorpusRunner.chart_paths() do
-        refute File.read!(path) =~ ~r/<send\s[^>]*target/, "#{path} sends to a target"
+    # sabotage: `target="joined_records"` changed to a host scheme
+    # `target="sqs://joined"` in charts/impression_click_join.scxml -> red
+    # naming that send; restored, green.
+    test "writes a target only on a routed send, and only a registered route name" do
+      routes = CorpusRunner.route_names()
+      assert routes != []
+
+      for path <- CorpusRunner.chart_paths(),
+          [tag] <- Regex.scan(~r/<send\s[^>]*>/, File.read!(path)) do
+        if tag =~ ~r/\sdelay=/ do
+          refute tag =~ ~r/\starget=/, "#{path}: the timer #{tag} carries a target"
+        else
+          assert [[_, type]] = Regex.scan(~r/\stype="([^"]*)"/, tag),
+                 "#{path}: the send #{tag} carries no type"
+
+          assert type == CorpusRunner.send_type(),
+                 "#{path}: the send #{tag} is not the host's send type"
+
+          assert [[_, target]] = Regex.scan(~r/\starget="([^"]*)"/, tag),
+                 "#{path}: the send #{tag} carries no target"
+
+          assert target in routes,
+                 "#{path}: the send #{tag} names no route the corpus registers"
+        end
+      end
+    end
+
+    # sabotage: `expects_sends!/1` in CorpusRunner made to return `:ok`
+    # unconditionally -> this test red, the eight cases still green, which
+    # is the point: a case losing its `sends` member is otherwise silent;
+    # restored, green.
+    test "fails a case that registers routes and states no expected sends" do
+      kase =
+        CorpusRunner.case_paths()
+        |> hd()
+        |> CorpusRunner.load!()
+        |> update_in(["expected"], &Map.delete(&1, "sends"))
+
+      assert kase["routes"] != []
+
+      assert_raise ArgumentError, ~r/states no expected sends/, fn ->
+        CorpusRunner.run(kase)
       end
     end
   end

@@ -24,6 +24,17 @@ defmodule StatifierRouter.CorpusRunner do
   from there. A cancel removes the execution's recorded sends that carry
   its send id.
 
+  The runner also plays the host's part for sinks. A case's `routes` names
+  the routes it registers; each is registered as
+  `StatifierRouter.RecordingRoute` reporting to the runner's own process,
+  and the runner's executor hands every effect to
+  `StatifierRouter.SendHandler`, so a chart's `<send>` of `send_type/0`
+  reaches its route through the package's own handler. Every send a route
+  was handed is collected in order and compared as `expected.sends`. A
+  case that registers routes and states no `expected.sends` is raised on
+  rather than run: a member left out would otherwise be a comparison that
+  cannot fail.
+
   `run/1` answers with what the case's `expected` object compares against,
   in the same shape.
   """
@@ -35,14 +46,19 @@ defmodule StatifierRouter.CorpusRunner do
   alias Statifier.Machine
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
+  alias StatifierRouter.Addresses
   alias StatifierRouter.Config
+  alias StatifierRouter.RecordingRoute
   alias StatifierRouter.Resolver
   alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.SendHandler
   alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
 
   @corpus Path.expand("../../corpus", __DIR__)
   @start ~U[2026-09-19 08:00:00.000000Z]
+  @send_type "myapp:sink"
+  @config_key {__MODULE__, :config}
 
   # The binding keys a case may carry, and the enumerated values of the
   # two keys whose values Binding.new/1 takes as atoms. Everything else in
@@ -74,45 +90,97 @@ defmodule StatifierRouter.CorpusRunner do
   def start, do: @start
 
   @doc """
-  Runs `kase` and answers with the ledger rows for its bindings, the active
-  configuration of its one execution and the datamodel keys its
-  `expected.datamodel` names, shaped as `expected` is.
+  The `type` the corpus's charts write on an outbound send, and the type
+  the runner registers as the host's. A `<send>` of any other type is not
+  this handler's and reaches no route.
+  """
+  @spec send_type() :: String.t()
+  def send_type, do: @send_type
 
-  Raises when a step fails, when the case's scope and document address
-  anything but exactly one execution, or when a ledger row names another
+  @doc "Every route name any case registers, sorted."
+  @spec route_names() :: [String.t()]
+  def route_names do
+    case_paths()
+    |> Enum.flat_map(&Map.get(load!(&1), "routes", []))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc """
+  Runs `kase` and answers with the ledger rows for its bindings, the sends
+  its routes were handed, the active configuration of its one execution
+  and the datamodel keys its `expected.datamodel` names, shaped as
+  `expected` is.
+
+  Raises when a step fails, when the case registers routes and states no
+  `expected.sends`, when the case's scope and document address more than
+  one execution or never address one, or when a ledger row names another
   execution.
   """
   @spec run(map()) :: map()
   def run(%{"scope" => scope, "document" => document, "script" => script} = kase) do
     runner = self()
+    expects_sends!(kase)
     config = config(kase, runner)
 
+    initial = %{clock: @start, pending: [], sends: [], execution_id: nil}
+
     state =
-      Enum.reduce(script, %{clock: @start, pending: []}, fn step, state ->
-        run_step(step, state, config, scope)
+      Enum.reduce(script, initial, fn step, state ->
+        step |> run_step(state, config, kase) |> address(config, scope, document)
       end)
 
-    [execution_id] =
-      TestRepo.all(
-        from(a in Config.queryable(config, Address),
-          where: a.scope == ^scope and a.document == ^document,
-          select: a.execution_id
-        )
-      )
+    execution_id =
+      state.execution_id ||
+        raise "the case #{kase["id"]} addressed no execution under #{scope}/#{document}"
 
     %{
       "ledger" => ledger(config, kase, execution_id),
       "status" => status(config, execution_id),
       "configuration" => configuration(config, execution_id),
       "datamodel" => datamodel(config, execution_id, kase),
-      "timers" => state.pending |> Enum.map(& &1.effect.event) |> Enum.sort()
+      "timers" => state.pending |> Enum.map(& &1.effect.event) |> Enum.sort(),
+      "sends" => state.sends
     }
     |> Map.take(Map.keys(kase["expected"]))
   end
 
+  # A case that registers routes states what its routes were handed. Left
+  # out, `Map.take/2` below would drop the member and the case would pass
+  # whatever the chart sent, which is an assertion that cannot fail.
+  defp expects_sends!(kase) do
+    routes = Map.get(kase, "routes", [])
+    expected = Map.get(kase, "expected", %{})
+
+    if routes != [] and not Map.has_key?(expected, "sends") do
+      raise ArgumentError,
+            "the case #{kase["id"]} registers the routes #{Enum.join(routes, ", ")} " <>
+              "and states no expected sends"
+    end
+
+    :ok
+  end
+
+  # The execution the case's scope and document address, kept as the
+  # script runs: an address row can be reaped before the case ends, and
+  # the execution it named is still what the case compares.
+  defp address(state, config, scope, document) do
+    query =
+      from(a in Config.queryable(config, Address),
+        where: a.scope == ^scope and a.document == ^document,
+        select: a.execution_id
+      )
+
+    case TestRepo.all(query) do
+      [] -> state
+      [execution_id] -> %{state | execution_id: execution_id}
+      many -> raise "#{scope}/#{document} addresses more than one execution: #{inspect(many)}"
+    end
+  end
+
   # -- the script -----------------------------------------------------------
 
-  defp run_step(%{"deliver" => deliver}, state, config, scope) do
+  defp run_step(%{"deliver" => deliver}, state, config, %{"scope" => scope}) do
     event = %{
       scope: scope,
       message_id: Map.fetch!(deliver, "message_id"),
@@ -124,9 +192,18 @@ defmodule StatifierRouter.CorpusRunner do
     record_effects(state)
   end
 
-  defp run_step(%{"advance" => iso8601}, state, config, _scope) do
+  defp run_step(%{"advance" => iso8601}, state, config, _kase) do
     until = DateTime.shift(state.clock, Duration.from_iso8601!(iso8601))
     state |> fire_due(until, config) |> Map.put(:clock, until)
+  end
+
+  # One run of `StatifierRouter.Addresses.reap/3` at the case's clock. The
+  # reaper stamps a terminal row the first time it reads it and deletes it
+  # once that row's horizon has passed, so a case reaps twice around an
+  # advance to see a row gone.
+  defp run_step(%{"reap" => "addresses"}, state, config, _kase) do
+    {:ok, _result} = Addresses.reap(config, config.bindings, now: state.clock)
+    state
   end
 
   # Fires the earliest recorded send that is due by `until`, then looks
@@ -154,9 +231,14 @@ defmodule StatifierRouter.CorpusRunner do
         sendid: if(effect.id_from_author?, do: effect.send_id)
       )
 
-    case Executions.step(config.store, send.execution_id, machine, event,
-           executor: config.executor
-         ) do
+    # The snapshot options travel on every step, top level, the way
+    # `StatifierRouter.Delivery` sends them: a timer-fired step that
+    # carried only the executor would leave `:send_types` unregistered,
+    # and a `<send>` of `send_type/0` the fired event reaches would not be
+    # a registered type on that step alone.
+    opts = [{:executor, config.executor} | config.persistence_options]
+
+    case Executions.step(config.store, send.execution_id, machine, event, opts) do
       {:ok, _execution, _machine_state} -> :ok
       {:discarded, _execution} -> :ok
     end
@@ -186,6 +268,10 @@ defmodule StatifierRouter.CorpusRunner do
 
       {__MODULE__, _other_effect, _context} ->
         record_effects(state)
+
+      {:routed, %{sink: route}, %Event{} = event, _key} ->
+        send = %{"route" => route, "event" => %{"name" => event.name, "data" => event.data}}
+        record_effects(%{state | sends: state.sends ++ [send]})
     after
       0 -> state
     end
@@ -193,7 +279,7 @@ defmodule StatifierRouter.CorpusRunner do
 
   # -- the configuration ----------------------------------------------------
 
-  defp config(%{"scope" => scope, "bindings" => bindings}, runner) do
+  defp config(%{"scope" => scope, "bindings" => bindings} = kase, runner) do
     machines = machines()
     {:ok, store} = Storage.new(Storage.Ecto, persistence: TestPersistence)
     by_hash = Map.new(Map.values(machines), &{Machine.identity(&1).content_hash, &1})
@@ -203,9 +289,14 @@ defmodule StatifierRouter.CorpusRunner do
       |> Map.new(fn {document, machine} -> {{scope, document}, machine} end)
       |> Resolver.Static.new()
 
+    # The runner reads the timers off every effect, and the package's own
+    # handler takes the sends: a `<send>` of `send_type/0` is handed to
+    # the route its `target` names, and anything else is ignored there.
+    # The configuration the handler needs is the one being built, so it is
+    # read back from this process rather than closed over.
     executor = fn effect, context ->
       send(runner, {__MODULE__, effect, context})
-      :ok
+      SendHandler.handle_effect(Process.get(@config_key), effect, context)
     end
 
     {:ok, config} =
@@ -215,10 +306,21 @@ defmodule StatifierRouter.CorpusRunner do
         executor: executor,
         resolver: resolver,
         chart_resolver: &Map.fetch(by_hash, &1),
+        send_type: @send_type,
+        route_adapters: route_adapters(kase, runner),
         bindings: Enum.map(bindings, &binding_attrs/1)
       )
 
+    Process.put(@config_key, config)
     config
+  end
+
+  # Every route the case registers, served by the recording adapter, which
+  # reports to the runner's process and hands nothing anywhere.
+  defp route_adapters(kase, runner) do
+    kase
+    |> Map.get("routes", [])
+    |> Map.new(&{&1, {RecordingRoute, %{pid: runner, sink: &1}}})
   end
 
   defp machines do

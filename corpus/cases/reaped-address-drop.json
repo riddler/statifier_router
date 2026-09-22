@@ -1,0 +1,49 @@
+{
+  "id": "reaped-address-drop",
+  "description": "A click for an impression whose execution finished and whose address row the reaper then deleted: the click matches its binding, finds no address to deliver to, and is recorded as a drop that hands nothing to a route.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"],
+      "create": "never"
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/8/4417", "data": {"kind": "impression", "impression_id": "imp_a35f", "shown_at": "2026-09-19T08:00:00Z", "placement": "header"}}},
+    {"advance": "PT25H"},
+    {"reap": "addresses"},
+    {"advance": "P4D"},
+    {"reap": "addresses"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/8/4502", "data": {"kind": "click", "impression_id": "imp_a35f", "clicked_at": "2026-09-24T09:00:00Z", "url": "https://example.com/offer"}}}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "impressions_to_join", "message_id": "ad_events/8/4417", "outcome": "created_and_delivered", "key": "imp_a35f"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/8/4502", "outcome": "dropped: no_execution", "key": "imp_a35f"}
+    ],
+    "status": "completed",
+    "configuration": [],
+    "timers": [],
+    "sends": [
+      {"route": "dead_letter", "event": {"name": "expired", "data": {"impression_id": "imp_a35f"}}}
+    ],
+    "datamodel": {"late_clicks": []}
+  }
+}

@@ -3,6 +3,7 @@
   "description": "The impression's message is delivered again in every state the execution rests in once it holds that impression - awaiting_click, closed, and after it finished - and each redelivery is a duplicate; a new message for the same impression during the grace period is delivered and absorbed.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -45,6 +46,9 @@
     "status": "completed",
     "configuration": [],
     "timers": [],
-    "datamodel": {"outcome": "joined", "late_clicks": []}
+    "sends": [
+      {"route": "joined_records", "event": {"name": "joined", "data": {"impression_id": "imp_5a7d"}}}
+    ],
+    "datamodel": {"late_clicks": []}
   }
 }
