@@ -642,9 +642,14 @@ defmodule StatifierRouter.SendHandler do
   # exactly as ADR-0006, section 1 reads it. A sender with no such row has
   # no scope, and the ledger's `scope` is `NOT NULL`, so its refusal is
   # reported and not recorded - the same gap ADR-0006, section 6 names for
-  # `unaddressed_sender`, for the same reason. On the send-processor shape
-  # the key's scope half is a session id and no address row answers to it,
-  # which is the same case.
+  # `unaddressed_sender`, for the same reason. The lookup is on the
+  # composed key's scope half and on nothing else, so the arriving shape
+  # does not decide the outcome. On the send-processor shape that half is
+  # the sender's session id, and whether it names an address row is the
+  # host's arrangement rather than a property of this package: ADR-0006,
+  # section 4 holds that at this seam the sender's session id is its
+  # execution id, so a host that keeps the two the same is recorded on
+  # that shape too.
   @spec record_refusal(Config.t(), Route.idempotency_key(), DateTime.t()) :: :ok
   defp record_refusal(config, {sender, _position, _ordinal} = key, now) do
     case Addresses.by_execution(config, sender) do
