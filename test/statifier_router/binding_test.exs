@@ -141,6 +141,40 @@ defmodule StatifierRouter.BindingTest do
     end
   end
 
+  # The moduledoc promises one order for the faults new/1 can see without
+  # an event: reserved, then unknown, then missing, then an invalid value,
+  # then a program that does not compile. Reserved-before-everything is
+  # pinned in the describe above; these pin each remaining adjacent pair,
+  # by handing new/1 both faults of the pair at once.
+  describe "new/1 check order" do
+    # sabotage: swapping refuse_unknown/1 and require_keys/1 in the map
+    # clause of new/1 turned this test red (it came back
+    # {:missing_key, :event}); restored, green.
+    test "refuses an unknown key before a missing required key" do
+      attrs = @clicks |> Map.delete(:event) |> Map.put(:priority, 1)
+
+      assert Binding.new(attrs) == {:error, {:unknown_key, :priority}}
+    end
+
+    # sabotage: swapping require_keys/1 and validate_values/1 in the map
+    # clause of new/1 turned this test red (it came back
+    # {:invalid_value, :enabled, "yes"}); restored, green.
+    test "refuses a missing required key before an invalid value" do
+      attrs = @clicks |> Map.delete(:event) |> Map.put(:enabled, "yes")
+
+      assert Binding.new(attrs) == {:error, {:missing_key, :event}}
+    end
+
+    # sabotage: moving compile(:match, attrs.match) ahead of
+    # validate_values/1 in the map clause of new/1 turned this test red (it
+    # came back a {:match, _} compile error); restored, green.
+    test "refuses an invalid value before a program that does not compile" do
+      attrs = @clicks |> Map.put(:order, :sideways) |> Map.put(:match, "event.kind ==")
+
+      assert Binding.new(attrs) == {:error, {:invalid_value, :order, :sideways}}
+    end
+  end
+
   describe "new/1 field validation" do
     # sabotage: dropping :document from @required turned this test red;
     # restored, green.
