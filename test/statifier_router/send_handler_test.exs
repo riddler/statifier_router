@@ -15,6 +15,7 @@ defmodule StatifierRouter.SendHandlerTest do
   alias StatifierRouter.RecordingRoute
   alias StatifierRouter.RecordingTimerQueue
   alias StatifierRouter.Resolver.Static
+  alias StatifierRouter.Schema.Ledger
   alias StatifierRouter.SendHandler
   alias StatifierRouter.TestPersistence
   alias StatifierRouter.TestRepo
@@ -198,6 +199,10 @@ defmodule StatifierRouter.SendHandlerTest do
     # miss the host reports through failed_send/3 disappeared, red;
     # restored, green.
     test "answers a miss with the error the host reports through failed_send/3" do
+      # The refusal looks for the sender's address row before it records
+      # anything, so this shape reaches the database even though a session
+      # id has no such row and no row is written.
+      :ok = Sandbox.checkout(TestRepo)
       effect = send_effect(target: "audit_log")
       event = SendEvent.build(effect, "session_1")
 
@@ -310,14 +315,22 @@ defmodule StatifierRouter.SendHandlerTest do
       assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
     end
 
-    # sabotage: refusal/2 answered :ok -> the unregistered route was
+    # sabotage: refusal/3 answered :ok -> the unregistered route was
     # swallowed and nothing reached the chart, red; restored, green.
     test "refuses a target naming no registered route" do
+      # Same reason as the send-processor shape's miss: the refusal reads
+      # the sender's address row, and "ex_1" has none, so it is reported
+      # and not recorded.
+      :ok = Sandbox.checkout(TestRepo)
+      config = handler_config()
+
       assert SendHandler.handle_effect(
-               handler_config(),
+               config,
                {:send, send_effect(target: "audit_log")},
                seam("ex_1")
              ) == {:error, {:unregistered_route, "audit_log"}}
+
+      assert DeliveryFixtures.ledger(config) == []
     end
 
     # sabotage: in_route/2 deleted the key before calling the fun ->
@@ -458,10 +471,13 @@ defmodule StatifierRouter.SendHandlerTest do
       assert event.name == "joined"
     end
 
-    # sabotage: SendHandler.refusal/2 raised instead of answering an error
+    # sabotage: SendHandler.refusal/3 raised instead of answering an error
     # -> the delivery rolled back and the step did not commit, red;
     # restored, green.
-    test "an unregistered route is reported and the step still commits" do
+    # sabotage: insert_refusal/4 answered :ok without inserting -> the
+    # ledger held the delivery's row and no send_refused row, red;
+    # restored, green.
+    test "an unregistered route is reported and recorded, and the step still commits" do
       config = sink_config(route_adapters: %{"dead_letter" => {RecordingRoute, %{pid: self()}}})
 
       assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
@@ -473,6 +489,31 @@ defmodule StatifierRouter.SendHandlerTest do
       # event that fired the refused send.
       assert {:ok, [%{event: %{name: "impression"}}]} =
                StatifierPersistence.Executions.inputs(config.store, execution_id)
+
+      # RF062-R1's row, committed with the step that sent it. The ledger
+      # holds it and the delivery that created the sender, one each: the
+      # reserved binding id is what tells the two apart.
+      {refusals, deliveries} =
+        Enum.split_with(DeliveryFixtures.ledger(config), &(&1.binding_id == "execution"))
+
+      assert [%Ledger{outcome: "created_and_delivered", execution_id: ^execution_id}] = deliveries
+
+      assert [
+               %Ledger{
+                 scope: @scope,
+                 outcome: "send_refused",
+                 reason: "route",
+                 key: nil,
+                 execution_id: nil,
+                 message_id: message_id
+               }
+             ] = refusals
+
+      # The message id is ADR-0005, section 4's key written out: the
+      # sender's execution id, then the send's send_id, macrostep,
+      # microstep, round, c_index and owner, then the ordinal.
+      assert [^execution_id, _send_id, _macrostep, _microstep, _round, _c_index, _owner, _ordinal] =
+               String.split(message_id, "/")
     end
 
     # THE reentrancy pin. sabotage: Delivery.deliver/4's

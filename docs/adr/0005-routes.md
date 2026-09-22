@@ -616,3 +616,52 @@ Every module named here lands in the same commit as this Note.
   send-processor shape it writes no row and holds no timer, and answers a
   delayed send with an error rather than dropping it. Which of the two
   statements governs is not decided here.
+
+## Note (2026-09-21, sr-p6u): section 7's routing-ledger row, as ruled and as it landed
+
+A Note, not an amendment: it decides nothing and changes no decision. The
+Note above it says section 7's routing-ledger row "is not built" and that
+minting or widening a vocabulary for it was left for a ruling. The ruling
+was taken on 2026-09-21 (RF062-R1), the row is built, and that bullet is
+superseded by this Note. Everything else that Note records still holds.
+
+**What was ruled.** That the row extends ADR-0006, section 6's send
+convention rather than opening a parallel one. ADR-0006's own foot Note
+of the same date carries the vocabulary half; this one records what
+section 7 now has.
+
+**The row.** `binding_id` is the reserved name `execution`, the one
+ADR-0006, section 1 reserves and its consequences read as the mark of an
+outbound send; `message_id` is decision 4's composed key, written out as
+a slash-joined string and never parsed back; `outcome` is `send_refused`;
+`reason` is `route`, the one word ADR-0006's Note adds for a target that
+names no registered route; `key` and `execution_id` are empty, as they
+are for every refusal discovered before a target is resolved. `scope` is
+the host's partition, read from the sending execution's address row.
+
+**A sender with no address row is reported and not recorded.** The
+ledger's `scope` is `NOT NULL` (`StatifierRouter.Migrations.V01.up/1`),
+and a sender that has no address row has no scope to write there. That is
+the gap ADR-0006, section 6 already names for `unaddressed_sender`, and a
+route refusal falls in it for the same reason rather than a new one. On
+the send-processor shape the scope half of the key is a session id, which
+no address row answers to, so that shape reports and does not record.
+
+**The report is unchanged, and it is what section 7 puts first.** The
+handler still answers `{:error, {:unregistered_route, name}}` on both
+shapes, the step the sender took still commits, and the row records that
+the sender was told rather than standing in for telling it - which is the
+rule ADR-0006, section 3 states for its own refusals.
+
+**A failed ledger write does not take the sender's step down.** The write
+happens at the executor seam, inside the sending execution's own
+transaction, where any failed statement leaves that transaction aborted
+whether or not the caller handles the error. So the insert is bracketed
+in a SQL savepoint of its own and rolls back to it on failure, which is
+what `StatifierRouter.Delivery.deliver_event/4` does for the same seam
+and for the same reason. The miss is reported either way.
+
+**Where the code is.** `StatifierRouter.SendHandler`, whose moduledoc
+section on the unregistered route says the same thing where an
+implementer will read it, and whose own tests pin the row's columns and
+the committed step together. This record stays at proposed.

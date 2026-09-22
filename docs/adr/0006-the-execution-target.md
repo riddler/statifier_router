@@ -435,3 +435,59 @@ the code half adds, not claimed here over a live codebase.
   left open for the engine to decide. This record conforms to the
   accepted answer and records the argument it set aside (section 3) so
   that the question survives the conforming.
+
+## Note (2026-09-21, sr-p6u): `send_refused` names any send this package refuses, and `route` is its fifth reason
+
+A Note, not an amendment: it decides nothing this record had not already
+decided, and it changes no decision. What it records is a ruling taken on
+2026-09-21 (RF062-R1) about a case section 6 had put outside itself.
+
+**The case.** ADR-0005, section 7 has the handler record a run-time route
+miss on the routing ledger. That row was not built when the route
+registry landed, because the ledger's `binding_id` and `message_id` are
+both `NOT NULL` (`StatifierRouter.Migrations.V01.up/1`), an outbound
+route refusal has neither a binding nor an inbound message, and ADR-0004,
+section 4 fixes the `outcome` column to that record's inbound vocabulary,
+which has no word for a send refusal. This record had already solved that
+problem for its own case in section 6.
+
+**What was ruled.** That the route refusal takes section 6's convention
+rather than a parallel one of its own. So:
+
+- `send_refused` is read as the outcome of **any** send this package
+  refuses, not only an execution-to-execution one. Section 6's opening
+  sentence scopes that section's outcomes to an execution-to-execution
+  send, and it is the vocabulary rather than the section that widens: the
+  words, the reserved `binding_id` and the message id are shared, and
+  every rule section 6 states about an execution-to-execution send still
+  states it about that send alone.
+- The reserved name `execution` is the `binding_id` of a route refusal's
+  row too. That is the reading this record's consequences already give
+  the reserved id: it is how an outbound send's row is told from an
+  inbound delivery's, and a route refusal is outbound.
+- The `message_id` is ADR-0005, section 4's composed key, the same one
+  section 2 borrows for a delivered send.
+- One reason is added under `send_refused`, in the shape section 6's four
+  recordable reasons have - one lowercase word naming the thing at fault:
+
+| Reason | Means | Ledger row |
+|---|---|---|
+| `route` | the send's `target` names no route the host registered (ADR-0005, section 7) | one row, `key` and `execution_id` empty |
+
+  It is discovered before any target is resolved, so it leaves the two
+  columns empty for the same reason `document` and `key` do.
+
+**The scope is read the same way, and so is the gap.** Section 6's rule
+that a refusal with no ledger row is `unaddressed_sender` is a rule about
+an execution-to-execution send, and it is unchanged. The ledger's `scope`
+is the host's partition (ADR-0004, section 4), so a route refusal reads
+it from the sending execution's own address row exactly as section 1
+does, and a sender with no address row is reported and not recorded.
+A send refused on the send-processor shape is that case as well: its
+scope half is a session id and no address row answers to it.
+
+**What this Note does not do.** It adds no outcome word, widens no
+handler return - an unregistered route still answers
+`{:error, {:unregistered_route, name}}` - and leaves this record at
+proposed. The code half is `StatifierRouter.SendHandler`, whose
+documentation carries the same reading where an implementer will find it.
