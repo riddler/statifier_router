@@ -534,3 +534,76 @@ Decision 5 makes the timer queue a host obligation on the process-less
 shape. A host with no such queue cannot serve a delayed send on a route at
 all, and that is the honest reading rather than a silent drop after a
 resume.
+
+## Note (2026-09-21, sr-5em): the surface decision 6 named, as it landed
+
+A Note, not an amendment: it decides nothing and changes no decision.
+Decision 6's last paragraph named the route-registry bead as the
+dependency that would add decision 2's registry, decision 5's handler and
+the type strings it is registered under, and said this record's foot would
+take a dated Note citing that surface when it lands. This is that Note.
+Every module named here lands in the same commit as this Note.
+
+- **The registry is `:route_adapters`, not `:routes`.** Decision 2 did not
+  name the field, and decision 6 ruled that `:routes` on this struct is
+  the engine's `Statifier.Send.Routes` inside `:persistence_options`. A
+  second `:routes` on the same struct would have re-opened exactly the
+  ambiguity decision 6 closed, so the registry is spelled
+  `:route_adapters`, a map from route name to `{module, config}`.
+  `StatifierRouter.Config.route/3` resolves a name in a scope, applying
+  `:route_overrides` over the registered configuration.
+
+- **The adapter behaviour is `StatifierRouter.Route`, and it is one-way.**
+  Its one callback answers `:ok` or `{:error, term()}` and returns no data,
+  as decision 3 requires. It is handed decision 4's composed key as
+  `t:StatifierRouter.Route.idempotency_key/0`: the scope half, where in the
+  step the send sat, and the ordinal.
+
+- **The handler is `StatifierRouter.SendHandler`, and it serves both
+  shapes from one module, as decision 5 requires.** On the send-processor
+  shape it respects `Statifier.Send.Processor`'s split (statifier 2.6.0):
+  the planning callbacks compose the key and return one
+  `{:handler, module, payload}` instruction, and the adapter is reached
+  from `perform/2`, the impure half. Decision 5's sentence that both entry
+  points "call the same adapter" holds in substance; a handler that called
+  an adapter from `deliver/3` would depart from that behaviour's
+  documented purity.
+
+- **The type strings reach the engine through `:send_type`.** Decision 6
+  ruled that the snapshot cannot be derived from the registry.
+  `StatifierRouter.Config.new/1` builds it from the one type string the
+  host gives and the handler module, and a configuration that also
+  declares `:send_types` itself is refused rather than one of the two
+  silently winning.
+
+- **The durable timer queue is the host's, and this package states its
+  shape.** Decision 5 made the queue a host obligation and this
+  repository's migration is closed to a second table, so the queue is
+  `StatifierRouter.TimerQueue`, a behaviour a host registers.
+  `c:StatifierRouter.TimerQueue.cancel/3` takes the scope and the send id
+  separately, which is st-ADR-0054's cancellation key; decision 4's
+  composed key rides beside the row as the dedup key.
+
+- **Section 7's routing-ledger row is not built, and the reported miss
+  is.** An unregistered route misses, the miss is answered as an error,
+  and the step still commits, all as section 7 states. The row itself is
+  not written: the ledger's `binding_id` and `message_id` are both
+  `NOT NULL` (`StatifierRouter.Migrations.V01`), an outbound route refusal
+  has neither a binding nor an inbound message, and ADR-0004 section 4
+  fixes the `outcome` column to that record's inbound vocabulary, which
+  has no word for a send refusal. ADR-0006 solved that problem for its own
+  case, and its section 6 scopes those outcomes to execution-to-execution
+  sends. Minting a word or widening that vocabulary is record surface, so
+  it is left for a ruling. `StatifierRouter.SendHandler`'s own
+  documentation says the same thing where an implementer will read it.
+
+- **This record and `Statifier.Send.Processor` disagree about a delayed
+  send on the send-processor shape, and this Note only records it.**
+  Decision 5 says the live session holds its own timers for a
+  registered-type delayed send. That behaviour's moduledoc (statifier
+  2.6.0) says the session schedules nothing and the processor owns the
+  delay. Decision 5's other sentence - that only the process-less shape
+  writes the durable queue - is what the handler was built to, so on the
+  send-processor shape it writes no row and holds no timer, and answers a
+  delayed send with an error rather than dropping it. Which of the two
+  statements governs is not decided here.

@@ -89,6 +89,25 @@ defmodule StatifierRouter.Delivery do
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
 
+  ## What a route may not do while a delivery runs
+
+  A route called at the executor seam runs inside this transaction, under
+  the execution's lock, and ADR-0005 decision 5 forbids it to call back
+  into the sending execution: a nested step would run from the position
+  the outer step has not written yet and would then be overwritten by it.
+  `deliver/4` refuses while `StatifierRouter.SendHandler.sending_execution/0`
+  names an execution, answering
+  `{:error, {:reentrant_route, execution_id}}` before it opens anything,
+  so a route that calls `StatifierRouter.route/3` steps nothing and writes
+  nothing. A route that calls
+  `StatifierPersistence.Executions.step/5` directly reaches past this
+  door; the record forbids that call and this package has no guard for it.
+
+  The scope a delivery runs under is also set for the length of the call,
+  because the executor seam's context carries an execution id and a
+  content hash and no scope, and a per-scope route override needs one.
+  The seam runs in this same process, inside this transaction.
+
   An `{:error, reason}` from `create/4`, `step/5` or
   `StatifierPersistence.Storage.fetch_execution/2`,
   `{:error, {:unresolved_document, document, reason}}` when the resolver
@@ -116,6 +135,7 @@ defmodule StatifierRouter.Delivery do
   alias StatifierRouter.Resolver
   alias StatifierRouter.Schema.Address
   alias StatifierRouter.Schema.Ledger
+  alias StatifierRouter.SendHandler
 
   @terminal [:completed, :failed, :cancelled]
 
@@ -127,6 +147,15 @@ defmodule StatifierRouter.Delivery do
   @spec deliver(Config.t(), Binding.t(), String.t(), StatifierRouter.delivery()) ::
           StatifierRouter.outcome() | {:error, term()}
   def deliver(%Config{} = config, %Binding{} = binding, key, delivery) do
+    case SendHandler.sending_execution() do
+      nil -> delivered(config, binding, key, delivery)
+      execution_id -> {:error, {:reentrant_route, execution_id}}
+    end
+  end
+
+  defp delivered(config, binding, key, delivery) do
+    SendHandler.put_delivery_scope(delivery.scope)
+
     config.repo.transaction(fn ->
       case claimed(config, binding, key, delivery) do
         {:ok, outcome} -> outcome
@@ -137,6 +166,8 @@ defmodule StatifierRouter.Delivery do
       {:ok, outcome} -> outcome
       {:error, _reason} = error -> error
     end
+  after
+    SendHandler.delete_delivery_scope()
   end
 
   # The claim is the transaction's first write under every create mode: a
