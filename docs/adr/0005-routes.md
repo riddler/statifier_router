@@ -643,9 +643,18 @@ the host's partition, read from the sending execution's address row.
 ledger's `scope` is `NOT NULL` (`StatifierRouter.Migrations.V01.up/1`),
 and a sender that has no address row has no scope to write there. That is
 the gap ADR-0006, section 6 already names for `unaddressed_sender`, and a
-route refusal falls in it for the same reason rather than a new one. On
-the send-processor shape the scope half of the key is a session id, which
-no address row answers to, so that shape reports and does not record.
+route refusal falls in it for the same reason rather than a new one.
+
+What is looked up is the scope half of decision 4's composed key and
+nothing else: `StatifierRouter.Addresses.by_execution/2` is asked for
+that value's address row, and a scope half that names one is recorded
+while a scope half that names none is reported only. The shape the
+refusal arrived on does not decide it. On the send-processor shape the
+scope half is the sender's session id, and whether that names an address
+row is the host's arrangement rather than a property of this package:
+ADR-0006, section 4 holds that at this package's seam the sender's
+session id is its execution id, so a host that keeps the two the same is
+recorded on that shape as well.
 
 **The report is unchanged, and it is what section 7 puts first.** The
 handler still answers `{:error, {:unregistered_route, name}}` on both
@@ -653,13 +662,25 @@ shapes, the step the sender took still commits, and the row records that
 the sender was told rather than standing in for telling it - which is the
 rule ADR-0006, section 3 states for its own refusals.
 
-**A failed ledger write does not take the sender's step down.** The write
-happens at the executor seam, inside the sending execution's own
-transaction, where any failed statement leaves that transaction aborted
-whether or not the caller handles the error. So the insert is bracketed
-in a SQL savepoint of its own and rolls back to it on failure, which is
-what `StatifierRouter.Delivery.deliver_event/4` does for the same seam
-and for the same reason. The miss is reported either way.
+**A ledger insert that fails does not take the sender's step down, and
+the bracket that holds that open is not an absolute.** The write happens
+at the executor seam, inside the sending execution's own transaction,
+where any failed statement leaves that transaction aborted whether or not
+the caller handles the error. So the insert is bracketed in a SQL
+savepoint of its own and rolls back to it on failure, which is what
+`StatifierRouter.Delivery.deliver_event/4` does for the same seam and for
+the same reason. An insert that fails is rolled back and the miss is
+still reported.
+
+What the bracket does not cover is the savepoint statements themselves.
+Only the insert is guarded, so a release that raises after a successful
+insert cannot become a rollback of the row just written and its own
+failure is swallowed; but a connection that has gone away raises out of
+the savepoint statements, and that raise stands and reaches the sender.
+A bracket cannot settle a transaction it can no longer speak to. What it
+buys is narrower than an absolute and is the thing section 7 needs: a
+ledger row this package could not write is not itself what takes the
+sender's step down.
 
 **Where the code is.** `StatifierRouter.SendHandler`, whose moduledoc
 section on the unregistered route says the same thing where an

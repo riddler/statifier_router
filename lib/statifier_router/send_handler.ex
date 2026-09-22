@@ -160,8 +160,18 @@ defmodule StatifierRouter.SendHandler do
   ADR-0006, section 1 reads it, so a sender with no address row is
   reported and not recorded, the same gap section 6 names for
   `unaddressed_sender` and for the same reason: the ledger's `scope` is
-  `NOT NULL`. The send-processor shape is that case as well, since its
-  scope half is a session id no address row answers to.
+  `NOT NULL`.
+
+  The lookup is on the scope half of the composed key, whatever the shape
+  put there, and on nothing else: `StatifierRouter.Addresses.by_execution/2`
+  is asked for that value's address row. Which shape a refusal came in on
+  is not what decides whether a row is written - a scope half that names
+  an address row is recorded, one that names none is reported only. On
+  the send-processor shape the scope half is the sender's session id, and
+  whether that finds a row is the host's arrangement rather than this
+  package's guarantee: ADR-0006, section 4 holds that at this package's
+  seam the sender's session id is its execution id, so a host that keeps
+  them the same is recorded on that shape too.
 
   The row records that the sender was told and does not stand in for
   telling it: the return is `{:error, {:unregistered_route, name}}` on
@@ -171,9 +181,20 @@ defmodule StatifierRouter.SendHandler do
   `StatifierRouter.Delivery.deliver_event/4` documents at length: this
   handler runs at the executor seam inside the sending execution's own
   transaction, and a failed insert there leaves that transaction aborted,
-  which would take the sender's step down with it. A ledger write that
-  fails rolls back to its own savepoint and nothing else, and the miss is
-  reported either way.
+  which would take the sender's step down with it. An insert that fails
+  rolls back to that savepoint and nothing else, and the miss is reported
+  either way.
+
+  The bracket is not an absolute, and the code does not pretend it is.
+  Only the insert sits inside the guard, so a release that raises after a
+  successful insert cannot turn into a rollback of the row it just wrote;
+  that release's own failure is swallowed. What is left uncovered is the
+  savepoint statements themselves: a connection that has gone away raises
+  out of `SAVEPOINT` or out of the rollback, and that raise stands and
+  reaches the sender, because a bracket cannot settle a transaction it
+  can no longer speak to. What the bracket buys is that a ledger row this
+  package could not write is not itself the thing that takes the sender
+  down.
   """
 
   @behaviour Statifier.Send.Processor
@@ -647,8 +668,9 @@ defmodule StatifierRouter.SendHandler do
 
     # The transaction is what gives the savepoint something to live in
     # when this handler is called outside one, as it is on the
-    # send-processor shape; at the executor seam it nests and the
-    # savepoint is what settles this insert on its own.
+    # send-processor shape - which reaches this insert whenever the key's
+    # scope half names an address row; at the executor seam it nests and
+    # the savepoint is what settles this insert on its own.
     config.repo.transaction(fn -> insert_guarded(config, row) end)
     :ok
   end
@@ -658,22 +680,54 @@ defmodule StatifierRouter.SendHandler do
   # transaction is left aborted whether or not the caller handles the
   # error. So the insert gets its own savepoint and its failure is
   # rolled back to it. Reporting the miss is the obligation ADR-0005
-  # section 7 puts first, and it is met either way. A connection that is
-  # gone raises out of the rollback too, and that raise stands.
+  # section 7 puts first, and it is met either way.
+  #
+  # ONLY the insert sits inside the `try`, and that is the whole point of
+  # the shape. A `RELEASE SAVEPOINT` in there would invert the bracket: a
+  # raise from the release fires the `rescue`, which then issues
+  # `ROLLBACK TO SAVEPOINT` against a savepoint that may already be gone,
+  # and that second raise escapes into the sender's step - the one thing
+  # this bracket exists to prevent. So the release runs after the `try`,
+  # on the success path only, through `release/2`, which swallows its own
+  # failure: the row is written by the time it runs, and a release that
+  # cannot run means the connection is already gone, which is the
+  # sender's transaction to lose and not this row's to take.
+  #
+  # The rollback keeps no such guard, deliberately. It runs only where
+  # the insert failed, so the savepoint is known to be there, and a raise
+  # out of it means the connection is gone - and that raise stands.
   @spec insert_guarded(Config.t(), Ledger.t()) :: :ok | :error
   defp insert_guarded(config, row) do
     savepoint = "sr_route_refusal_#{System.unique_integer([:positive])}"
     config.repo.query!("SAVEPOINT " <> savepoint)
 
-    try do
-      config.repo.insert!(Config.put_meta(config, row))
-      config.repo.query!("RELEASE SAVEPOINT " <> savepoint)
+    inserted? =
+      try do
+        config.repo.insert!(Config.put_meta(config, row))
+        true
+      rescue
+        _insert_failed -> false
+      end
+
+    if inserted? do
+      release(config, savepoint)
       :ok
-    rescue
-      _insert_failed ->
-        config.repo.query!("ROLLBACK TO SAVEPOINT " <> savepoint)
-        :error
+    else
+      config.repo.query!("ROLLBACK TO SAVEPOINT " <> savepoint)
+      :error
     end
+  end
+
+  # The release of a savepoint whose insert already landed. Its failure
+  # is swallowed rather than reported, for the reason `insert_guarded/2`
+  # gives: it cannot lose the row, and it must not be the statement that
+  # takes the sender down.
+  @spec release(Config.t(), String.t()) :: :ok
+  defp release(config, savepoint) do
+    config.repo.query!("RELEASE SAVEPOINT " <> savepoint)
+    :ok
+  rescue
+    _release_failed -> :ok
   end
 
   @spec key(Send.t() | SendDelayed.t(), String.t()) :: Route.idempotency_key()

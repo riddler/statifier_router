@@ -483,8 +483,17 @@ an execution-to-execution send, and it is unchanged. The ledger's `scope`
 is the host's partition (ADR-0004, section 4), so a route refusal reads
 it from the sending execution's own address row exactly as section 1
 does, and a sender with no address row is reported and not recorded.
-A send refused on the send-processor shape is that case as well: its
-scope half is a session id and no address row answers to it.
+
+The lookup is on the scope half of ADR-0005, section 4's composed key and
+on nothing else - `StatifierRouter.Addresses.by_execution/2` is asked for
+that value's address row - so whether a refusal is recorded turns on
+whether that value names a row, not on which shape the send arrived on.
+The send-processor shape is not exempt by construction: section 4 of this
+record holds that at this package's seam the sender's session id is its
+execution id, so a host that keeps the two the same finds the address row
+on that shape too and its refusal is recorded. A host whose session ids
+answer to no address row is in the gap above, for the reason the gap
+names.
 
 **What this Note does not do.** It adds no outcome word, widens no
 handler return - an unregistered route still answers
