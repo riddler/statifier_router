@@ -80,13 +80,21 @@ binding whose `order` is `:none` is not partitioned by its key.
   reaches with `<send>`, registered per host and overridable per scope.
 - **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
   host calls from its own controller or plug.
+- **Execution-to-execution sends**: a `<send>` whose `target` is the reserved
+  name `StatifierRouter.SendHandler.execution_target/0` resolves through the
+  address table and is delivered by the same transaction a binding's delivery
+  uses.
+- **The source invoke**: an `<invoke>` whose lifetime is a subscription's,
+  through `StatifierRouter.subscribe/3`, `StatifierRouter.cancel/2` and the
+  delegate a host's own invoke handler calls,
+  `StatifierRouter.SourceInvoke`.
 
 ## What it does not own
 
 - The sinks themselves: a route adapter, what it writes to, and its
   retries are the host's.
-- Execution-to-execution sends.
-- The source invoke.
+- The invoke handler itself: the host registers it with the engine and
+  delegates to `StatifierRouter.SourceInvoke`.
 - Any queue adapter: Broadway's producers are the host's choice.
 - Timers: those are [statifier_oban](https://github.com/riddler/statifier_oban)'s,
   and the durable queue a delayed route send is recorded on is the host's.
@@ -438,8 +446,8 @@ next retire call counts one address fewer.
 Every piece named under "What this package owns" is built in this release.
 The Broadway front is `StatifierRouter.Broadway`. The binding is
 `StatifierRouter.Binding`. The tables behind the rest - the address table,
-the dedupe table and the routing ledger - are created by
-`StatifierRouter.Migrations` and read through the schemas in
+the dedupe table, the routing ledger and the subscription table - are
+created by `StatifierRouter.Migrations` and read through the schemas in
 `StatifierRouter.Schema`. `StatifierRouter.route/3` evaluates the bindings
 for an event and writes the ledger row of a refusal, and
 `StatifierRouter.Delivery`, its default delivery module, gets or creates the
@@ -453,11 +461,15 @@ schedules the two reapers, `StatifierRouter.Dedupe.reap/2` and
 `StatifierRouter.Config`, the adapter behaviour `StatifierRouter.Route`,
 the queue behaviour `StatifierRouter.TimerQueue`, and
 `StatifierRouter.SendHandler`, which serves both shapes a registered
-type's send reaches a host in. The routing-ledger row for a route refusal
-is the one piece of ADR-0005 that is not built: the reported miss and the
-step that still commits are, and `StatifierRouter.SendHandler` says which
-column values are unruled. Each piece lands behind the decision record
-that fixes it, in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
+type's send reaches a host in. A send whose `target` names no registered
+route is reported to the sender, leaves the step it was sent from standing,
+and writes one `send_refused` routing-ledger row;
+`StatifierRouter.SendHandler` says what each of that row's columns holds.
+The source invoke is `StatifierRouter.subscribe/3`,
+`StatifierRouter.cancel/2` and the delegate
+`StatifierRouter.SourceInvoke`, over the subscription table
+`StatifierRouter.Migrations.V02` adds. Each piece lands behind the
+decision record that fixes it, in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
 
 ## Installation
 
