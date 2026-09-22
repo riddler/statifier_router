@@ -1,6 +1,6 @@
 # ADR-0007: The source invoke: an invocation's lifetime is a subscription's lifetime, what `cancel/2` undoes, the cleanup table, durable mode only, and a subscription as its own table
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -264,3 +264,37 @@ this one knows which half of `<invoke>` this package supports.
   invocation's cancellation; and any batching or windowing of what a
   subscription delivers, which ADR-0001's other two reserved keys hold
   open.
+
+## Note (2026-09-22, sr-q8p): accepted
+
+Status flipped from `proposed` to `accepted` on line 3, on the operator's
+word after statifier_router 0.2.0 was published (`251abb7`, tagged
+`v0.2.0`). Every claim this record makes was re-verified by anchor against
+`origin/main` at `251abb7`, with the dependency sources `mix.lock` resolves
+there: statifier 2.6.0 and statifier_persistence 0.13.0.
+
+The body carries no sentence that speaks of this record's own status, so
+nothing above this Note was edited: the status word on line 3 is the only
+changed line.
+
+Two things about the record as written, neither a correction:
+
+- **Where the code stands.** The decision landed in
+  `StatifierRouter.SourceInvoke`, whose `start/3` and `cancel/3` turn the
+  two effects into `StatifierRouter.subscribe/3` and
+  `StatifierRouter.cancel/2`; the new table of section 6 is
+  `StatifierRouter.Migrations.V02`. Section 6's "as the next router
+  migration version; no other bead adds one" is met by that one version.
+- **The open question section 5's neighbour raises.** The closing section's
+  "it subscribes and unsubscribes, and every event it wants arrives through
+  the ordinary binding path" is this record's own decision, not a stale
+  claim: the subscription row is not a gate on delivery, and that absence is
+  pinned by test in `test/statifier_router/source_invoke_test.exs`
+  ("an event routes through its binding whether or not the invocation is
+  subscribed"). Whether a bounded subscription should also gate what
+  reaches the execution - which this record's Context motivates but its
+  Decision does not build - is the open question RF062-R3, for a later
+  record to answer. Accepting this record does not answer it.
+
+The status cell for this record in `docs/adr/README.md` is flipped by a
+separate bead after all seven flips, so the index lags this file until then.
