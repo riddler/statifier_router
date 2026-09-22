@@ -484,18 +484,35 @@ license it.
   now ships.** `StatifierRouter.Broadway` is a `Broadway` pipeline module,
   and section 9 still holds as written: the host starts that pipeline in
   the host's own supervision tree, and the package starts nothing. The
-  module's own documentation says so, and ADR-0005 and ADR-0006 both
-  describe this package as driven process-less.
+  module's own documentation says so, `mix.exs` gives the application no
+  `mod:` entry, so this package's own OTP application starts nothing, and
+  ADR-0005 and ADR-0006 both describe this package as driven process-less.
+- **The Context's four claims about statifier_persistence were not
+  re-audited, and are anchored where the record anchors them.** The
+  single-writer input log, both doors writing through a caller's
+  transaction, `step/5`'s own serialization and effects being at least
+  once are claims about the dependency's behaviour, each read at the
+  statifier_persistence commit the Context names; this flip moves no pin,
+  leaving `mix.lock` unchanged, so it re-verified this package's own
+  sentences and left those four standing on their cited anchors. A later
+  flip or amendment that also moves that pin re-audits them.
 - **The two earlier Notes stand unchanged.** The sr-5pi Note
   (2026-09-20) and the sr-bv1 Note (2026-09-21) are part of what is
   accepted here; the sentences they qualify are read as they qualify them.
-- **One open question sits against this record and is not decided by the
-  flip.** `sr-7v9` asks whether `StatifierRouter.Broadway`'s partitioner
+- **Two open questions sit against this record, and the flip decides
+  neither.** `sr-7v9` asks whether `StatifierRouter.Broadway`'s partitioner
   should rescue a host `:normalize` that raises, or whether taking the
   producer stage down is the intended contract. Nothing is acknowledged
   when it happens, so section 1's rollback guarantee is unaffected either
   way; the answer is an amendment or a new record, not a reading of this
-  one.
+  one. `sr-37a` sits beside it: section 1 says a raise inside the delivery
+  "rolls it back the same way" and that "nothing is left half written",
+  and what was measured is that such a raise also destroys the **enclosing**
+  transaction, a rescue inside it not being enough, because the next
+  statement raises `DBConnection.ConnectionError` with "transaction rolling
+  back" and the connection disconnects. Section 1's sentence does not
+  caveat that, and this flip does not clear the tension; it is named here
+  so the next reader meets it, and deciding it is a record's call.
 - **The index lags by design.** The status cell for this record in
   `docs/adr/README.md` is flipped by a separate bead after all seven
   records have flipped.
