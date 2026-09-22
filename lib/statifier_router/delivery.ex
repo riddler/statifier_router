@@ -4,8 +4,15 @@ defmodule StatifierRouter.Delivery do
   binding's delivery of one event, as one transaction on the host's repo
   (ADR-0003, section 1).
 
-  `deliver/4` is the seam `StatifierRouter.route/3` calls. It reads five
-  options of the configuration, four of them required:
+  It has two doors onto one transaction. `deliver/4` is the seam
+  `StatifierRouter.route/3` calls for a binding, and `deliver_event/4` the
+  one `StatifierRouter.SendHandler` calls for an execution-to-execution
+  send (ADR-0006, section 2), which brings its own event and its own
+  idempotency key and is otherwise settled here exactly as a binding's
+  delivery is.
+
+  `deliver/4` reads five options of the configuration, four of them
+  required:
 
     * `:store` - the `%StatifierPersistence.Storage{}` executions are kept
       in. It must be built over the configuration's own `:repo`, so that
@@ -139,6 +146,38 @@ defmodule StatifierRouter.Delivery do
 
   @terminal [:completed, :failed, :cancelled]
 
+  @typedoc """
+  What one delivery settles, past the event itself: the name its ledger row
+  and its dedupe claim are written under, the document its address names,
+  the `create` mode a miss follows, and the dedupe horizon that claim uses.
+
+  A `t:StatifierRouter.Binding.t/0` is one of these, and it is the one
+  `deliver/4` builds. The other is ADR-0006's execution target: the
+  reserved name `execution`, the `document` param the chart wrote, the
+  `create` param it wrote, and ADR-0001, section 1's default horizon, since
+  no binding supplies one there.
+  """
+  @type plan :: %{
+          required(:id) => String.t(),
+          required(:document) => String.t(),
+          required(:create) => :if_absent | :never | :always_new,
+          required(:dedupe) => %{by: :message_id, horizon_ms: pos_integer()},
+          optional(atom()) => term()
+        }
+
+  @typedoc """
+  The message one delivery carries: the event stepped into the execution,
+  the id its dedupe row and its ledger row are written under, the scope it
+  runs in and the time its rows carry.
+  """
+  @type envelope :: %{
+          required(:event) => Event.t(),
+          required(:message_id) => String.t(),
+          required(:scope) => String.t(),
+          required(:now) => DateTime.t(),
+          optional(atom()) => term()
+        }
+
   @doc """
   Delivers one event for one binding under `key`, as the module
   documentation describes, and answers with the outcome or
@@ -153,11 +192,46 @@ defmodule StatifierRouter.Delivery do
     end
   end
 
-  defp delivered(config, binding, key, delivery) do
+  @doc """
+  Delivers one prebuilt event under `plan`, in the same transaction and the
+  same order `deliver/4` uses, and answers with the same outcomes.
+
+  This is the door ADR-0006, section 2 names: an execution-to-execution
+  send resolves its address, gets or creates its execution and writes its
+  dedupe and ledger rows through this one function, so neither the unique
+  index race nor the ledger has a second implementation here. Its caller
+  owns three things `deliver/4` owns for a binding: it builds the event
+  (ADR-0006, section 4 gives an execution-to-execution send the engine
+  builder rather than `Statifier.Event.external/2`), it composes the
+  `message_id`, and it decides whether a scope override is in force.
+  `StatifierRouter.SendHandler` is that caller.
+
+  The reentrancy refusal `deliver/4` opens with is not repeated here. It
+  guards the route door, and an execution-to-execution send never enters a
+  route: `StatifierRouter.SendHandler` branches on the reserved target name
+  before it marks a route as running.
+  """
+  @spec deliver_event(Config.t(), plan(), String.t(), envelope()) ::
+          StatifierRouter.outcome() | {:error, term()}
+  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery),
+    do: in_transaction(config, plan, key, delivery)
+
+  defp delivered(config, %Binding{} = binding, key, delivery) do
     SendHandler.put_delivery_scope(delivery.scope)
 
+    in_transaction(
+      config,
+      binding,
+      key,
+      Map.put(delivery, :event, Event.external(delivery.name, data: delivery.data))
+    )
+  after
+    SendHandler.delete_delivery_scope()
+  end
+
+  defp in_transaction(config, plan, key, delivery) do
     config.repo.transaction(fn ->
-      case claimed(config, binding, key, delivery) do
+      case claimed(config, plan, key, delivery) do
         {:ok, outcome} -> outcome
         {:error, reason} -> config.repo.rollback(reason)
       end
@@ -166,46 +240,44 @@ defmodule StatifierRouter.Delivery do
       {:ok, outcome} -> outcome
       {:error, _reason} = error -> error
     end
-  after
-    SendHandler.delete_delivery_scope()
   end
 
   # The claim is the transaction's first write under every create mode: a
   # duplicate touches nothing past it (ADR-0003, sections 1 and 6).
-  defp claimed(config, binding, key, delivery) do
-    case Dedupe.claim(config, binding, delivery.message_id, delivery.now) do
-      :new -> by_mode(config, binding, key, delivery)
-      :duplicate -> duplicate(config, binding, key, delivery)
+  defp claimed(config, plan, key, delivery) do
+    case Dedupe.claim(config, plan, delivery.message_id, delivery.now) do
+      :new -> by_mode(config, plan, key, delivery)
+      :duplicate -> duplicate(config, plan, key, delivery)
     end
   end
 
-  defp by_mode(config, %Binding{create: :always_new} = binding, key, delivery),
-    do: create(config, binding, key, delivery, mint_execution_id(), nil)
+  defp by_mode(config, %{create: :always_new} = plan, key, delivery),
+    do: create(config, plan, key, delivery, mint_execution_id(), nil)
 
-  defp by_mode(config, binding, key, delivery) do
-    case lookup(config, delivery.scope, binding.document, key) do
-      %Address{} = row -> existing(config, binding, key, delivery, row)
-      nil -> absent(config, binding, key, delivery)
+  defp by_mode(config, plan, key, delivery) do
+    case lookup(config, delivery.scope, plan.document, key) do
+      %Address{} = row -> existing(config, plan, key, delivery, row)
+      nil -> absent(config, plan, key, delivery)
     end
   end
 
-  defp absent(config, %Binding{create: :never} = binding, key, delivery) do
-    record(config, binding, key, delivery, "dropped: no_execution", nil)
-    {:ok, {:dropped, binding.id, :no_execution}}
+  defp absent(config, %{create: :never} = plan, key, delivery) do
+    record(config, plan, key, delivery, "dropped: no_execution", nil)
+    {:ok, {:dropped, plan.id, :no_execution}}
   end
 
-  defp absent(config, %Binding{create: :if_absent} = binding, key, delivery),
-    do: insert_or_existing(config, binding, key, delivery)
+  defp absent(config, %{create: :if_absent} = plan, key, delivery),
+    do: insert_or_existing(config, plan, key, delivery)
 
-  defp duplicate(config, binding, key, delivery) do
-    record(config, binding, key, delivery, "duplicate", nil)
-    {:ok, {:duplicate, binding.id}}
+  defp duplicate(config, plan, key, delivery) do
+    record(config, plan, key, delivery, "duplicate", nil)
+    {:ok, {:duplicate, plan.id}}
   end
 
-  defp insert_or_existing(config, binding, key, delivery) do
+  defp insert_or_existing(config, plan, key, delivery) do
     row = %Address{
       scope: delivery.scope,
-      document: binding.document,
+      document: plan.document,
       key: key,
       execution_id: mint_execution_id(),
       inserted_at: delivery.now
@@ -218,36 +290,36 @@ defmodule StatifierRouter.Delivery do
       %Address{id: nil} ->
         # The race's loser: the winner's row is committed, and this
         # statement, not the insert, is what reads it (ADR-0003, section 3).
-        winner = lookup!(config, delivery.scope, binding.document, key)
-        existing(config, binding, key, delivery, winner)
+        winner = lookup!(config, delivery.scope, plan.document, key)
+        existing(config, plan, key, delivery, winner)
 
       %Address{} = inserted ->
-        create(config, binding, key, delivery, inserted.execution_id, inserted)
+        create(config, plan, key, delivery, inserted.execution_id, inserted)
     end
   end
 
   # `row` is the address row the execution id was written to, or nil under
   # :always_new, which writes none (ADR-0002, section 7).
-  defp create(config, binding, key, delivery, execution_id, row) do
-    with {:ok, machine} <- resolve(config, delivery.scope, binding.document),
+  defp create(config, plan, key, delivery, execution_id, row) do
+    with {:ok, machine} <- resolve(config, delivery.scope, plan.document),
          {:ok, execution, _state} <-
            Executions.create(config.store, execution_id, machine, create_options(config)) do
       if execution.status in @terminal do
-        finished(config, binding, key, delivery, execution_id, row)
+        finished(config, plan, key, delivery, execution_id, row)
       else
-        step(config, binding, key, delivery, {execution_id, row}, machine, :created_and_delivered)
+        step(config, plan, key, delivery, {execution_id, row}, machine, :created_and_delivered)
       end
     end
   end
 
-  defp existing(config, binding, key, delivery, row) do
+  defp existing(config, plan, key, delivery, row) do
     case Storage.fetch_execution(config.store, row.execution_id) do
       {:ok, %{status: status}} when status in @terminal ->
-        finished(config, binding, key, delivery, row.execution_id, row)
+        finished(config, plan, key, delivery, row.execution_id, row)
 
       {:ok, record} ->
         with {:ok, machine} <- chart(config, record.content_hash) do
-          step(config, binding, key, delivery, {row.execution_id, row}, machine, :delivered)
+          step(config, plan, key, delivery, {row.execution_id, row}, machine, :delivered)
         end
 
       {:error, _reason} = error ->
@@ -255,26 +327,30 @@ defmodule StatifierRouter.Delivery do
     end
   end
 
-  defp step(config, binding, key, delivery, {execution_id, row}, machine, outcome) do
-    event = Event.external(delivery.name, data: delivery.data)
-
-    case Executions.step(config.store, execution_id, machine, event, step_options(config)) do
+  defp step(config, plan, key, delivery, {execution_id, row}, machine, outcome) do
+    case Executions.step(
+           config.store,
+           execution_id,
+           machine,
+           delivery.event,
+           step_options(config)
+         ) do
       {:ok, _execution, _state} ->
-        record(config, binding, key, delivery, Atom.to_string(outcome), execution_id)
-        {:ok, {outcome, binding.id, execution_id}}
+        record(config, plan, key, delivery, Atom.to_string(outcome), execution_id)
+        {:ok, {outcome, plan.id, execution_id}}
 
       {:discarded, _execution} ->
-        finished(config, binding, key, delivery, execution_id, row)
+        finished(config, plan, key, delivery, execution_id, row)
 
       {:error, _reason} = error ->
         error
     end
   end
 
-  defp finished(config, binding, key, delivery, execution_id, row) do
+  defp finished(config, plan, key, delivery, execution_id, row) do
     if row, do: stamp_terminal_seen(config, row, delivery.now)
-    record(config, binding, key, delivery, "dropped: finished", execution_id)
-    {:ok, {:dropped, binding.id, :finished}}
+    record(config, plan, key, delivery, "dropped: finished", execution_id)
+    {:ok, {:dropped, plan.id, :finished}}
   end
 
   # The two doors take the snapshot in different places, and a helper that

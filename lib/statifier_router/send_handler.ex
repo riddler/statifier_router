@@ -92,6 +92,50 @@ defmodule StatifierRouter.SendHandler do
   and no reentrancy guard exists there; the record forbids that call, and
   this package cannot enforce it.
 
+  ## The execution target
+
+  One `target` name is reserved, `execution_target/0`'s (ADR-0006, section
+  1). A send that writes it is not handed to a route at all: it names
+  another durable execution by the `document` and `key` params the chart
+  wrote, under the sending execution's own scope, and is delivered through
+  `StatifierRouter.Delivery.deliver_event/4` - the same transaction, the
+  same get-or-create, the same dedupe row and the same ledger row an
+  inbound delivery uses.
+
+      <send type="myapp:router" target="execution" event="pair.joined">
+        <param name="document" expr="'placement_counter'"/>
+        <param name="key" expr="placement"/>
+      </send>
+
+  The scope is never a param: it is read from the sending execution's own
+  address row (`StatifierRouter.Addresses.by_execution/2`), so a chart can
+  address only inside the scope it runs in. An execution with no address
+  row - what `:always_new` produces - has no scope, and its send is
+  refused as `unaddressed_sender`, the one refusal with no ledger row,
+  because the ledger's `scope` is `NOT NULL` (ADR-0006, section 6).
+
+  The branch is in `handle_effect/3`, beside `mine?/2` and before
+  `hand_off/3`, and that placement is load-bearing rather than tidy.
+  `hand_off/3` marks a route as running for the length of the dispatch,
+  and `StatifierRouter.Delivery.deliver/4` refuses while that mark is set
+  (ADR-0005, decision 5). That refusal protects the sending execution's
+  own position; ADR-0006 needs a step on a **different** execution inside
+  the sender's transaction, which decision 5 never forbade, and section 6
+  refuses the one case it would collide with - a send to the sender's own
+  address - for that very lock reason. Branching before `hand_off/3` keeps
+  the two mechanisms apart rather than narrowing the guard.
+
+  A refusal and a miss are reported to the sender the way ADR-0005,
+  section 7 reports an unregistered route: `{:error, reason}` from this
+  handler, which at the executor seam re-enters the sending execution as
+  `error.communication` carrying the send's `sendid` and does not roll its
+  step back. `{:send_refused, reason}` carries one of section 6's five
+  reasons and `{:send_undelivered, why}` a `dropped: no_execution` or a
+  `dropped: finished`. Four of the five refusals also write one
+  `send_refused` ledger row, whose `reason` column holds the record's own
+  word for it: `document`, `key`, `create` or `self_address`. The row
+  records that the sender was told; it does not stand in for telling it.
+
   ## The unregistered route
 
   When the send's `target` names no registered route the lookup misses,
@@ -118,12 +162,24 @@ defmodule StatifierRouter.SendHandler do
   alias Statifier.Effect.Send
   alias Statifier.Effect.SendDelayed
   alias Statifier.Send.Event, as: SendEvent
+  alias StatifierRouter.Addresses
   alias StatifierRouter.Config
+  alias StatifierRouter.Delivery
   alias StatifierRouter.Route
+  alias StatifierRouter.Schema.Address
+  alias StatifierRouter.Schema.Ledger
 
   @config_key {__MODULE__, :config}
   @scope_key {__MODULE__, :delivery_scope}
   @in_route_key {__MODULE__, :in_route}
+
+  @execution_target "execution"
+  @envelope_params ["document", "key", "create"]
+
+  # ADR-0006, section 2: no binding supplies a horizon here, so the claim
+  # takes ADR-0001, section 1's default, the same one
+  # `StatifierRouter.Binding`'s struct carries.
+  @dedupe %{by: :message_id, horizon_ms: 259_200_000}
 
   @typedoc "Why this handler did not hand a send off."
   @type reason ::
@@ -131,7 +187,26 @@ defmodule StatifierRouter.SendHandler do
           | {:no_timer_queue, String.t() | nil}
           | {:delayed_send_unsupported, String.t() | nil}
           | {:no_config, module()}
+          | {:send_refused, refusal()}
+          | {:send_undelivered, :no_execution | :finished}
           | term()
+
+  @typedoc """
+  Why an execution-to-execution send was refused (ADR-0006, section 6).
+  `unaddressed_sender` is the one of the five that writes no ledger row.
+  """
+  @type refusal :: :unaddressed_sender | :document | :key | :create | :self_address
+
+  @doc """
+  The one `target` name ADR-0006, section 1 reserves for the execution
+  target. A host may register no route under it and give no binding this
+  `id`; `StatifierRouter.Config.new/1` refuses both.
+
+      iex> StatifierRouter.SendHandler.execution_target()
+      "execution"
+  """
+  @spec execution_target() :: String.t()
+  def execution_target, do: @execution_target
 
   # -------------------------------------------------------------------
   # The process-less shape
@@ -148,7 +223,11 @@ defmodule StatifierRouter.SendHandler do
   def handle_effect(config, effect, context)
 
   def handle_effect(%Config{} = config, {:send, %Send{} = send}, %{execution_id: scope}) do
-    if mine?(config, send), do: hand_off(config, send, scope), else: :ok
+    cond do
+      not mine?(config, send) -> :ok
+      send.target == @execution_target -> to_execution(config, send, scope)
+      true -> hand_off(config, send, scope)
+    end
   end
 
   def handle_effect(
@@ -285,6 +364,179 @@ defmodule StatifierRouter.SendHandler do
       :error -> refusal(name, key)
     end
   end
+
+  # -------------------------------------------------------------------
+  # The execution target (ADR-0006). Reached from handle_effect/3 before
+  # hand_off/3, so nothing here runs with a route marked as running.
+  # -------------------------------------------------------------------
+
+  @spec to_execution(Config.t(), Send.t(), String.t()) :: :ok | {:error, reason()}
+  defp to_execution(config, send, sender) do
+    # The sender's scope is read from its own address row, never written by
+    # the author (ADR-0006, section 1). A sender with no row has no scope,
+    # and the ledger cannot record a refusal without one (section 6).
+    case Addresses.by_execution(config, sender) do
+      %Address{} = row -> addressed(config, send, sender, row, DateTime.utc_now())
+      nil -> {:error, {:send_refused, :unaddressed_sender}}
+    end
+  end
+
+  @spec addressed(Config.t(), Send.t(), String.t(), Address.t(), DateTime.t()) ::
+          :ok | {:error, reason()}
+  defp addressed(config, send, sender, %Address{scope: scope} = row, now) do
+    case envelope(send, row, sender) do
+      {:ok, document, key, create} ->
+        deliver_to(config, send, sender, {scope, document, key, create}, now)
+
+      {:refused, why, row_key, execution_id} ->
+        refused(config, send, sender, {scope, row_key, execution_id}, why, now)
+    end
+  end
+
+  @spec deliver_to(
+          Config.t(),
+          Send.t(),
+          String.t(),
+          {String.t(), String.t(), String.t(), :if_absent | :never},
+          DateTime.t()
+        ) :: :ok | {:error, reason()}
+  defp deliver_to(config, send, sender, {scope, document, key, create}, now) do
+    plan = %{id: @execution_target, document: document, create: create, dedupe: @dedupe}
+
+    delivery = %{
+      event: delivered_event(config, send, sender),
+      message_id: message_id(key(send, sender)),
+      scope: scope,
+      now: now
+    }
+
+    config
+    |> Delivery.deliver_event(plan, key, delivery)
+    |> reported()
+  end
+
+  # The five outcomes ADR-0006, section 6 reuses from ADR-0004 and what
+  # each tells the sender: a delivery, a create and a duplicate landed;
+  # the two drops did not reach an execution and are reported as well as
+  # recorded (ADR-0006, section 3).
+  @spec reported(StatifierRouter.outcome() | {:error, term()}) :: :ok | {:error, reason()}
+  defp reported({:created_and_delivered, _name, _execution_id}), do: :ok
+  defp reported({:delivered, _name, _execution_id}), do: :ok
+  defp reported({:duplicate, _name}), do: :ok
+  defp reported({:dropped, _name, why}), do: {:error, {:send_undelivered, why}}
+  defp reported({:error, _reason} = error), do: error
+
+  # ADR-0006, section 4. The builder takes no data option and copies the
+  # effect's `data` verbatim, so the three envelope params are dropped from
+  # the effect handed to it rather than from the event it returns. The
+  # sender's execution id plays the session id, so the builder's default
+  # `origin` names the sender; `origintype` is the type string the host
+  # registered this handler under, which is what a receiver answering "via
+  # the Event I/O Processor specified in 'origintype'" reaches.
+  @spec delivered_event(Config.t(), Send.t(), String.t()) :: Statifier.Event.t()
+  defp delivered_event(%Config{send_type: send_type}, send, sender) do
+    SendEvent.build(%{send | data: Map.drop(params(send), @envelope_params)}, sender,
+      origintype: send_type
+    )
+  end
+
+  # `document` and `key` are required and each must resolve to a non-empty
+  # string; `create` defaults to `if_absent` and offers two of the three
+  # modes (ADR-0006, sections 1 and 3). A send to the sender's own address
+  # is refused (section 6): one address row per execution is the create
+  # path's invariant (section 1), so the sender's own row carries the only
+  # `(document, key)` that names it.
+  @spec envelope(Send.t(), Address.t(), String.t()) ::
+          {:ok, String.t(), String.t(), :if_absent | :never}
+          | {:refused, refusal(), String.t() | nil, String.t() | nil}
+  defp envelope(send, %Address{} = row, sender) do
+    data = params(send)
+
+    with {:ok, document} <- non_empty(data, "document", :document),
+         {:ok, key} <- non_empty(data, "key", :key),
+         {:ok, create} <- create_mode(data, key) do
+      if row.document == document and row.key == key,
+        do: {:refused, :self_address, key, sender},
+        else: {:ok, document, key, create}
+    end
+  end
+
+  @spec params(Send.t()) :: map()
+  defp params(%Send{data: data}) when is_map(data), do: data
+  defp params(%Send{}), do: %{}
+
+  defp non_empty(data, name, tag) do
+    case Map.get(data, name) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _absent_or_malformed -> {:refused, tag, nil, nil}
+    end
+  end
+
+  defp create_mode(data, key) do
+    case Map.get(data, "create", "if_absent") do
+      "if_absent" -> {:ok, :if_absent}
+      "never" -> {:ok, :never}
+      _neither_mode -> {:refused, :create, key, nil}
+    end
+  end
+
+  # ADR-0006, section 6's four recordable reasons. The row is written
+  # inside the sending step's own transaction and the step still commits,
+  # because the refusal is reported rather than raised. What each reason
+  # leaves empty is the record's table: `key` is set from `create` on, and
+  # `execution_id` only for `self_address`, which is the sender's own.
+  @spec refused(
+          Config.t(),
+          Send.t(),
+          String.t(),
+          {String.t(), String.t() | nil, String.t() | nil},
+          refusal(),
+          DateTime.t()
+        ) :: {:error, reason()}
+  defp refused(config, send, sender, {scope, row_key, execution_id}, why, now) do
+    row = %Ledger{
+      binding_id: @execution_target,
+      message_id: message_id(key(send, sender)),
+      scope: scope,
+      outcome: "send_refused",
+      key: row_key,
+      execution_id: execution_id,
+      reason: Atom.to_string(why),
+      inserted_at: now
+    }
+
+    config.repo.insert!(Config.put_meta(config, row))
+    {:error, {:send_refused, why}}
+  end
+
+  # The ledger's `message_id` is a string column and ADR-0005, section 4's
+  # key is a term, so the key is written out here: the scope half, then
+  # each component of the effect half in the order that record lists it,
+  # then the ordinal. Every component is a counter or a static content
+  # position stamped when the send was executed, so a replayed step writes
+  # a byte-identical id and its delivery is a duplicate (ADR-0006, section
+  # 2). Nothing parses it back.
+  @spec message_id(Route.idempotency_key()) :: String.t()
+  defp message_id({scope, position, ordinal}) do
+    Enum.map_join(
+      [
+        scope,
+        position.send_id,
+        position.macrostep,
+        position.microstep,
+        position.round,
+        position.c_index,
+        position.owner,
+        ordinal
+      ],
+      "/",
+      &to_id_part/1
+    )
+  end
+
+  defp to_id_part(value) when is_binary(value), do: value
+  defp to_id_part(value) when is_integer(value), do: Integer.to_string(value)
+  defp to_id_part(value), do: inspect(value)
 
   @spec enqueue(Config.t(), SendDelayed.t(), String.t()) :: :ok | {:error, reason()}
   defp enqueue(config, send, scope) do

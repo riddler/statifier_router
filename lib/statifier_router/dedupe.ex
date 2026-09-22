@@ -53,18 +53,29 @@ defmodule StatifierRouter.Dedupe do
   alias StatifierRouter.Schema.Dedupe, as: Row
 
   @doc """
-  Claims `message_id` for `binding` at `now`, inside the caller's
+  Claims `message_id` for `claimant` at `now`, inside the caller's
   transaction on the configuration's repo.
 
+  The claimant is whatever the pair's rows are counted under: a
+  `t:StatifierRouter.Binding.t/0` for an inbound delivery, and
+  `t:StatifierRouter.Delivery.plan/0` for an execution-to-execution send,
+  whose name is ADR-0006's reserved one and whose horizon is ADR-0001,
+  section 1's default. Only the `id` and the `horizon_ms` are read.
+
   Returns `:new` when it wrote the pair's row, a new one or one replacing
-  an expired row, with `expires_at` set to `now` plus the binding's
+  an expired row, with `expires_at` set to `now` plus the claimant's
   `horizon_ms`; returns `:duplicate` when the pair's row is present and
   its `expires_at` is not earlier than `now`, and writes nothing.
   """
-  @spec claim(Config.t(), Binding.t(), String.t(), DateTime.t()) :: :new | :duplicate
+  @spec claim(
+          Config.t(),
+          Binding.t() | StatifierRouter.Delivery.plan(),
+          String.t(),
+          DateTime.t()
+        ) :: :new | :duplicate
   def claim(
         %Config{} = config,
-        %Binding{id: binding_id, dedupe: %{horizon_ms: horizon_ms}},
+        %{id: binding_id, dedupe: %{horizon_ms: horizon_ms}},
         message_id,
         %DateTime{} = now
       )

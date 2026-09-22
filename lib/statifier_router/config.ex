@@ -177,6 +177,8 @@ defmodule StatifierRouter.Config do
           | {:duplicate_binding_id, String.t()}
           | {:unregistered_route, String.t(), String.t()}
           | {:declared_send_types, String.t()}
+          | {:reserved_route, String.t()}
+          | {:reserved_binding_id, String.t()}
 
   @tables [:addresses, :dedupe, :routing_ledger]
   @storage_keys [:table_prefix, :prefix]
@@ -208,7 +210,14 @@ defmodule StatifierRouter.Config do
   `:persistence_options`, then a storage value the
   table does not allow, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
-  with `index` counted from zero, then the first duplicated binding `id`.
+  with `index` counted from zero, then a binding whose `id` is the
+  reserved name, then the first duplicated binding `id`.
+
+  ADR-0006, section 1 reserves one name for the execution target,
+  `StatifierRouter.SendHandler.execution_target/0`. A `:route_adapters`
+  entry under it is refused with `{:reserved_route, name}`, after the
+  registry's own shape is checked, and a binding whose `id` is it with
+  `{:reserved_binding_id, name}`.
 
       iex> StatifierRouter.Config.new(repo: MyApp.Repo, delivery: MyApp.Delivery, table_prefix: 7)
       {:error, {:invalid_value, :table_prefix, 7}}
@@ -443,12 +452,25 @@ defmodule StatifierRouter.Config do
     end
   end
 
+  # ADR-0006, section 1 reserves one route name: a chart that writes it in
+  # `target` always means the execution target and never a host transport,
+  # which only holds if the host cannot register a route under it. The
+  # refusal is here, at configuration time, so no chart discovers it at run
+  # time.
   defp route_adapters(opts) do
     given = Keyword.get(opts, :route_adapters, %{})
+    reserved = SendHandler.execution_target()
 
-    if is_map(given) and Enum.all?(given, &route_adapter?/1),
-      do: {:ok, given},
-      else: {:error, {:invalid_value, :route_adapters, given}}
+    cond do
+      not (is_map(given) and Enum.all?(given, &route_adapter?/1)) ->
+        {:error, {:invalid_value, :route_adapters, given}}
+
+      Map.has_key?(given, reserved) ->
+        {:error, {:reserved_route, reserved}}
+
+      true ->
+        {:ok, given}
+    end
   end
 
   defp route_adapter?({name, {module, config}}),
@@ -519,6 +541,7 @@ defmodule StatifierRouter.Config do
     case Keyword.get(opts, :bindings, []) do
       list when is_list(list) ->
         with {:ok, bindings} <- build_bindings(list),
+             :ok <- refuse_reserved_id(bindings),
              :ok <- refuse_duplicate_ids(bindings) do
           {:ok, bindings}
         end
@@ -545,6 +568,17 @@ defmodule StatifierRouter.Config do
 
   defp build_binding(%Binding{} = binding), do: {:ok, binding}
   defp build_binding(attrs), do: Binding.new(attrs)
+
+  # The other half of ADR-0006, section 1's reserved name: the ledger row
+  # of an execution-to-execution send carries it as `binding_id`, so a host
+  # binding under that id would write rows a reader cannot tell from those.
+  defp refuse_reserved_id(bindings) do
+    reserved = SendHandler.execution_target()
+
+    if Enum.any?(bindings, &(&1.id == reserved)),
+      do: {:error, {:reserved_binding_id, reserved}},
+      else: :ok
+  end
 
   defp refuse_duplicate_ids(bindings) do
     bindings

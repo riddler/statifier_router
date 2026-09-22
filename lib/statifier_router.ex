@@ -18,13 +18,16 @@ defmodule StatifierRouter do
     * Dedupe on `(binding, message_id)` with a horizon.
     * The recorded outcome vocabulary: every delivery attempt ends in one
       named outcome.
+    * Execution-to-execution sends: a `<send>` whose `target` is the
+      reserved name `StatifierRouter.SendHandler.execution_target/0`
+      resolves through the address table and is delivered by the same
+      transaction a binding's delivery uses (ADR-0006).
     * The webhook front, `StatifierRouter.Webhook`: a Plug-shaped helper
       a host calls from its own controller or plug.
 
   ## What it does not own
 
     * Sinks and the route registry.
-    * Execution-to-execution sends.
     * The source invoke.
     * Any queue adapter.
     * Timers: those are `statifier_oban`'s.

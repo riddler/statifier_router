@@ -1,0 +1,460 @@
+defmodule StatifierRouter.ExecutionTargetTest do
+  use ExUnit.Case, async: true
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Statifier.Effect.Send
+  alias Statifier.Machine
+  alias StatifierPersistence.Executions
+  alias StatifierPersistence.Storage
+  alias StatifierRouter.Config
+  alias StatifierRouter.RecordingRoute
+  alias StatifierRouter.Resolver.Static
+  alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.SendHandler
+  alias StatifierRouter.TestPersistence
+  alias StatifierRouter.TestRepo
+
+  @now ~U[2026-09-21 08:00:00.000000Z]
+  @scope "7c1e"
+  @type_string "myapp:router"
+
+  # The join of ADR-0001's example, with no outbound half: the sender of
+  # every hand-built send below is one of these, so its address row exists
+  # and nothing else fires while a test drives one send at a time.
+  @plain """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
+    <state id="waiting">
+      <transition event="impression" target="shown"/>
+    </state>
+    <state id="shown">
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
+  # ADR-0006's own example: the join tells a placement counter that an
+  # impression and its click joined. `placement_id` is the message;
+  # `document` and `key` are the envelope.
+  @sending """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
+    <state id="waiting">
+      <transition event="impression" target="shown"/>
+    </state>
+    <state id="shown">
+      <onentry>
+        <send type="myapp:router" target="execution" event="pair.joined">
+          <param name="document" expr="'placement_counter'"/>
+          <param name="key" expr="'home_top'"/>
+          <param name="placement_id" expr="'home_top'"/>
+        </send>
+      </onentry>
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
+  # The same send with no `document` param: a refusal the sender hears,
+  # written while the sender's own step is still open.
+  @malformed """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
+    <state id="waiting">
+      <transition event="impression" target="shown"/>
+    </state>
+    <state id="shown">
+      <onentry>
+        <send type="myapp:router" target="execution" event="pair.joined">
+          <param name="key" expr="'home_top'"/>
+        </send>
+      </onentry>
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
+  # The placement counter: it counts every join its charts send it and
+  # stays active, so a second join reaches the same execution.
+  @counter """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="counting">
+    <state id="counting">
+      <transition event="pair.joined" target="counting"/>
+    </state>
+  </scxml>
+  """
+
+  # A counter that is finished as soon as it is created.
+  @instant """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="done">
+    <final id="done"/>
+  </scxml>
+  """
+
+  @documents %{
+    "plain_join" => @plain,
+    "sending_join" => @sending,
+    "malformed_join" => @malformed,
+    "placement_counter" => @counter,
+    "instant_counter" => @instant
+  }
+
+  setup do
+    :ok = Sandbox.checkout(TestRepo)
+    :ok
+  end
+
+  describe "the address the send names" do
+    # sabotage: to_execution/3 took the scope from the send's data rather
+    # than from the sender's address row -> the counter resolved under no
+    # scope and the delivery created nothing under 7c1e, red; restored,
+    # green.
+    test "creates the execution its address names, under if_absent, and delivers the builder's event" do
+      config = config("sending_join")
+
+      assert {:ok, [{:created_and_delivered, "impressions_to_join", sender}]} =
+               StatifierRouter.route(config, impression(), now: @now)
+
+      assert [counter] = counter_addresses(config)
+      assert counter.scope == @scope
+      assert counter.key == "home_top"
+      assert counter.execution_id != sender
+
+      assert {:ok, [%{event: event, door: "step"}]} =
+               Executions.inputs(config.store, counter.execution_id)
+
+      assert event.name == "pair.joined"
+      # ADR-0006, section 4: the envelope params are consumed and the
+      # message travels.
+      assert event.data == %{"placement_id" => "home_top"}
+      assert event.origin == "#_scxml_" <> sender
+      assert event.origintype == @type_string
+    end
+
+    # sabotage: envelope/3 skipped its self-address check -> the join was
+    # delivered to its own address instead of being refused, red;
+    # restored, green.
+    test "refuses a send to the sender's own address, with a row that names it" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"document" => "plain_join", "key" => "imp_7f3a"})},
+               seam(sender)
+             ) == {:error, {:send_refused, :self_address}}
+
+      assert %Ledger{
+               binding_id: "execution",
+               scope: @scope,
+               outcome: "send_refused",
+               reason: "self_address",
+               key: "imp_7f3a",
+               execution_id: ^sender
+             } = List.last(ledger(config))
+    end
+
+    # sabotage: to_execution/3 answered the sender's own execution id as
+    # the scope when by_execution/2 found no row -> a send from an
+    # addressless execution wrote a ledger row under a scope that is not
+    # one, red; restored, green.
+    test "refuses a sender with no address row, and records nothing for it" do
+      config = config("plain_join")
+      _sender = sender(config)
+      before = length(ledger(config))
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"document" => "placement_counter", "key" => "home_top"})},
+               seam("ex_no_address")
+             ) == {:error, {:send_refused, :unaddressed_sender}}
+
+      assert length(ledger(config)) == before
+      assert counter_addresses(config) == []
+    end
+  end
+
+  describe "the miss" do
+    # sabotage: create_mode/2 read every `create` param as :if_absent ->
+    # a send written `never` created the counter it was told not to, red;
+    # restored, green.
+    test "records dropped: no_execution under never, creates nothing, and tells the sender" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send,
+                send_effect(%{
+                  "document" => "placement_counter",
+                  "key" => "home_top",
+                  "create" => "never"
+                })},
+               seam(sender)
+             ) == {:error, {:send_undelivered, :no_execution}}
+
+      assert counter_addresses(config) == []
+
+      assert %Ledger{
+               binding_id: "execution",
+               scope: @scope,
+               outcome: "dropped: no_execution",
+               key: "home_top",
+               execution_id: nil,
+               reason: nil
+             } = List.last(ledger(config))
+    end
+
+    # sabotage: reported/1 answered :ok for a {:dropped, _, :finished}
+    # outcome -> a chart sending to a finished execution was told its send
+    # landed, red; restored, green.
+    test "records dropped: finished for a terminal target and tells the sender" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"document" => "instant_counter", "key" => "home_top"})},
+               seam(sender)
+             ) == {:error, {:send_undelivered, :finished}}
+
+      assert [%Address{terminal_seen_at: %DateTime{}}] =
+               addresses(config, "instant_counter")
+
+      assert %Ledger{outcome: "dropped: finished", key: "home_top"} = List.last(ledger(config))
+    end
+
+    # sabotage: message_id/1 dropped the ordinal from the composed id ->
+    # two different sends of one step shared a dedupe row and the second
+    # was a duplicate, red; restored, green.
+    test "a replayed send is a duplicate and steps nothing a second time" do
+      config = config("plain_join")
+      sender = sender(config)
+      effect = send_effect(%{"document" => "placement_counter", "key" => "home_top"})
+
+      assert SendHandler.handle_effect(config, {:send, effect}, seam(sender)) == :ok
+      assert [counter] = counter_addresses(config)
+      assert SendHandler.handle_effect(config, {:send, effect}, seam(sender)) == :ok
+
+      assert {:ok, [_one_step]} = Executions.inputs(config.store, counter.execution_id)
+
+      # A second send from the same execution at a different ordinal is new
+      # work, not a replay: the same counter is stepped again.
+      assert SendHandler.handle_effect(
+               config,
+               {:send, %{effect | ordinal: 2}},
+               seam(sender)
+             ) == :ok
+
+      assert {:ok, [_first, _second]} = Executions.inputs(config.store, counter.execution_id)
+      assert [^counter] = counter_addresses(config)
+
+      assert ["created_and_delivered", "duplicate", "delivered"] ==
+               config
+               |> ledger()
+               |> Enum.filter(&(&1.binding_id == "execution"))
+               |> Enum.map(& &1.outcome)
+    end
+  end
+
+  describe "a refused envelope" do
+    # sabotage: non_empty/3 accepted a missing param as the empty string ->
+    # a send with no document resolved an address under "" instead of being
+    # refused, red; restored, green.
+    test "refuses a missing document and a missing key, with key and execution_id empty" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"key" => "home_top"})},
+               seam(sender)
+             ) == {:error, {:send_refused, :document}}
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"document" => "placement_counter"})},
+               seam(sender)
+             ) == {:error, {:send_refused, :key}}
+
+      assert [
+               %Ledger{outcome: "send_refused", reason: "document", key: nil, execution_id: nil},
+               %Ledger{outcome: "send_refused", reason: "key", key: nil, execution_id: nil}
+             ] = config |> ledger() |> Enum.filter(&(&1.outcome == "send_refused"))
+    end
+
+    # sabotage: create_mode/2 accepted "always_new" as a mode -> the third
+    # mode ADR-0006 does not offer wrote an execution the key does not
+    # address, red; restored, green.
+    test "refuses a create the record does not offer, with the key set" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send,
+                send_effect(%{
+                  "document" => "placement_counter",
+                  "key" => "home_top",
+                  "create" => "always_new"
+                })},
+               seam(sender)
+             ) == {:error, {:send_refused, :create}}
+
+      assert %Ledger{
+               outcome: "send_refused",
+               reason: "create",
+               key: "home_top",
+               execution_id: nil
+             } =
+               List.last(ledger(config))
+
+      assert counter_addresses(config) == []
+    end
+
+    # sabotage: refused/6 raised instead of answering an error -> the
+    # refusal rolled the sender's delivery back and its execution had no
+    # input row, red; restored, green.
+    test "the sender's own step commits although its send was refused" do
+      config = config("malformed_join")
+
+      assert {:ok, [{:created_and_delivered, "impressions_to_join", sender}]} =
+               StatifierRouter.route(config, impression(), now: @now)
+
+      assert {:ok, [%{event: %{name: "impression"}}]} =
+               Executions.inputs(config.store, sender)
+
+      assert %Ledger{outcome: "send_refused", reason: "document"} =
+               config |> ledger() |> Enum.find(&(&1.binding_id == "execution"))
+    end
+  end
+
+  describe "the reserved name at configuration time" do
+    # sabotage: route_adapters/1 dropped its reserved-name check -> a host
+    # registered a transport under the name a chart writes for the
+    # execution target, red; restored, green.
+    test "refuses a route registered under the reserved name" do
+      assert Config.new(
+               repo: TestRepo,
+               delivery: StatifierRouter.RecordingDelivery,
+               route_adapters: %{"execution" => {RecordingRoute, %{pid: self()}}}
+             ) == {:error, {:reserved_route, "execution"}}
+    end
+
+    # sabotage: refuse_reserved_id/1 compared the binding's document rather
+    # than its id -> a binding under the reserved id wrote ledger rows a
+    # reader cannot tell from an execution-to-execution send's, red;
+    # restored, green.
+    test "refuses a binding whose id is the reserved name" do
+      assert Config.new(
+               repo: TestRepo,
+               delivery: StatifierRouter.RecordingDelivery,
+               bindings: [%{impression_binding() | id: "execution"}]
+             ) == {:error, {:reserved_binding_id, "execution"}}
+    end
+  end
+
+  # -- fixtures --------------------------------------------------------
+
+  defp machines do
+    for {document, source} <- @documents, into: %{} do
+      {:ok, machine} = Statifier.compile(source)
+      {document, machine}
+    end
+  end
+
+  defp impression_binding(document \\ "plain_join") do
+    %{
+      id: "impressions_to_join",
+      source: "ad_events",
+      match: "event.kind == 'impression'",
+      key: "event.impression_id",
+      document: document,
+      event: "impression",
+      data: ["impression_id"]
+    }
+  end
+
+  # The host's shape: the handler is the executor, so a `<send>` of the
+  # registered type reaches this package from inside the delivery.
+  defp config(document) do
+    machines = machines()
+    {:ok, store} = Storage.new(Storage.Ecto, persistence: TestPersistence)
+
+    {:ok, static} =
+      Static.new(for {name, machine} <- machines, into: %{}, do: {{@scope, name}, machine})
+
+    by_hash = Map.new(Map.values(machines), &{Machine.identity(&1).content_hash, &1})
+    pid = self()
+
+    {:ok, config} =
+      Config.new(
+        repo: TestRepo,
+        store: store,
+        executor: fn _effect, _context -> :ok end,
+        resolver: static,
+        chart_resolver: fn content_hash -> Map.fetch(by_hash, content_hash) end,
+        bindings: [impression_binding(document)],
+        send_type: @type_string
+      )
+
+    executor = fn effect, context ->
+      send(pid, {:effect, effect})
+      SendHandler.handle_effect(config, effect, context)
+    end
+
+    %{config | executor: executor}
+  end
+
+  defp impression do
+    %{
+      scope: @scope,
+      message_id: "ad_events/3/1042",
+      source: "ad_events",
+      data: %{"kind" => "impression", "impression_id" => "imp_7f3a"}
+    }
+  end
+
+  # One sender execution of the configuration's document, with the address
+  # row every send below is read through.
+  defp sender(config) do
+    {:ok, [{:created_and_delivered, _binding, sender}]} =
+      StatifierRouter.route(config, impression(), now: @now)
+
+    sender
+  end
+
+  defp send_effect(data, opts \\ []) do
+    struct!(
+      %Send{
+        event: "pair.joined",
+        target: "execution",
+        type: @type_string,
+        data: data,
+        send_id: "send_1",
+        c_index: 3,
+        owner: nil,
+        macrostep: 1,
+        microstep: 0,
+        round: 0,
+        ordinal: 1
+      },
+      opts
+    )
+  end
+
+  defp seam(execution_id), do: %{execution_id: execution_id, content_hash: "sha_1"}
+
+  defp ledger(config),
+    do: TestRepo.all(from(l in Config.queryable(config, Ledger), order_by: l.id))
+
+  defp addresses(config, document) do
+    TestRepo.all(
+      from(a in Config.queryable(config, Address), where: a.document == ^document, order_by: a.id)
+    )
+  end
+
+  defp counter_addresses(config), do: addresses(config, "placement_counter")
+end
