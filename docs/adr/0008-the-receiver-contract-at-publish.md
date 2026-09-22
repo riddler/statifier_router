@@ -47,9 +47,11 @@ Facts outside this record that bound the answer:
   `Statifier.Machine.Content.Send` holds `event`, `target` and `type` as
   `{:static, value}` for the literal attribute or `{:compiled, _, _}` for
   its `*expr` sibling, and holds `params` and `namelist` as separate lists
-  of `Statifier.Machine.Param`. A `%Param{}`'s `expr` is always the
-  compiled form, `{:compiled, %Predicator.Compiled{}, source}`, whether
-  the author wrote `expr` or `location` (its `kind` says which). An author
+  of `Statifier.Machine.Param`. A `<param>` element's `expr` is always
+  the compiled form, `{:compiled, %Predicator.Compiled{}, source}`,
+  whether the author wrote `expr` or `location` (its `kind` says which);
+  only a `namelist` entry may instead carry `{:invalid, error}`, when it
+  failed to compile (`Statifier.Machine.Param`'s `expr` type). An author
   who writes `expr="'parcel'"` gets compiled instructions that are the one
   instruction `["lit", "parcel"]`; an author who writes `expr="doc_id"`
   gets `["load", "doc_id"]`. Decision 1 defines "literal" over that.
@@ -105,10 +107,13 @@ Two kinds of name are checked, each against the document it is sent to.
 - **An execution-target send.** A `<send>` in the machine being published
   whose `type` is `{:static, t}` with `t` the configuration's
   `:send_type`, and whose `target` is `{:static, n}` with `n` equal to
-  `StatifierRouter.SendHandler.execution_target/0`. That is exactly the
-  set `StatifierRouter.SendHandler` will hand to ADR-0006's delivery at
-  run time, the same reasoning `Routes.unregistered/2`'s `@doc` gives for
-  judging only the configuration's own type. Such a send is judged when
+  `StatifierRouter.SendHandler.execution_target/0`. That is the literal
+  part of the set `StatifierRouter.SendHandler` will hand to ADR-0006's
+  delivery at run time, where it selects on the resolved `type` and
+  `target`, so a send written with `typeexpr` or `targetexpr` may be
+  handed too (decision 3 says where those are reported). Judging only the
+  configuration's own type follows the reasoning `Routes.unregistered/2`'s
+  `@doc` gives. Such a send is judged when
   its `event` is `{:static, name}` and its `document` param is literal.
 - **A binding.** Every `%StatifierRouter.Binding{}` in the configuration's
   `:bindings`. Its `document` and `event` are already literal strings, so
@@ -241,9 +246,29 @@ of a literal name in a state that does not take it, while another
 reachable state does, is the ordinary outcome and not a fault of this
 check. A drop of a literal name that no reachable transition of the
 receiver's chart matches, sent by a send or a binding this check passed,
-means a publish check has a bug: this one, or the receiver's own check
-of its declaration (st-ADR-0071, decision 3). A drop of a name this
-check reported unchecked is the gap decision 3 already named.
+is not by itself a bug either, in three cases:
+
+- **Revision drift.** This check judges the chart a new execution of the
+  receiving document would start on, the one the host's lookup and
+  resolver answer. An existing execution is stepped on the chart it
+  started on, named by its content hash (ADR-0002, the Amendment of
+  2026-09-19), so an execution started on an earlier revision may not
+  take a name the current revision takes.
+- **Host policy.** `Statifier.Chart.check_accepts/2` reports and refuses
+  nothing, and which of its lists a host refuses a publish on is the
+  host's decision (st-ADR-0071, decision 3). A receiver published with a
+  declared name its chart cannot take is the host's choice, not a check
+  that failed.
+- **Scope.** Decision 2 leaves it to the host to run the binding check
+  once per scope. A binding checked against one scope's lookup and
+  delivered in another scope, whose declarations differ, was never judged
+  for that scope.
+
+A drop means a publish check has a bug - this one, or the receiver's own
+check of its declaration - only when the execution is stepped on the
+revision this check judged, in the scope it judged, and the host refuses
+a publish on `unreachable`. A drop of a name this check reported
+unchecked is the gap decision 3 already named.
 
 ### 6. The package ships pure functions; the host's publish step calls them
 
