@@ -230,3 +230,30 @@ its key evaluates to `:undefined`: that is a key refusal recorded against
   who mints the execution id; what `create`, `dedupe` and `order` do at
   delivery; the names and ledger of the recorded outcomes; and how bindings
   are stored and versioned with their document.
+
+## Note (2026-09-21, sr-uce): what a dotted data path projects into, and the path that lands on a non-map
+
+A Note, not an amendment: it decides nothing and changes no decision.
+Section 5 stands as written. It says a `data` path is delivered "under
+the same paths" without saying what a *dotted* path is delivered under,
+and it names only the path the event does not carry. Both are recorded
+here so the next reader does not have to derive them.
+
+- **A dotted path projects into nested maps, not into a flat key.**
+  `"placement.slot"` is delivered as `%{"placement" => %{"slot" =>
+  value}}`, never as `%{"placement.slot" => value}`. The path is split
+  on `.` and written segment by segment, and two paths sharing a prefix
+  share the map at that prefix, so `["placement.slot",
+  "placement.page"]` delivers one `"placement"` map holding both
+  (`StatifierRouter.Binding`, `put_path/3`). This is the same shape
+  predicator reads a dotted path in, so a chart condition written
+  against `event.placement.slot` sees the value the binding named.
+- **A path whose segment lands on a non-map is left out, exactly like a
+  path the event does not carry.** Reading `"size.w"` out of an event
+  whose `"size"` is the string `"300x250"` delivers nothing under
+  `"size"`; the path is dropped and the rest of the projection is
+  unaffected (`StatifierRouter.Binding`, `fetch_path/2`, whose
+  non-map clause answers `:error`, which `project/2` folds as "skip").
+  Section 5's consequence therefore covers this case too: the chart
+  condition reading it sees predicator's `:undefined`, and no refusal
+  is recorded.
