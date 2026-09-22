@@ -208,6 +208,12 @@ Inherited from statifier-ex unless this project records otherwise:
 - Commit messages: title < 50 chars, simple present tense ("Adds ...",
   "Fixes ..."), body wrapped at ~72 chars. No AI attribution trailers.
 - Plain ASCII hyphens in prose; no typographic dashes.
-- Examples and fixtures use the family's two canonical example domains
-  (credit-card processing; a signup wizard with A/B testing) plus, for this
-  package's own examples, the advertising impression-and-click domain.
+- New examples, fixtures and prose use the family's teaching domains: the
+  library loan and patron registration (one world: patron, copy, loan, hold,
+  branch), and parcel delivery (a parcel scanned from depot to doorstep, the
+  machine-paced rhythm this package serves). Credit-card processing, the signup
+  wizard with A/B testing and the advertising impression-and-click join are
+  fixture-only. This package's existing corpus, fixtures, tests and records are
+  built on the advertising join; they stay exactly as they are and keep
+  passing, nothing is migrated, renamed or deleted, and no new prose, example
+  or fixture is written in any of the three.
