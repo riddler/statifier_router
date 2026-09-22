@@ -687,6 +687,39 @@ section on the unregistered route says the same thing where an
 implementer will read it, and whose own tests pin the row's columns and
 the committed step together. This record stays at proposed.
 
+## Amendment (2026-09-22, sr-a14): who owns a delayed send's timer on the send-processor shape
+
+Status: proposed
+
+Decision 5 says, under `Only the process-less shape writes the durable
+queue.`, that on the send-processor shape the live session holds its own
+timers. The engine decides otherwise, and it is the engine the code runs
+against. `Statifier.Send.Processor`'s moduledoc, at statifier 2.6.0
+(`deps/statifier/lib/statifier/send/processor.ex`), states: "**A delayed
+send is the processor's timer.** For a `%Statifier.Effect.SendDelayed{}`
+the session schedules nothing: the processor owns the delay, and spec
+6.2's discard at termination is its fire-time check (ADR-0054 decision
+4)."
+
+- **The processor owns a registered-type delayed send's timer on both
+  host shapes.** Decision 5's sentence that the live session holds its own
+  timers is superseded for registered types. A live session schedules
+  nothing for such a send, so there is no timer of the session's for this
+  record to leave where it is.
+
+- **One queue, one key, on both shapes.**
+  `StatifierRouter.SendHandler.perform/2` - the impure half of the
+  `Statifier.Send.Processor` callbacks - records the delayed send on the
+  same `StatifierRouter.TimerQueue` the executor seam reaches through
+  `handle_effect/3`, under decision 4's composed key. The cancellation key
+  is unchanged: `(scope, send_id)`, the scope half being `session_id` on
+  this shape.
+
+- **The code half is bead `sr-4hw`.** `perform/2` answers a delayed send
+  with an error today, which is what the foot Note of 2026-09-21 records.
+  This Amendment decides what shall be done; that bead does it. A record
+  may lead the code it governs.
+
 ## Note (2026-09-22, sr-a14): accepted
 
 A Note, not an amendment: it decides nothing and changes no decision above
@@ -714,22 +747,32 @@ its own savepoint. The ledger's `binding_id`, `message_id` and `scope` are
 `NOT NULL` in `StatifierRouter.Migrations.V01.up/1`, as the two Notes
 above state.
 
-**The body sentence that names this record's own status.** The Note above
-this one ends, under its heading `Where the code is.`, with the sentence
-`This record stays at proposed.` It is not edited or removed: this Note
-names it and records that it is superseded by the flip, which is how this
-repository amends a record by addition.
+**Three sentences of this record are named here rather than edited**, and
+the three are these.
 
-**The Context paragraph on the dependency tree is time-stamped and is now
-stale.** The subsection `The records this one reads` says those engine and
-persistence surfaces are not in this package's dependency tree, and names
-the constraints `~> 2.5` and `~> 0.12.0`. That statement was true when it
-was written and is no longer: `mix.exs` carries `~> 2.6` and `~> 0.13` and
-`mix.lock` resolves statifier 2.6.0 and statifier_persistence 0.13.0.
-ADR-0006, a later dated record in this directory, names that same change
-under its own `What this record was written against.` heading. The
-paragraph is left as written, being a dated account of what the record was
-read against rather than a decision.
+**One names this record's own status.** The Note above the Amendment ends,
+under its heading `Where the code is.`, with the sentence `This record
+stays at proposed.` It is not edited or removed: this Note names it and
+records that it is superseded by the flip, which is how this repository
+amends a record by addition.
+
+**One no longer holds, and the Amendment above names the change.**
+Decision 5's sentence that on the send-processor shape the live session
+holds its own timers is contradicted by `Statifier.Send.Processor` at
+statifier 2.6.0, the version this package pins. Under this repository's
+flip standard a claim that no longer holds stops the flip unless a later
+dated record names the change; the Amendment of 2026-09-22 above is that
+record, so decision 5 is left as written and the Amendment governs.
+
+**One is time-stamped and is now stale.** The subsection `The records this
+one reads` says those engine and persistence surfaces are not in this
+package's dependency tree, and names the constraints `~> 2.5` and
+`~> 0.12.0`. That statement was true when it was written and is no longer:
+`mix.exs` carries `~> 2.6` and `~> 0.13` and `mix.lock` resolves statifier
+2.6.0 and statifier_persistence 0.13.0. ADR-0006, a later dated record in
+this directory, names that same change under its own `What this record was
+written against.` heading. The paragraph is left as written, being a dated
+account of what the record was read against rather than a decision.
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
 separate bead after all seven records; the index lags by design until then.
