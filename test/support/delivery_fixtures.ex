@@ -196,4 +196,23 @@ defmodule StatifierRouter.DeliveryFixtures do
     {:ok, entries} = Executions.inputs(config.store, execution_id)
     Enum.map(entries, &{&1.seq, &1.door, &1.event.name})
   end
+
+  @join_sends """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="joining">
+    <state id="joining">
+      <onentry>
+        <send type="myapp:sink" target="joined_records" event="joined"/>
+        <send type="myapp:sink" target="dead_letter" event="orphaned"/>
+      </onentry>
+    </state>
+  </scxml>
+  """
+
+  @doc """
+  The impression-and-click join's outbound half (ADR-0005's example): two
+  sends of one type, to the two route names `joined_records` and
+  `dead_letter`, in that document order.
+  """
+  @spec join_sends() :: String.t()
+  def join_sends, do: @join_sends
 end
