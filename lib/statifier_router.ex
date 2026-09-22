@@ -24,11 +24,13 @@ defmodule StatifierRouter do
       transaction a binding's delivery uses (ADR-0006).
     * The webhook front, `StatifierRouter.Webhook`: a Plug-shaped helper
       a host calls from its own controller or plug.
+    * The source invoke: an `<invoke>` whose lifetime is a subscription's,
+      through `subscribe/3`, `cancel/2` and the delegate a host's invoke
+      handler calls, `StatifierRouter.SourceInvoke` (ADR-0007).
 
   ## What it does not own
 
     * Sinks and the route registry.
-    * The source invoke.
     * Any queue adapter.
     * Timers: those are `statifier_oban`'s.
     * A publish store: a host callback resolves a document to its active
@@ -53,6 +55,8 @@ defmodule StatifierRouter do
   `StatifierRouter.Resolver.Static` over charts compiled at boot. The
   host schedules the two reapers,
   `StatifierRouter.Dedupe.reap/2` and `StatifierRouter.Addresses.reap/2`.
+  It builds the source invoke's two calls, `subscribe/3` and `cancel/2`,
+  over the subscription table `StatifierRouter.Migrations.V02` adds.
   Each piece lands behind the decision record that fixes it, in
   `docs/adr/`.
 
@@ -114,9 +118,13 @@ defmodule StatifierRouter do
   raises `ArgumentError`. The default module is `StatifierRouter.Delivery`.
   """
 
+  import Ecto.Query, only: [from: 2]
+
+  alias StatifierRouter.Addresses
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.Schema.Ledger
+  alias StatifierRouter.Schema.Subscription
 
   @version Mix.Project.config()[:version]
 
@@ -150,6 +158,22 @@ defmodule StatifierRouter do
           | {:key_refused, String.t(), refusal_reason()}
           | {:dropped, String.t(), :no_execution | :finished}
 
+  @typedoc """
+  One invocation of one execution: the execution's id and the `invoke_id`
+  the engine minted for the `<invoke>` (`Statifier.Effect.Invoke`,
+  statifier 2.6.0). `invoke_id` is a deterministic `%MachineState{}`
+  counter, so it is stable across a replay of the same drive and unique
+  within its execution, not across executions.
+  """
+  @type invocation :: {execution_id :: String.t(), invoke_id :: String.t()}
+
+  @typedoc """
+  The identity of one subscription: its binding, its execution and the
+  invocation it belongs to (ADR-0007, section 6).
+  """
+  @type subscription ::
+          {binding_id :: String.t(), execution_id :: String.t(), invoke_id :: String.t()}
+
   @typedoc "What the delivery module is handed besides the configuration, binding and key."
   @type delivery :: %{
           name: String.t(),
@@ -169,6 +193,121 @@ defmodule StatifierRouter do
   """
   @spec version() :: String.t()
   def version, do: @version
+
+  @doc """
+  Subscribes `execution_id`'s invocation `invoke_id` to the binding
+  `binding_id`, for as long as the invoking state is entered (ADR-0007,
+  sections 2 and 6).
+
+  The subscription reads its `scope` and `key` from the execution's own
+  address row, by execution id alone: the invoke names the binding and
+  nothing else, because an execution that could name its own key could
+  name another execution's (ADR-0007, section 1).
+
+  Returns `{:ok, :subscribed}`, or `{:ok, :already_subscribed}` when a row
+  for this `(execution_id, binding_id, invoke_id)` is already there, so a
+  handler whose `perform/2` runs twice for one `invoke_id` - which
+  `Statifier.Invoke.Handler` says it must tolerate (statifier 2.6.0) -
+  writes one row.
+
+  Refuses with:
+
+    * `{:error, {:unknown_binding, binding_id}}` - the configuration has
+      no binding under that id, so there is no document to read events
+      for.
+    * `{:error, {:unaddressed_execution, execution_id}}` - the execution
+      has no address row, which is what an `always_new` create leaves
+      (ADR-0002, section 7). It has no key to subscribe under, and
+      ADR-0007, section 6 refuses the invocation rather than subscribing
+      it under an invented one.
+  """
+  @spec subscribe(Config.t(), String.t(), invocation()) ::
+          {:ok, :subscribed | :already_subscribed}
+          | {:error, {:unknown_binding | :unaddressed_execution, String.t()}}
+  def subscribe(%Config{} = config, binding_id, {execution_id, invoke_id})
+      when is_binary(binding_id) and is_binary(execution_id) and is_binary(invoke_id) do
+    with :ok <- known_binding(config, binding_id),
+         {:ok, address} <- subscribing_address(config, execution_id) do
+      row =
+        Config.put_meta(config, %Subscription{
+          binding_id: binding_id,
+          execution_id: execution_id,
+          invoke_id: invoke_id,
+          scope: address.scope,
+          key: address.key,
+          inserted_at: DateTime.utc_now()
+        })
+
+      case config.repo.insert(row,
+             on_conflict: :nothing,
+             conflict_target: [:execution_id, :binding_id, :invoke_id]
+           ) do
+        {:ok, %Subscription{id: nil}} -> {:ok, :already_subscribed}
+        {:ok, %Subscription{}} -> {:ok, :subscribed}
+      end
+    end
+  end
+
+  @doc """
+  Cancels the subscription named by `{binding_id, execution_id, invoke_id}`,
+  deleting the row the matching `subscribe/3` created and nothing else
+  (ADR-0007, section 3).
+
+  Returns `{:ok, :cancelled}`, or `{:ok, :not_subscribed}` when no such row
+  is there - which is not an error: the engine may plan a cancel for an
+  invocation that is already over, and a handler must tolerate cancelling
+  an `invoke_id` it no longer knows (`Statifier.Invoke.Handler`'s
+  `c:cancel/2`, statifier 2.6.0). Calling it twice is therefore harmless.
+
+  It touches nothing else: not the execution, not its address row, not its
+  input log, not its ledger rows, not a delayed send the chart armed, and
+  not another binding's subscription for the same execution.
+
+  ## Which `cancel` a host calls
+
+  This package carries three, and they undo three different things:
+
+    * `StatifierRouter.cancel/2`, this one - **the source invoke's**.
+      A host calls it when the engine cancels an invocation, which it does
+      itself on state exit; `StatifierRouter.SourceInvoke.cancel/3` is the
+      delegate that turns a `%Statifier.Effect.CancelInvoke{}` into this
+      call, and a host with no source invokes never calls it.
+    * `StatifierRouter.SendHandler.cancel/2` - **a delayed send's**. It
+      takes a `%Statifier.Effect.Cancel{}` and a scope map, and it is
+      reached from the executor seam for spec 6.3's `<cancel sendid>`,
+      which the chart author writes. It is not called on state exit: the
+      engine cancels no delayed send there (ADR-0007, section 4).
+    * `StatifierRouter.TimerQueue.cancel/3` - **a queued timer's**. It is
+      a callback on the host's queue adapter, not a function a host calls
+      on this package; `SendHandler` calls it.
+  """
+  @spec cancel(Config.t(), subscription()) :: {:ok, :cancelled | :not_subscribed}
+  def cancel(%Config{} = config, {binding_id, execution_id, invoke_id})
+      when is_binary(binding_id) and is_binary(execution_id) and is_binary(invoke_id) do
+    {count, _} =
+      config.repo.delete_all(
+        from(s in Config.queryable(config, Subscription),
+          where:
+            s.execution_id == ^execution_id and s.binding_id == ^binding_id and
+              s.invoke_id == ^invoke_id
+        )
+      )
+
+    if count == 0, do: {:ok, :not_subscribed}, else: {:ok, :cancelled}
+  end
+
+  defp known_binding(%Config{bindings: bindings}, binding_id) do
+    if Enum.any?(bindings, &(&1.id == binding_id)),
+      do: :ok,
+      else: {:error, {:unknown_binding, binding_id}}
+  end
+
+  defp subscribing_address(config, execution_id) do
+    case Addresses.by_execution(config, execution_id) do
+      nil -> {:error, {:unaddressed_execution, execution_id}}
+      address -> {:ok, address}
+    end
+  end
 
   @doc """
   Routes one event through the configuration's bindings.

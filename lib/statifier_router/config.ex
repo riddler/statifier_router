@@ -86,9 +86,10 @@ defmodule StatifierRouter.Config do
   refused here, naming the duplicated `id`, before any event is routed
   (ADR-0001, section 1).
 
-  The three tables are the address table of ADR-0002 (`addresses`), the
-  dedupe table of ADR-0003 (`dedupe`) and the ledger of ADR-0004
-  (`routing_ledger`); `table/2` names each one under a configuration.
+  The four tables are the address table of ADR-0002 (`addresses`), the
+  dedupe table of ADR-0003 (`dedupe`), the ledger of ADR-0004
+  (`routing_ledger`) and the subscription table of ADR-0007
+  (`subscriptions`); `table/2` names each one under a configuration.
   `StatifierRouter.Migrations` creates them from the same two storage
   options, and `put_meta/2` and `queryable/2` point the schemas in
   `StatifierRouter.Schema` at them, so the DDL and the rows cannot
@@ -164,8 +165,8 @@ defmodule StatifierRouter.Config do
           prefix: String.t() | nil
         }
 
-  @typedoc "One of the three tables this package owns."
-  @type table :: :addresses | :dedupe | :routing_ledger
+  @typedoc "One of the four tables this package owns."
+  @type table :: :addresses | :dedupe | :routing_ledger | :subscriptions
 
   @typedoc "Why `new/1` refused a configuration."
   @type new_error ::
@@ -180,7 +181,7 @@ defmodule StatifierRouter.Config do
           | {:reserved_route, String.t()}
           | {:reserved_binding_id, String.t()}
 
-  @tables [:addresses, :dedupe, :routing_ledger]
+  @tables [:addresses, :dedupe, :routing_ledger, :subscriptions]
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
   @persistence_option_keys [:routes, :invoke_types, :send_types]
@@ -195,7 +196,8 @@ defmodule StatifierRouter.Config do
   @schemas %{
     Schema.Address => :addresses,
     Schema.Dedupe => :dedupe,
-    Schema.Ledger => :routing_ledger
+    Schema.Ledger => :routing_ledger,
+    Schema.Subscription => :subscriptions
   }
 
   @doc """

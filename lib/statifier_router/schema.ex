@@ -1,11 +1,14 @@
 defmodule StatifierRouter.Schema do
   @moduledoc """
-  The Ecto schemas over this package's three tables, one per table
-  `StatifierRouter.Migrations.V01` creates:
+  The Ecto schemas over this package's four tables, one per table
+  `StatifierRouter.Migrations.V01` and `StatifierRouter.Migrations.V02`
+  create:
 
     * `StatifierRouter.Schema.Address` - the address table (ADR-0002).
     * `StatifierRouter.Schema.Dedupe` - the dedupe table (ADR-0003).
     * `StatifierRouter.Schema.Ledger` - the routing ledger (ADR-0004).
+    * `StatifierRouter.Schema.Subscription` - the subscription table
+      (ADR-0007), which `StatifierRouter.Migrations.V02` creates.
 
   Each schema's compiled source is the table's name under the default
   table prefix, `"statifier_router_"`, with no Postgres schema. A host that

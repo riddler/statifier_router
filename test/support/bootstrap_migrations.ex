@@ -13,7 +13,8 @@ defmodule StatifierRouter.BootstrapMigrations do
 
   @migrations [
     {20_260_919_000_101, __MODULE__.DefaultTables},
-    {20_260_919_000_102, __MODULE__.PersistenceTables}
+    {20_260_919_000_102, __MODULE__.PersistenceTables},
+    {20_260_919_000_103, __MODULE__.SubscriptionsTable}
   ]
 
   defmodule DefaultTables do
@@ -27,6 +28,20 @@ defmodule StatifierRouter.BootstrapMigrations do
     # bootstrap migration of its own, as a host's would.
     def up, do: Migrations.up(version: 1)
     def down, do: Migrations.down(from: 1)
+  end
+
+  defmodule SubscriptionsTable do
+    @moduledoc false
+    use Ecto.Migration
+
+    alias StatifierRouter.Migrations
+
+    # What a host already running V01 writes for V02, and the reason this
+    # is a second migration rather than an edit of the one above: `from:`
+    # is inclusive, so `from: 2` runs V02 and does not re-run V01's
+    # `CREATE TABLE` against tables that already exist.
+    def up, do: Migrations.up(from: 2, version: 2)
+    def down, do: Migrations.down(from: 2, version: 2)
   end
 
   defmodule PersistenceTables do
