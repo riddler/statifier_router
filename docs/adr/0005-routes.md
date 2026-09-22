@@ -689,7 +689,7 @@ the committed step together. This record stays at proposed.
 
 ## Amendment (2026-09-22, sr-a14): who owns a delayed send's timer on the send-processor shape
 
-Status: proposed
+Status: accepted
 
 Decision 5 says, under `Only the process-less shape writes the durable
 queue.`, that on the send-processor shape the live session holds its own
@@ -778,3 +778,36 @@ account of what the record was read against rather than a decision.
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
 separate bead after all seven records; the index lags by design until then.
+
+## Note (2026-09-22, sr-3qr): the Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The `Status:` line of the `## Amendment (2026-09-22,
+sr-a14)` moved from `proposed` to `accepted` on the operator's word of
+2026-09-22, in session. The record's own status on line 3 was already
+`accepted` and was not touched, and the record's row in
+`docs/adr/README.md` carries that status rather than the Amendment's, so
+it does not move.
+
+Every claim the Amendment makes was re-verified by anchor at `533b442`,
+the commit this flip was cut from, and each holds:
+
+- The sentence the Amendment quotes is verbatim in
+  `Statifier.Send.Processor`'s moduledoc at statifier 2.6.0, the version
+  `mix.lock` resolves.
+- `StatifierRouter.SendHandler.perform/2` carries the
+  `Statifier.Send.Processor` `@impl`, and the executor seam reaches
+  `StatifierRouter.TimerQueue` through
+  `StatifierRouter.SendHandler.handle_effect/3`. The cancellation key is
+  `c:StatifierRouter.TimerQueue.cancel/3`'s scope and send id, and the
+  scope half on the send-processor shape is the `session_id` that
+  `StatifierRouter.SendHandler.cancel/2` reads from its context.
+- `perform/2` answers a delayed send with
+  `{:error, {:delayed_send_unsupported, send_id}}` today, which is what
+  the Note of 2026-09-21 above records. That is not a stale claim: the
+  Amendment decides what shall be done, and bead `sr-4hw`, open in this
+  repository's tracker, is the code half.
+
+With the flip, decision 5's sentence that on the send-processor shape the
+live session holds its own timers is superseded for registered types, as
+the Amendment says. Decision 5 is left as written; the Amendment governs.
