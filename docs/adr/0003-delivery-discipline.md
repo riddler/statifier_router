@@ -1,6 +1,6 @@
 # ADR-0003: Delivery discipline: one transaction per delivery over the host's repo, step/5 inside it, the address race settled by the unique index, the three create modes, step/5's lock as the per-key guarantee, and dedupe on (binding, message_id) with a row expiry
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -460,3 +460,42 @@ release overtook.
   replacing it - and a host's own webhook controller, which section 5 and
   the outcome-vocabulary record both mention, stays the host's: the helper
   is a Plug-shaped function a controller calls, not a controller.
+
+## Note (2026-09-22, sr-a69): accepted
+
+A Note, not an amendment: it decides nothing above, and every section
+stands as written. It records the status flip and what was re-read to
+license it.
+
+- **The flip.** `Status:` reads `accepted` as of this Note, on the
+  operator's word given after statifier_router 0.2.0 was published. The
+  status word is the only line above this Note that changed.
+- **Every claim was re-verified at `0cea19c`.** Each sentence this record
+  makes about this package's code was re-read by anchor at that commit
+  before the flip, and each held. The verdicts, one per claim, are
+  enumerated in the pull request that carried this Note.
+- **No body sentence speaks of this record's own status.** The body was
+  searched for one; the only other occurrence of the word is section 4's
+  reading of an *execution's* status through
+  `StatifierPersistence.Storage.fetch_execution/2`, which is a different
+  thing. So nothing above is left saying something the flip contradicts,
+  and nothing above needed rewording.
+- **Section 9's "runs no process" was read against the front this package
+  now ships.** `StatifierRouter.Broadway` is a `Broadway` pipeline module,
+  and section 9 still holds as written: the host starts that pipeline in
+  the host's own supervision tree, and the package starts nothing. The
+  module's own documentation says so, and ADR-0005 and ADR-0006 both
+  describe this package as driven process-less.
+- **The two earlier Notes stand unchanged.** The sr-5pi Note
+  (2026-09-20) and the sr-bv1 Note (2026-09-21) are part of what is
+  accepted here; the sentences they qualify are read as they qualify them.
+- **One open question sits against this record and is not decided by the
+  flip.** `sr-7v9` asks whether `StatifierRouter.Broadway`'s partitioner
+  should rescue a host `:normalize` that raises, or whether taking the
+  producer stage down is the intended contract. Nothing is acknowledged
+  when it happens, so section 1's rollback guarantee is unaffected either
+  way; the answer is an amendment or a new record, not a reading of this
+  one.
+- **The index lags by design.** The status cell for this record in
+  `docs/adr/README.md` is flipped by a separate bead after all seven
+  records have flipped.
