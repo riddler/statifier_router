@@ -545,11 +545,15 @@ take a dated Note citing that surface when it lands. This is that Note.
 Every module named here lands in the same commit as this Note.
 
 - **The registry is `:route_adapters`, not `:routes`.** Decision 2 did not
-  name the field, and decision 6 ruled that `:routes` on this struct is
-  the engine's `Statifier.Send.Routes` inside `:persistence_options`. A
-  second `:routes` on the same struct would have re-opened exactly the
-  ambiguity decision 6 closed, so the registry is spelled
-  `:route_adapters`, a map from route name to `{module, config}`.
+  name the field, and decision 6 ruled what `:routes` means *there*:
+  inside `:persistence_options`, which is one field of
+  `%StatifierRouter.Config{}` and whose keys are `:routes`,
+  `:invoke_types` and `:send_types`. The `:routes` key there is the
+  engine's `Statifier.Send.Routes`. Spelling the registry `:routes` as
+  well would have put that one name on two surfaces of a single
+  configuration and re-opened exactly the ambiguity decision 6 closed, so
+  the registry is spelled `:route_adapters`, a map from route name to
+  `{module, config}`.
   `StatifierRouter.Config.route/3` resolves a name in a scope, applying
   `:route_overrides` over the registered configuration.
 
@@ -562,14 +566,17 @@ Every module named here lands in the same commit as this Note.
 - **The handler is `StatifierRouter.SendHandler`, and it serves both
   shapes from one module, as decision 5 requires.** On the send-processor
   shape it respects `Statifier.Send.Processor`'s split (statifier 2.6.0):
-  the planning callbacks compose the key and return one
-  `{:handler, module, payload}` instruction, and the adapter is reached
-  from `perform/2`, the impure half. Decision 5's sentence that both entry
+  `deliver/3` composes decision 4's key and returns one
+  `{:handler, module, payload}` instruction carrying it, `cancel/2`
+  returns an instruction carrying the cancel effect and the scope and no
+  key at all - a cancel is keyed on `(scope, send_id)` and carries
+  nothing that identifies a route - and the adapter is reached from
+  `perform/2`, the impure half. Decision 5's sentence that both entry
   points "call the same adapter" holds in substance; a handler that called
   an adapter from `deliver/3` would depart from that behaviour's
   documented purity.
 
-- **The type strings reach the engine through `:send_type`.** Decision 6
+- **The type string reaches the engine through `:send_type`.** Decision 6
   ruled that the snapshot cannot be derived from the registry.
   `StatifierRouter.Config.new/1` builds it from the one type string the
   host gives and the handler module, and a configuration that also
@@ -577,9 +584,11 @@ Every module named here lands in the same commit as this Note.
   silently winning.
 
 - **The durable timer queue is the host's, and this package states its
-  shape.** Decision 5 made the queue a host obligation and this
-  repository's migration is closed to a second table, so the queue is
-  `StatifierRouter.TimerQueue`, a behaviour a host registers.
+  shape.** Decision 5 makes the queue a host obligation: it is "the
+  host's own durable timer queue", and a host with no such queue "cannot
+  serve a delayed send on a route at all". So the queue is
+  `StatifierRouter.TimerQueue`, a behaviour a host registers rather than
+  a table this package adds.
   `c:StatifierRouter.TimerQueue.cancel/3` takes the scope and the send id
   separately, which is st-ADR-0054's cancellation key; decision 4's
   composed key rides beside the row as the dedup key.
