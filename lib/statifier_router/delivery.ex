@@ -120,10 +120,13 @@ defmodule StatifierRouter.Delivery do
   `{:error, {:unresolved_document, document, reason}}` when the resolver
   answers `{:error, reason}`, and
   `{:error, {:chart_not_resolved, content_hash}}` when the chart resolver
-  answers `:error`, roll the whole transaction back and are returned. A
-  raise rolls it back the same way and propagates; nothing here rescues
-  it. Effects the executor was handed before a rollback stay fired
-  (ADR-0003, section 2).
+  answers `:error`, roll this delivery's own transaction back and are
+  returned. On `deliver/4` that rolls back the whole transaction, since it
+  is the outermost one; `deliver_event/4` rolls back to a savepoint of its
+  own instead and never touches the transaction it was called inside, and
+  its own documentation says why. A raise rolls back the same way and
+  propagates; nothing here rescues it. Effects the executor was handed
+  before a rollback stay fired (ADR-0003, section 2).
 
   The execution id is a UXID with the prefix `ex`, minted by
   `UXID.generate!/1`; nothing is derived from the address (ADR-0002,
@@ -210,11 +213,76 @@ defmodule StatifierRouter.Delivery do
   guards the route door, and an execution-to-execution send never enters a
   route: `StatifierRouter.SendHandler` branches on the reserved target name
   before it marks a route as running.
+
+  ## This door takes a savepoint, and it does not roll back
+
+  `deliver/4` is the outermost transaction on its path, so the rollback its
+  error arm takes ends that transaction and answers its caller
+  `{:error, reason}`. This door is not outermost: it is called at the
+  executor seam, inside the sending execution's own `step/5`, which
+  statifier_persistence has already opened a transaction for. A
+  `c:Ecto.Repo.rollback/1` there would take the **sender's** transaction
+  with it, answer a bare `:rollback` in place of the reason, and raise
+  `DBConnection.ConnectionError` out of the sending step's persist tail. And
+  `mode: :savepoint` does not prevent it: `DBConnection.transaction/3`
+  ignores its options once the connection is already in a transaction
+  (db_connection 2.10.2, the `conn_mode: :transaction` clause), so a nested
+  `c:Ecto.Repo.transaction/2` gets no savepoint to roll back to.
+
+  That outcome is the opposite of what the records require: ADR-0005,
+  section 7 has the handler's `{:error, reason}` leave the sending step
+  standing, and ADR-0006, section 3 rests on it. So this door rolls nothing
+  back. It brackets the delivery in an explicit SQL savepoint of its own and
+  answers the reason as an ordinary return:
+
+    * on an outcome, the savepoint is released and the delivery's writes
+      stand with the rest of the enclosing transaction;
+    * on a delivery-level error - an unresolved document, a chart that does
+      not resolve, a refusal from `create/4`, `step/5` or
+      `StatifierPersistence.Storage.fetch_execution/2` - the transaction
+      rolls back **to that savepoint**, which undoes every write this
+      delivery made on the target side (the dedupe row it claimed, the
+      address row it inserted, the execution it created) and nothing else,
+      and `{:error, reason}` carrying the real reason is returned.
+
+  The savepoint's name is minted from `System.unique_integer/1`, never from
+  anything a caller supplies, and a nested delivery gets its own. The host's
+  `:repo` therefore has to answer `query!/1` as well, which every
+  `Ecto.Adapters.SQL` repo does; this package's tables are Postgres already.
+
+  A raise is the one case that still reaches the enclosing transaction,
+  exactly as it does on the binding path: nothing here rescues, and the
+  record leaves a raise as a raise.
   """
   @spec deliver_event(Config.t(), plan(), String.t(), envelope()) ::
           StatifierRouter.outcome() | {:error, term()}
-  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery),
-    do: in_transaction(config, plan, key, delivery)
+  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery) do
+    # The transaction is what gives the savepoint something to live in when
+    # this door is called outside one; inside the sending step's
+    # transaction, which is the shape the seam drives, it nests and the
+    # savepoint is the only thing that settles this delivery.
+    config.repo.transaction(fn -> guarded(config, plan, key, delivery) end)
+    |> case do
+      {:ok, {:ok, outcome}} -> outcome
+      {:ok, {:error, _reason} = error} -> error
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp guarded(config, plan, key, delivery) do
+    savepoint = "sr_execution_target_#{System.unique_integer([:positive])}"
+    config.repo.query!("SAVEPOINT " <> savepoint)
+
+    case claimed(config, plan, key, delivery) do
+      {:ok, outcome} ->
+        config.repo.query!("RELEASE SAVEPOINT " <> savepoint)
+        {:ok, outcome}
+
+      {:error, _reason} = error ->
+        config.repo.query!("ROLLBACK TO SAVEPOINT " <> savepoint)
+        error
+    end
+  end
 
   defp delivered(config, %Binding{} = binding, key, delivery) do
     SendHandler.put_delivery_scope(delivery.scope)

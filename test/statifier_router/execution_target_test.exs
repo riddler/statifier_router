@@ -86,6 +86,27 @@ defmodule StatifierRouter.ExecutionTargetTest do
   </scxml>
   """
 
+  # The same send naming a document the host's resolver does not know: the
+  # delivery fails inside the sender's own step, which is the shape the
+  # nested transaction makes hazardous.
+  @unresolved """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
+    <state id="waiting">
+      <transition event="impression" target="shown"/>
+    </state>
+    <state id="shown">
+      <onentry>
+        <send type="myapp:router" target="execution" event="pair.joined">
+          <param name="document" expr="'unknown_counter'"/>
+          <param name="key" expr="'home_top'"/>
+        </send>
+      </onentry>
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
   # A counter that is finished as soon as it is created.
   @instant """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="done">
@@ -97,6 +118,7 @@ defmodule StatifierRouter.ExecutionTargetTest do
     "plain_join" => @plain,
     "sending_join" => @sending,
     "malformed_join" => @malformed,
+    "unresolved_join" => @unresolved,
     "placement_counter" => @counter,
     "instant_counter" => @instant
   }
@@ -331,6 +353,34 @@ defmodule StatifierRouter.ExecutionTargetTest do
     end
   end
 
+  describe "a delivery that errors inside the sending step" do
+    # sabotage: deliver_event/4 settled through in_transaction/4, the
+    # rollback door deliver/4 uses, instead of its own savepoint -> the
+    # nested rollback aborted the sender's transaction, the persist tail
+    # raised DBConnection.ConnectionError out of the step and route/3
+    # never returned an outcome, red; restored, green.
+    test "reports the real reason, leaves the sender's step standing, and leaves no target row" do
+      config = config("unresolved_join")
+
+      assert {:ok, [{:created_and_delivered, "impressions_to_join", sender}]} =
+               StatifierRouter.route(config, impression(), now: @now)
+
+      # The reason the delivery failed for, not a bare :rollback and not a
+      # raise (ADR-0005, section 7; ADR-0006, section 3).
+      assert_received {:handled, {:error, {:unresolved_document, "unknown_counter", _reason}}}
+
+      # The sender's step stands: its execution committed with the event
+      # that fired the send in its input log.
+      assert {:ok, [%{event: %{name: "impression"}}]} = Executions.inputs(config.store, sender)
+
+      # And the target side left nothing behind: the address row the
+      # delivery inserted before the resolver refused is gone with the
+      # savepoint.
+      assert addresses(config, "unknown_counter") == []
+      assert dedupe_rows(config) == ["impressions_to_join"]
+    end
+  end
+
   describe "the reserved name at configuration time" do
     # sabotage: route_adapters/1 dropped its reserved-name check -> a host
     # registered a transport under the name a chart writes for the
@@ -402,7 +452,9 @@ defmodule StatifierRouter.ExecutionTargetTest do
 
     executor = fn effect, context ->
       send(pid, {:effect, effect})
-      SendHandler.handle_effect(config, effect, context)
+      answer = SendHandler.handle_effect(config, effect, context)
+      send(pid, {:handled, answer})
+      answer
     end
 
     %{config | executor: executor}
@@ -457,4 +509,13 @@ defmodule StatifierRouter.ExecutionTargetTest do
   end
 
   defp counter_addresses(config), do: addresses(config, "placement_counter")
+
+  defp dedupe_rows(config) do
+    TestRepo.all(
+      from(d in Config.queryable(config, StatifierRouter.Schema.Dedupe),
+        order_by: d.id,
+        select: d.binding_id
+      )
+    )
+  end
 end
