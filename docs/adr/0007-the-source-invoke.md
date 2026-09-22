@@ -298,3 +298,44 @@ Two things about the record as written, neither a correction:
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
 separate bead after all seven flips, so the index lags this file until then.
+
+## Note (2026-09-22, sr-6jl): the subscription table is not a delivery gate
+
+The open question the Note above names, RF062-R3, is answered **no gate**,
+on the operator's word in session on 2026-09-22, after statifier_router
+0.2.0 was published. This Note records that ruling. It decides nothing
+beyond what the record's closing section already decides, and no line
+above it was edited.
+
+The subscription table is a **lifetime record** of an invoke's
+subscription, kept for cleanup and observability. A row says that one
+invocation of one binding in one execution is live; it is written by
+`StatifierRouter.subscribe/3` and deleted by `StatifierRouter.cancel/2`,
+under the DDL of `StatifierRouter.Migrations.V02` and the schema of
+`StatifierRouter.Schema.Subscription`.
+
+It is **not** consulted on the way in. Every event still arrives through
+the ordinary binding path, which is the decision the closing section of
+this record's Decision already states - "it subscribes and unsubscribes,
+and every event it wants arrives through the ordinary binding path" - and
+that absence is pinned by the test named "an event routes through its
+binding whether or not the invocation is subscribed"
+(`test/statifier_router/source_invoke_test.exs`), which routes a click to
+a subscribed execution and to a cancelled one and gets the same delivery
+both times.
+
+The `scope` and `key` columns are written at subscribe time from the
+execution's address row and are read by nothing under `lib/` today: a
+grep of `lib/` for a read of either column off a subscription row returns
+no line, and the only reads of a subscription row there are the
+delete-by-triple in `StatifierRouter.cancel/2` and the binding-id lookup
+in `StatifierRouter.SourceInvoke.cancel/3`. That is deliberate. The two
+columns are the record of what the subscription was for, resolved once,
+so an operator reading the table can answer it without a second lookup,
+and section 6 of this record asks the row to carry them.
+
+A gate, if a host ever needs one, is a later **Amendment**, and the thing
+that Amendment has to name first is the **outcome** an unsubscribed
+delivery gets - what `StatifierRouter.route/3` returns for an event whose
+execution has no live subscription. Nothing in this record fixes that
+outcome, so nothing here may be read as reserving it.
