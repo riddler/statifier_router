@@ -18,6 +18,10 @@ defmodule StatifierRouter.Config do
   | `:resolver` | the `StatifierRouter.Resolver` naming the chart a new execution starts on: a module implementing it or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:chart_resolver` | a fun of `(content_hash)` compiling the chart an existing execution started on | required by `StatifierRouter.Delivery` |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
+  | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
+  | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
+  | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
+  | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
   | `:prefix` | the Postgres schema the tables live in, as a string | `nil` (the repo's default) |
 
@@ -27,6 +31,26 @@ defmodule StatifierRouter.Config do
   out; one it gives is checked all the same. `:persistence_options` is
   never required: a configuration that omits it carries no snapshot, which
   is what statifier_persistence reads as "the built-in set only".
+
+  ## The route registry, and the two `routes` on this struct
+
+  `:route_adapters` is ADR-0005 decision 2's registry: the named outbound
+  destinations a chart reaches with `<send target="...">`, each mapped to
+  the module that serves it. It is deliberately **not** spelled `:routes`.
+  `:routes` already means something else here - it is one of
+  `:persistence_options`, where it is `Statifier.Send.Routes`, the
+  engine's point-in-time claim about which `<send>` routes are live - and
+  ADR-0005 decision 6 closed that ambiguity by vocabulary rather than by
+  renaming the engine's. `route/3` resolves a name in a scope.
+
+  `:send_type` is the one type string `StatifierRouter.SendHandler` is
+  registered under. Giving it is what puts `send_types:` into
+  `:persistence_options`, as the `Statifier.Send.Types` snapshot built
+  from that type string and that handler (ADR-0005, decision 6); the
+  registry cannot supply it, because a registry maps a route name to an
+  adapter and holds no type string. A configuration that gives both
+  `:send_type` and a `:send_types` of its own is refused with
+  `{:declared_send_types, send_type}` rather than one silently winning.
 
   ## What the checks here do and do not catch
 
@@ -82,9 +106,13 @@ defmodule StatifierRouter.Config do
       "routing"
   """
 
+  alias Statifier.Send.Types
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
+  alias StatifierRouter.Route
   alias StatifierRouter.Schema
+  alias StatifierRouter.SendHandler
+  alias StatifierRouter.TimerQueue
 
   @enforce_keys [:repo, :delivery]
   defstruct [
@@ -95,8 +123,12 @@ defmodule StatifierRouter.Config do
     :resolver,
     :chart_resolver,
     :prefix,
+    :send_type,
+    :timer_queue,
     bindings: [],
     persistence_options: [],
+    route_adapters: %{},
+    route_overrides: %{},
     table_prefix: "statifier_router_"
   ]
 
@@ -124,6 +156,10 @@ defmodule StatifierRouter.Config do
           chart_resolver: chart_resolver() | nil,
           bindings: [Binding.t()],
           persistence_options: keyword(),
+          route_adapters: %{optional(String.t()) => Route.t()},
+          route_overrides: %{optional(String.t()) => %{optional(String.t()) => map()}},
+          send_type: String.t() | nil,
+          timer_queue: TimerQueue.t() | nil,
           table_prefix: String.t(),
           prefix: String.t() | nil
         }
@@ -139,12 +175,20 @@ defmodule StatifierRouter.Config do
           | {:invalid_config, term()}
           | {:binding, non_neg_integer(), Binding.new_error()}
           | {:duplicate_binding_id, String.t()}
+          | {:unregistered_route, String.t(), String.t()}
+          | {:declared_send_types, String.t()}
 
   @tables [:addresses, :dedupe, :routing_ledger]
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
   @persistence_option_keys [:routes, :invoke_types, :send_types]
-  @known [:repo, :delivery, :bindings, :persistence_options | @delivery_keys ++ @storage_keys]
+  @route_keys [:route_adapters, :route_overrides, :send_type, :timer_queue]
+  @known [
+    :repo,
+    :delivery,
+    :bindings,
+    :persistence_options | @delivery_keys ++ @storage_keys ++ @route_keys
+  ]
 
   @schemas %{
     Schema.Address => :addresses,
@@ -179,7 +223,8 @@ defmodule StatifierRouter.Config do
          {:ok, delivery} <- fetch_delivery(opts),
          {:ok, needs} <- delivery_needs(opts, delivery),
          :ok <- same_repo(needs[:store], repo),
-         {:ok, persistence_options} <- persistence_options(opts),
+         {:ok, routes} <- routes(opts),
+         {:ok, persistence_options} <- persistence_options(opts, routes[:send_type]),
          {:ok, storage} <- storage(opts),
          {:ok, bindings} <- bindings(opts) do
       {:ok,
@@ -189,7 +234,7 @@ defmodule StatifierRouter.Config do
            {:repo, repo},
            {:delivery, delivery},
            {:bindings, bindings},
-           {:persistence_options, persistence_options} | needs ++ storage
+           {:persistence_options, persistence_options} | needs ++ storage ++ routes
          ]
        )}
     end
@@ -204,6 +249,37 @@ defmodule StatifierRouter.Config do
   @spec table(t(), table()) :: String.t()
   def table(%__MODULE__{table_prefix: table_prefix}, table) when table in @tables,
     do: table_name(table_prefix, table)
+
+  @doc """
+  The adapter serving the route `name` under `scope`, with that scope's
+  override applied over the adapter's registered configuration, or
+  `:error` when the host registered no such route (ADR-0005, decision 2).
+
+  A scope overrides a route's configuration and never its existence, so a
+  name absent from `:route_adapters` misses in every scope, and a `scope`
+  of `nil` - a caller with no scope in reach - resolves the registered
+  configuration unchanged.
+  """
+  @spec route(t(), String.t() | nil, String.t() | nil) :: {:ok, Route.t()} | :error
+  def route(%__MODULE__{} = config, scope, name) when is_binary(name) do
+    case Map.fetch(config.route_adapters, name) do
+      {:ok, {module, registered}} ->
+        {:ok, {module, Map.merge(registered, override(config, scope, name))}}
+
+      :error ->
+        :error
+    end
+  end
+
+  def route(%__MODULE__{}, _scope, _name), do: :error
+
+  defp override(_config, nil, _name), do: %{}
+
+  defp override(%__MODULE__{route_overrides: overrides}, scope, name) do
+    overrides
+    |> Map.get(scope, %{})
+    |> Map.get(name, %{})
+  end
 
   @doc """
   Points a row of one of the `StatifierRouter.Schema` modules at this
@@ -330,12 +406,106 @@ defmodule StatifierRouter.Config do
   # place are accepted: `:initialize` and `:metadata` are per-execution
   # host data rather than a standing snapshot, and `:executor` is the
   # configuration's own option.
-  defp persistence_options(opts) do
+  defp persistence_options(opts, send_type) do
     given = Keyword.get(opts, :persistence_options, [])
 
-    if snapshot?(given),
+    cond do
+      not snapshot?(given) -> {:error, {:invalid_value, :persistence_options, given}}
+      is_nil(send_type) -> {:ok, given}
+      Keyword.has_key?(given, :send_types) -> {:error, {:declared_send_types, send_type}}
+      true -> {:ok, given ++ [send_types: send_types(send_type)]}
+    end
+  end
+
+  # ADR-0005 decision 6: the snapshot is built from the handler module and
+  # the type string it is registered under, never from the route registry,
+  # which maps a route name to an adapter and holds no type string at all.
+  defp send_types(send_type),
+    do: Types.from_send_types(%{send_type => SendHandler})
+
+  # ADR-0005 decision 2's registry, and the one type string decision 6's
+  # snapshot is built from. An override may change a registered route's
+  # configuration and may not add or remove a route, so an override naming
+  # a route the host did not register is refused here rather than missed
+  # at run time.
+  defp routes(opts) do
+    with {:ok, adapters} <- route_adapters(opts),
+         {:ok, overrides} <- route_overrides(opts, adapters),
+         {:ok, send_type} <- send_type(opts),
+         {:ok, timer_queue} <- timer_queue(opts) do
+      {:ok,
+       [
+         route_adapters: adapters,
+         route_overrides: overrides,
+         send_type: send_type,
+         timer_queue: timer_queue
+       ]}
+    end
+  end
+
+  defp route_adapters(opts) do
+    given = Keyword.get(opts, :route_adapters, %{})
+
+    if is_map(given) and Enum.all?(given, &route_adapter?/1),
       do: {:ok, given},
-      else: {:error, {:invalid_value, :persistence_options, given}}
+      else: {:error, {:invalid_value, :route_adapters, given}}
+  end
+
+  defp route_adapter?({name, {module, config}}),
+    do: is_binary(name) and name != "" and Route.valid?(module) and is_map(config)
+
+  defp route_adapter?(_entry), do: false
+
+  defp route_overrides(opts, adapters) do
+    given = Keyword.get(opts, :route_overrides, %{})
+
+    if is_map(given) and Enum.all?(given, &scope_override?/1),
+      do: unregistered_override(given, adapters),
+      else: {:error, {:invalid_value, :route_overrides, given}}
+  end
+
+  defp scope_override?({scope, by_name}) do
+    is_binary(scope) and scope != "" and is_map(by_name) and
+      Enum.all?(by_name, fn {name, config} ->
+        is_binary(name) and name != "" and is_map(config)
+      end)
+  end
+
+  defp scope_override?(_entry), do: false
+
+  defp unregistered_override(given, adapters) do
+    given
+    |> Enum.flat_map(fn {scope, by_name} ->
+      Enum.map(by_name, fn {name, _} -> {scope, name} end)
+    end)
+    |> Enum.find(fn {_scope, name} -> not Map.has_key?(adapters, name) end)
+    |> case do
+      nil -> {:ok, given}
+      {scope, name} -> {:error, {:unregistered_route, scope, name}}
+    end
+  end
+
+  defp send_type(opts) do
+    case Keyword.get(opts, :send_type) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and value != "" -> {:ok, value}
+      value -> {:error, {:invalid_value, :send_type, value}}
+    end
+  end
+
+  defp timer_queue(opts) do
+    case Keyword.get(opts, :timer_queue) do
+      nil ->
+        {:ok, nil}
+
+      {module, config} = value ->
+        if TimerQueue.valid?(module) and is_map(config),
+          do: {:ok, value},
+          else: {:error, {:invalid_value, :timer_queue, value}}
+
+      value ->
+        {:error, {:invalid_value, :timer_queue, value}}
+    end
   end
 
   defp snapshot?(given) do

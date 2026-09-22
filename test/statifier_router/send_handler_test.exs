@@ -1,0 +1,507 @@
+defmodule StatifierRouter.SendHandlerTest do
+  use ExUnit.Case, async: true
+
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Statifier.Effect.Cancel
+  alias Statifier.Effect.Log
+  alias Statifier.Effect.Send
+  alias Statifier.Effect.SendDelayed
+  alias Statifier.Machine
+  alias Statifier.Send.Event, as: SendEvent
+  alias StatifierPersistence.Storage
+  alias StatifierRouter.Config
+  alias StatifierRouter.DeliveryFixtures
+  alias StatifierRouter.RecordingDelivery
+  alias StatifierRouter.RecordingRoute
+  alias StatifierRouter.RecordingTimerQueue
+  alias StatifierRouter.Resolver.Static
+  alias StatifierRouter.SendHandler
+  alias StatifierRouter.TestPersistence
+  alias StatifierRouter.TestRepo
+
+  @now ~U[2026-09-21 08:00:00.000000Z]
+  @type_string "myapp:sink"
+  @other_type "myapp:audit"
+  @scope "7c1e"
+
+  # The impression-and-click join's outbound half (ADR-0005's example).
+  # `waiting` logs the handler's own `_ioprocessors` entry on entry, which
+  # only exists when the send-types snapshot reached the create inside
+  # `initialize:`; `shown` sends to the route on entry.
+  @sink """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
+    <state id="waiting">
+      <onentry><log label="ioproc" expr="_ioprocessors['myapp:sink']"/></onentry>
+      <transition event="impression" target="shown"/>
+    </state>
+    <state id="shown">
+      <onentry>
+        <send type="myapp:sink" target="joined_records" event="joined"/>
+      </onentry>
+      <transition event="click" target="clicked"/>
+    </state>
+    <final id="clicked"/>
+  </scxml>
+  """
+
+  defp adapters(pid) do
+    %{
+      "joined_records" => {RecordingRoute, %{pid: pid, sink: "joined_records"}},
+      "dead_letter" => {RecordingRoute, %{pid: pid, sink: "dead_letter"}}
+    }
+  end
+
+  # A configuration with the registry and the handler's type, over the
+  # recording delivery: nothing here touches the database.
+  defp handler_config(opts \\ []) do
+    {:ok, config} =
+      [
+        repo: TestRepo,
+        delivery: RecordingDelivery,
+        route_adapters: adapters(self()),
+        send_type: @type_string
+      ]
+      |> Keyword.merge(opts)
+      |> Config.new()
+
+    config
+  end
+
+  # The full delivery over the sink chart, with the handler wired in as
+  # the executor: the shape a host builds.
+  defp sink_config(opts \\ []) do
+    {:ok, machine} = Statifier.compile(@sink)
+    {:ok, store} = Storage.new(Storage.Ecto, persistence: TestPersistence)
+    {:ok, static} = Static.new(%{{@scope, "sink_join"} => machine})
+    content_hash = Machine.identity(machine).content_hash
+    pid = self()
+
+    {:ok, config} =
+      [
+        repo: TestRepo,
+        store: store,
+        # Replaced below: the real executor closes over the resolved
+        # configuration, which does not exist until new/1 has answered.
+        executor: fn _effect, _context -> :ok end,
+        resolver: static,
+        chart_resolver: fn ^content_hash -> {:ok, machine} end,
+        bindings: Enum.map(DeliveryFixtures.bindings(), &Map.put(&1, :document, "sink_join")),
+        route_adapters: adapters(pid),
+        send_type: @type_string
+      ]
+      |> Keyword.merge(opts)
+      |> Config.new()
+
+    executor = fn effect, context ->
+      send(pid, {:effect, effect})
+      SendHandler.handle_effect(config, effect, context)
+    end
+
+    %{config | executor: executor}
+  end
+
+  defp send_effect(opts \\ []) do
+    struct!(
+      %Send{
+        event: "joined",
+        target: "joined_records",
+        type: @type_string,
+        data: %{},
+        send_id: "send_1",
+        c_index: 3,
+        owner: nil,
+        macrostep: 1,
+        microstep: 0,
+        round: 0,
+        ordinal: 1
+      },
+      opts
+    )
+  end
+
+  defp delayed_effect(opts \\ []) do
+    struct!(
+      %SendDelayed{
+        event: "timeout",
+        target: "joined_records",
+        type: @type_string,
+        data: %{},
+        send_id: "send_1",
+        delay_ms: 5_000,
+        c_index: 4,
+        owner: nil,
+        macrostep: 1,
+        microstep: 0,
+        round: 0,
+        ordinal: 2
+      },
+      opts
+    )
+  end
+
+  defp seam(execution_id), do: %{execution_id: execution_id, content_hash: "sha_1"}
+
+  describe "the send-processor shape" do
+    setup do
+      on_exit(&SendHandler.delete_config/0)
+      :ok
+    end
+
+    # sabotage: deliver/3 called the adapter itself and returned {:ok, []}
+    # -> the adapter was reached with no instruction planned and the
+    # perform assertion found nothing, red; restored, green.
+    test "plans one handler instruction and performs it against the route" do
+      effect = send_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      assert {:ok, [{:handler, SendHandler, payload}]} =
+               SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      # deliver/3 is pure: no process, no clock, no I/O, so nothing has
+      # reached the adapter yet.
+      refute_received {:routed, _config, _event, _key}
+
+      :ok = SendHandler.put_config(handler_config())
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+
+      assert_received {:routed, %{sink: "joined_records"}, ^event, {"session_1", position, 1}}
+
+      assert position == %{
+               send_id: "send_1",
+               macrostep: 1,
+               microstep: 0,
+               round: 0,
+               c_index: 3,
+               owner: nil
+             }
+    end
+
+    # sabotage: the {:send_delayed, ...} clause of perform/2 answered :ok
+    # -> a delayed send was silently dropped on a shape that holds no
+    # timer, red; restored, green.
+    test "refuses a delayed send rather than dropping it, and writes no queue row" do
+      effect = delayed_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      assert {:ok, [{:handler, SendHandler, payload}]} =
+               SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
+               {:error, {:delayed_send_unsupported, "send_1"}}
+
+      assert RecordingTimerQueue.entries() == []
+    end
+
+    # sabotage: perform/2 answered :ok for an unregistered route -> the
+    # miss the host reports through failed_send/3 disappeared, red;
+    # restored, green.
+    test "answers a miss with the error the host reports through failed_send/3" do
+      effect = send_effect(target: "audit_log")
+      event = SendEvent.build(effect, "session_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      :ok = SendHandler.put_config(handler_config())
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
+               {:error, {:unregistered_route, "audit_log"}}
+
+      refute_received {:routed, _config, _event, _key}
+    end
+
+    # sabotage: fetch_config/0 answered {:ok, %Config{}} for an empty
+    # process -> perform/2 raised instead of refusing, red; restored,
+    # green.
+    test "refuses when the host installed no configuration in this process" do
+      effect = send_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
+               {:error, {:no_config, SendHandler}}
+    end
+
+    # sabotage: cancel/2 returned {:ok, []} -> the instruction the session
+    # routes back to perform/2 was never planned, red; restored, green.
+    test "plans a cancel, which writes no queue row on this shape" do
+      cancel = %Cancel{send_id: "send_1", macrostep: 2, microstep: 0, round: 0, ordinal: 2}
+
+      assert {:ok, [{:handler, SendHandler, payload}]} =
+               SendHandler.cancel(cancel, %{session_id: "session_1"})
+
+      :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+      assert RecordingTimerQueue.entries() == []
+    end
+
+    # sabotage: ioprocessors_entry/1 returned %{} -> spec 5.10's entry
+    # carried no value for the registered type, red; restored, green.
+    test "answers spec 5.10's entry for the type it is registered under" do
+      assert SendHandler.ioprocessors_entry(@type_string) == %{"location" => @type_string}
+    end
+  end
+
+  describe "the executor seam" do
+    # sabotage: hand_off/3 built the event with a constant session id ->
+    # the two shapes' events differed in origin, red; restored, green.
+    test "hands the adapter the same event and the same key as the send-processor shape" do
+      effect = send_effect()
+      scope = "ex_9k2q"
+      config = handler_config()
+
+      # The send-processor shape, whose scope half is the session id.
+      event = SendEvent.build(effect, scope)
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: scope})
+
+      :ok = SendHandler.put_config(config)
+      assert SendHandler.perform(payload, %{session_id: scope}) == :ok
+      on_exit(&SendHandler.delete_config/0)
+      assert_received {:routed, _config, processor_event, processor_key}
+
+      # The process-less shape, whose scope half is the execution id.
+      assert SendHandler.handle_effect(config, {:send, effect}, seam(scope)) == :ok
+      assert_received {:routed, _config, seam_event, seam_key}
+
+      assert seam_event == processor_event
+      assert seam_key == processor_key
+    end
+
+    # sabotage: mine?/2 answered true for every effect -> a send of
+    # another host's type reached this package's registry, red; restored,
+    # green.
+    test "ignores an effect of another type, and every effect that is not a send" do
+      config = handler_config()
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(type: @other_type)},
+               seam("ex_1")
+             ) == :ok
+
+      assert SendHandler.handle_effect(
+               config,
+               {:log, %Log{label: "shown", macrostep: 1, microstep: 0, round: 0}},
+               seam("ex_1")
+             ) == :ok
+
+      refute_received {:routed, _config, _event, _key}
+    end
+
+    # sabotage: Config.route/3 was called with a nil scope from the seam
+    # -> the override never applied and the adapter saw the registered
+    # configuration, red; restored, green.
+    test "applies the delivery's scope override to the configuration the adapter sees" do
+      config =
+        handler_config(
+          route_overrides: %{"staging" => %{"joined_records" => %{sink: "staging_sink"}}}
+        )
+
+      :ok = SendHandler.put_delivery_scope("staging")
+      on_exit(&SendHandler.delete_delivery_scope/0)
+
+      assert SendHandler.handle_effect(config, {:send, send_effect()}, seam("ex_1")) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
+    end
+
+    # sabotage: refusal/2 answered :ok -> the unregistered route was
+    # swallowed and nothing reached the chart, red; restored, green.
+    test "refuses a target naming no registered route" do
+      assert SendHandler.handle_effect(
+               handler_config(),
+               {:send, send_effect(target: "audit_log")},
+               seam("ex_1")
+             ) == {:error, {:unregistered_route, "audit_log"}}
+    end
+
+    # sabotage: in_route/2 deleted the key before calling the fun ->
+    # sending_execution/0 was nil inside the adapter, red; restored,
+    # green.
+    test "names the sending execution while a route runs, and only then" do
+      pid = self()
+
+      config =
+        handler_config(
+          route_adapters: %{
+            "joined_records" =>
+              {RecordingRoute,
+               %{
+                 pid: pid,
+                 answer: fn ->
+                   send(pid, {:sending, SendHandler.sending_execution()})
+                   :ok
+                 end
+               }}
+          }
+        )
+
+      assert SendHandler.sending_execution() == nil
+      assert SendHandler.handle_effect(config, {:send, send_effect()}, seam("ex_1")) == :ok
+      assert_received {:sending, "ex_1"}
+      assert SendHandler.sending_execution() == nil
+    end
+  end
+
+  describe "the durable timer queue" do
+    # sabotage: schedule/5 wrote the entry without the route name -> a
+    # cancel, which carries no target, had nothing to fire against, red;
+    # restored, green.
+    test "records a delayed send under the cancellation key, with the route it named" do
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+      effect = delayed_effect()
+
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_1")) == :ok
+
+      assert [entry] = RecordingTimerQueue.entries("ex_1", "send_1")
+      assert entry.route == "joined_records"
+      assert entry.delay_ms == 5_000
+      assert entry.config == %{pid: self(), sink: "joined_records"}
+      assert entry.event == SendEvent.build(effect, "ex_1")
+      # The dedup key rides beside the row; it is not the key the row is
+      # stored under.
+      assert entry.key ==
+               {"ex_1",
+                %{
+                  send_id: "send_1",
+                  macrostep: 1,
+                  microstep: 0,
+                  round: 0,
+                  c_index: 4,
+                  owner: nil
+                }, 2}
+    end
+
+    # THE two-keys pin. sabotage: dequeue/3 passed "ex_2" to the queue in
+    # place of the seam's own execution id -> the cancel run in ex_1 left
+    # ex_1's timer standing and took ex_2's instead, red; restored, green.
+    # A queue keyed on the send id alone fails this test the same way,
+    # which is the defect the record names.
+    test "a cancel in one execution leaves another execution's timer standing under the same send id" do
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+      effect = delayed_effect()
+
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_1")) == :ok
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_2")) == :ok
+
+      cancel = %Cancel{send_id: "send_1", macrostep: 2, microstep: 0, round: 0, ordinal: 3}
+      assert SendHandler.handle_effect(config, {:cancel, cancel}, seam("ex_1")) == :ok
+
+      assert RecordingTimerQueue.entries("ex_1", "send_1") == []
+      assert [%{scope: "ex_2"}] = RecordingTimerQueue.entries("ex_2", "send_1")
+    end
+
+    # sabotage: dequeue/3's {:ok, _deleted} clause answered {:error, ...}
+    # for a zero count -> a cancel matching nothing failed the step, red;
+    # restored, green.
+    test "a cancel that matches nothing is a no-op, and a host with no queue has nothing to cancel" do
+      cancel = %Cancel{send_id: "send_9", macrostep: 2, microstep: 0, round: 0, ordinal: 3}
+
+      assert SendHandler.handle_effect(
+               handler_config(timer_queue: {RecordingTimerQueue, %{}}),
+               {:cancel, cancel},
+               seam("ex_1")
+             ) == :ok
+
+      assert SendHandler.handle_effect(handler_config(), {:cancel, cancel}, seam("ex_1")) == :ok
+    end
+
+    # sabotage: the %Config{timer_queue: nil} clause of schedule/5
+    # answered :ok -> a delayed send with nowhere durable to go was
+    # dropped silently, red; restored, green.
+    test "refuses a delayed send when the host registered no queue" do
+      assert SendHandler.handle_effect(
+               handler_config(),
+               {:send_delayed, delayed_effect()},
+               seam("ex_1")
+             ) == {:error, {:no_timer_queue, "send_1"}}
+    end
+  end
+
+  describe "a durable execution through Delivery" do
+    setup do
+      :ok = Sandbox.checkout(TestRepo)
+      :ok
+    end
+
+    # THE create/4 initialize: pin. sabotage: Delivery.create_options/1
+    # passed the snapshot beside the machine instead of inside
+    # initialize: -> `_ioprocessors` carried no entry for the registered
+    # type and the logged value came back nil, red; restored, green.
+    test "carries the send-types snapshot into the created execution's _ioprocessors" do
+      config = sink_config()
+
+      assert {:ok, [{:created_and_delivered, _binding, _execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      assert_received {:effect, {:log, %Log{label: "ioproc", value: value}}}
+      assert value == %{"location" => @type_string}
+    end
+
+    # sabotage: SendHandler.handle_effect/3's {:send, ...} clause answered
+    # :ok without routing -> the chart's send reached no adapter though
+    # the execution stepped, red; restored, green.
+    test "hands the chart's send to the route with the execution id as the key's scope" do
+      config = sink_config()
+
+      assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      assert_received {:routed, %{sink: "joined_records"}, event,
+                       {^execution_id, _position, _ord}}
+
+      assert event.name == "joined"
+    end
+
+    # sabotage: SendHandler.refusal/2 raised instead of answering an error
+    # -> the delivery rolled back and the step did not commit, red;
+    # restored, green.
+    test "an unregistered route is reported and the step still commits" do
+      config = sink_config(route_adapters: %{"dead_letter" => {RecordingRoute, %{pid: self()}}})
+
+      assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      refute_received {:routed, _config, _event, _key}
+
+      # The step stands: the execution exists and its input log holds the
+      # event that fired the refused send.
+      assert {:ok, [%{event: %{name: "impression"}}]} =
+               StatifierPersistence.Executions.inputs(config.store, execution_id)
+    end
+
+    # THE reentrancy pin. sabotage: Delivery.deliver/4's
+    # sending_execution/0 check removed -> the route's nested route/3 ran
+    # a step from a position the outer step had not written, red;
+    # restored, green.
+    test "refuses a route that calls back into the sending execution" do
+      pid = self()
+
+      reentrant = fn ->
+        send(pid, {:reentered, StatifierRouter.route(Process.get(:config), click(), now: @now)})
+        :ok
+      end
+
+      config =
+        sink_config(
+          route_adapters: %{
+            "joined_records" => {RecordingRoute, %{pid: pid, answer: reentrant}}
+          }
+        )
+
+      Process.put(:config, config)
+
+      assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      assert_received {:reentered, {:error, {:reentrant_route, ^execution_id}}}
+    end
+  end
+
+  defp click, do: DeliveryFixtures.click("ad_events/3/2201")
+end

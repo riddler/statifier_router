@@ -68,16 +68,20 @@ over again. A binding whose `order` is `:none` is not partitioned by its key.
 - **Dedupe** on `(binding, message_id)` with a horizon.
 - **The recorded outcome vocabulary**: every delivery attempt ends in one
   named, recorded outcome.
+- **The route registry**: the named, one-way outbound destinations a chart
+  reaches with `<send>`, registered per host and overridable per scope.
 - **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
   host calls from its own controller or plug.
 
 ## What it does not own
 
-- Sinks and the route registry.
+- The sinks themselves: a route adapter, what it writes to, and its
+  retries are the host's.
 - Execution-to-execution sends.
 - The source invoke.
 - Any queue adapter: Broadway's producers are the host's choice.
-- Timers: those are [statifier_oban](https://github.com/riddler/statifier_oban)'s.
+- Timers: those are [statifier_oban](https://github.com/riddler/statifier_oban)'s,
+  and the durable queue a delayed route send is recorded on is the host's.
 - A publish store: a host callback resolves a document to its active chart.
 - Any process or supervisor: the host schedules the reapers and starts the
   pipeline.
@@ -101,6 +105,80 @@ document, one key:
 
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
+
+## Routes and sinks
+
+A chart reaches the outside world with `<send>`. The `type` names the
+host's processor and the `target` names a **route**: an opaque string this
+package resolves against the host's registry, which the engine never
+parses.
+
+```xml
+<send type="myapp:sink" target="joined_records" event="joined"/>
+<send type="myapp:sink" target="dead_letter" event="orphaned"/>
+```
+
+The host registers each route once and gives the handler the one type
+string it answers to. `:send_type` is what puts the engine-visible
+`send_types:` snapshot into `:persistence_options`, so every create and
+every step of every delivery carries it:
+
+```elixir
+StatifierRouter.Config.new(
+  repo: MyApp.Repo,
+  store: store,
+  resolver: resolver,
+  chart_resolver: chart_resolver,
+  bindings: bindings,
+  send_type: "myapp:sink",
+  route_adapters: %{
+    "joined_records" => {MyApp.OutboxRoute, %{queue: "joined"}},
+    "dead_letter" => {MyApp.OutboxRoute, %{queue: "orphaned"}}
+  },
+  route_overrides: %{"staging" => %{"joined_records" => %{queue: "staging_joined"}}},
+  executor: &MyApp.Executor.execute/2
+)
+```
+
+A scope overrides a route's **configuration** and never its **existence**:
+a staging scope may point `joined_records` at another queue, and cannot
+make a third route appear or take one away. A chart that names a route
+fails the same way in every scope.
+
+A route adapter implements `StatifierRouter.Route`. It is handed its own
+configuration, the built event and an idempotency key, and it answers `:ok`
+or `{:error, reason}`:
+
+```elixir
+defmodule MyApp.OutboxRoute do
+  @behaviour StatifierRouter.Route
+
+  @impl true
+  def deliver(%{queue: queue}, event, key) do
+    MyApp.Repo.insert!(%MyApp.Outbox{queue: queue, event: event, key: key})
+    :ok
+  end
+end
+```
+
+**A route is one-way.** It returns no data into the chart. A sink's result
+- accepted, rejected, an id - comes back as a new inbound event through a
+binding, correlated by the author-written send `id` the adapter echoes,
+with the chart arming its own timeout as a delayed self-send. The one thing
+an `{:error, _}` causes in the sending execution is `error.communication`
+carrying that send's `sendid`.
+
+**A route runs inside the delivery's transaction**, under the execution's
+lock, so it may only hand off durably: a job inserted on the host's own
+repo joins that transaction, which is a transactional outbox for free. It
+must never call back into the sending execution, and
+`StatifierRouter.Delivery.deliver/4` refuses the call it can see.
+
+`StatifierRouter.SendHandler` is the module both host shapes reach - a
+process-less host calls `handle_effect/3` from its executor, a live
+`Statifier.Session` registers the module itself - and
+`StatifierRouter.TimerQueue` is the durable queue a delayed route send is
+recorded on, keyed by `{scope, send_id}`. The rules are ADR-0005's.
 
 ## A webhook front
 
@@ -259,8 +337,15 @@ binding in the same transaction with `StatifierRouter.Dedupe`. The chart a
 new execution starts on is the host's `StatifierRouter.Resolver`, or
 `StatifierRouter.Resolver.Static` over charts compiled at boot. The host
 schedules the two reapers, `StatifierRouter.Dedupe.reap/2` and
-`StatifierRouter.Addresses.reap/2`. Each piece lands behind the decision
-record that fixes it, in [docs/adr/](docs/adr/README.md).
+`StatifierRouter.Addresses.reap/2`. The outbound half is the registry on
+`StatifierRouter.Config`, the adapter behaviour `StatifierRouter.Route`,
+the queue behaviour `StatifierRouter.TimerQueue`, and
+`StatifierRouter.SendHandler`, which serves both shapes a registered
+type's send reaches a host in. The routing-ledger row for a route refusal
+is the one piece of ADR-0005 that is not built: the reported miss and the
+step that still commits are, and `StatifierRouter.SendHandler` says which
+column values are unruled. Each piece lands behind the decision record
+that fixes it, in [docs/adr/](docs/adr/README.md).
 
 ## Installation
 
