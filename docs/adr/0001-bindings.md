@@ -280,7 +280,12 @@ facts in Context were re-read at the versions this release pins:
 the caller-supplied execution id at `StatifierPersistence.Executions`,
 `create/4`, at statifier_persistence 0.13.0. Predicator's own guide files
 are not shipped in its hex package, so the three-valued rules cited from
-them were re-verified against this package's own behaviour instead.
+them were re-verified against predicator's shipped `Predicator.Undefined`,
+which owns the `:undefined` sentinel and keeps it apart from `nil`, and
+against this package's own `match/2` tests "holds only for its own kind of
+event", "returns :undefined when the field it reads is missing" and
+"returns false when the program evaluates to nil", which pin `true`,
+`false`, `nil` and `:undefined` each to the answer section 2 gives it.
 
 No sentence in the body speaks of this record's own status, so nothing
 above this Note was edited.
