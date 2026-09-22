@@ -1,8 +1,9 @@
 {
   "id": "click-then-orphan-timeout",
-  "description": "A click whose impression never comes: after an hour the orphan timer fires, the execution records an orphan click, and after the grace period it finishes.",
+  "description": "A click whose impression never comes: after an hour the orphan timer fires, the orphan reaches dead_letter, and after the grace period the execution finishes.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -34,6 +35,9 @@
     "status": "completed",
     "configuration": [],
     "timers": [],
-    "datamodel": {"outcome": "orphan_click", "late_clicks": []}
+    "sends": [
+      {"route": "dead_letter", "event": {"name": "orphaned", "data": {"impression_id": "imp_d318"}}}
+    ],
+    "datamodel": {"late_clicks": []}
   }
 }

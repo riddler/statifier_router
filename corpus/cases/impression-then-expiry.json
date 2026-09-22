@@ -1,8 +1,9 @@
 {
   "id": "impression-then-expiry",
-  "description": "An impression whose click never comes: the 24 hour window closes, the execution records the impression as expired and holds the grace period.",
+  "description": "An impression whose click never comes: the 24 hour window closes, the closed window reaches dead_letter and the execution holds the grace period.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -34,6 +35,9 @@
     "status": "active",
     "configuration": ["closed"],
     "timers": ["grace.over"],
-    "datamodel": {"outcome": "expired", "late_clicks": []}
+    "sends": [
+      {"route": "dead_letter", "event": {"name": "expired", "data": {"impression_id": "imp_c04e"}}}
+    ],
+    "datamodel": {"late_clicks": []}
   }
 }

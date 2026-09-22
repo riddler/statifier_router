@@ -1,0 +1,51 @@
+{
+  "id": "grace-click-after-expiry",
+  "description": "An impression whose window closed, and a click in the grace period that follows: the closed window reaches dead_letter, and so does the late click, which is kept in late_clicks as well.",
+  "document": "impression_click_join",
+  "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
+  "bindings": [
+    {
+      "id": "impressions_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'impression'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "impression",
+      "data": ["impression_id", "shown_at", "placement"]
+    },
+    {
+      "id": "clicks_to_join",
+      "source": "ad_events",
+      "match": "event.kind == 'click'",
+      "key": "event.impression_id",
+      "document": "impression_click_join",
+      "event": "click",
+      "data": ["impression_id", "clicked_at", "url"]
+    }
+  ],
+  "script": [
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/5/3308", "data": {"kind": "impression", "impression_id": "imp_b7c2", "shown_at": "2026-09-19T08:00:00Z", "placement": "sidebar"}}},
+    {"advance": "PT24H30M"},
+    {"deliver": {"source": "ad_events", "message_id": "ad_events/5/3391", "data": {"kind": "click", "impression_id": "imp_b7c2", "clicked_at": "2026-09-20T08:30:00Z", "url": "https://example.com/offer"}}},
+    {"advance": "PT1H"}
+  ],
+  "expected": {
+    "ledger": [
+      {"binding": "impressions_to_join", "message_id": "ad_events/5/3308", "outcome": "created_and_delivered", "key": "imp_b7c2"},
+      {"binding": "clicks_to_join", "message_id": "ad_events/5/3391", "outcome": "delivered", "key": "imp_b7c2"}
+    ],
+    "status": "completed",
+    "configuration": [],
+    "timers": [],
+    "sends": [
+      {"route": "dead_letter", "event": {"name": "expired", "data": {"impression_id": "imp_b7c2"}}},
+      {"route": "dead_letter", "event": {"name": "late_click", "data": {"impression_id": "imp_b7c2", "click": {"impression_id": "imp_b7c2", "clicked_at": "2026-09-20T08:30:00Z", "url": "https://example.com/offer"}}}}
+    ],
+    "datamodel": {
+      "late_clicks": [
+        {"impression_id": "imp_b7c2", "clicked_at": "2026-09-20T08:30:00Z", "url": "https://example.com/offer"}
+      ]
+    }
+  }
+}

@@ -1,8 +1,9 @@
 {
   "id": "impression-then-click",
-  "description": "An impression, then its click within the window: the execution joins, cancels the window timer, holds the grace period and finishes.",
+  "description": "An impression, then its click within the window: the execution joins, hands the join to joined_records, cancels the window timer, holds the grace period and finishes.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -37,6 +38,9 @@
     "status": "completed",
     "configuration": [],
     "timers": [],
-    "datamodel": {"outcome": "joined", "late_clicks": []}
+    "sends": [
+      {"route": "joined_records", "event": {"name": "joined", "data": {"impression_id": "imp_7f3a"}}}
+    ],
+    "datamodel": {"late_clicks": []}
   }
 }

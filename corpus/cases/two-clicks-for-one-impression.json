@@ -1,8 +1,9 @@
 {
   "id": "two-clicks-for-one-impression",
-  "description": "An impression and two clicks on it: the first click joins, the second arrives during the grace period and is kept as a late click, and the execution finishes when the grace period ends.",
+  "description": "An impression and two clicks on it: the first click joins, the second arrives during the grace period, reaches dead_letter and is kept as a late click, and the execution finishes when the grace period ends.",
   "document": "impression_click_join",
   "scope": "7c1e",
+  "routes": ["joined_records", "dead_letter"],
   "bindings": [
     {
       "id": "impressions_to_join",
@@ -40,8 +41,11 @@
     "status": "completed",
     "configuration": [],
     "timers": [],
+    "sends": [
+      {"route": "joined_records", "event": {"name": "joined", "data": {"impression_id": "imp_e6a0"}}},
+      {"route": "dead_letter", "event": {"name": "late_click", "data": {"impression_id": "imp_e6a0", "click": {"impression_id": "imp_e6a0", "clicked_at": "2026-09-19T08:20:00Z", "url": "https://example.com/offer?again=1"}}}}
+    ],
     "datamodel": {
-      "outcome": "joined",
       "late_clicks": [
         {"impression_id": "imp_e6a0", "clicked_at": "2026-09-19T08:20:00Z", "url": "https://example.com/offer?again=1"}
       ]
