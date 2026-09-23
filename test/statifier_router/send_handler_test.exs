@@ -8,7 +8,9 @@ defmodule StatifierRouter.SendHandlerTest do
   alias Statifier.Effect.SendDelayed
   alias Statifier.Machine
   alias Statifier.Send.Event, as: SendEvent
+  alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
+  alias StatifierRouter.AddressReadFailingRepo
   alias StatifierRouter.Config
   alias StatifierRouter.DeliveryFixtures
   alias StatifierRouter.RecordingDelivery
@@ -499,6 +501,49 @@ defmodule StatifierRouter.SendHandlerTest do
                DeliveryFixtures.ledger(config)
     end
 
+    # The composed key written out, every interior component pinned. Each
+    # component carries a value no other component carries, so a message
+    # id that writes any two of them in each other's place is a different
+    # string from the one below.
+    #
+    # sabotage: message_id/1 listed position.microstep before
+    # position.macrostep -> the id read "ex_2/send_4/7/5/..." as
+    # "ex_2/send_4/5/7/...", red; restored, green.
+    test "writes the composed key into the refusal row's message id in the record's order" do
+      :ok = Sandbox.checkout(TestRepo)
+      config = handler_config()
+
+      TestRepo.insert!(
+        Config.put_meta(config, %Address{
+          scope: @scope,
+          document: "sink_join",
+          key: "ad_events/3/2201",
+          execution_id: "ex_2",
+          inserted_at: @now
+        })
+      )
+
+      effect =
+        send_effect(
+          target: "audit_log",
+          send_id: "send_4",
+          macrostep: 7,
+          microstep: 5,
+          round: 3,
+          c_index: 11,
+          owner: {:onentry, 2, 9},
+          ordinal: 13
+        )
+
+      assert SendHandler.handle_effect(config, {:send, effect}, seam("ex_2")) ==
+               {:error, {:unregistered_route, "audit_log"}}
+
+      # The sender's execution id, then the send's send_id, macrostep,
+      # microstep, round, c_index and owner, then the ordinal.
+      assert [%Ledger{message_id: "ex_2/send_4/7/5/3/11/{:onentry, 2, 9}/13"}] =
+               DeliveryFixtures.ledger(config)
+    end
+
     # sabotage: in_route/2 deleted the key before calling the fun ->
     # sending_execution/0 was nil inside the adapter, red; restored,
     # green.
@@ -740,6 +785,46 @@ defmodule StatifierRouter.SendHandlerTest do
       # microstep, round, c_index and owner, then the ordinal.
       assert [^execution_id, _send_id, _macrostep, _microstep, _round, _c_index, _owner, _ordinal] =
                String.split(message_id, "/")
+    end
+
+    # The address-row read the refusal's row needs is made inside the
+    # sender's transaction, where a failed SELECT leaves that transaction
+    # aborted as a failed insert does. AddressReadFailingRepo makes the
+    # read fail in Postgres, for the handler only; the delivery around it
+    # runs on the real repo.
+    #
+    # sabotage: record_refusal/4 read Addresses.by_execution/2 ahead of
+    # write_guarded/3 again (the shape before the read moved inside the
+    # bracket) -> the failed read raised out of the executor and took the
+    # sender's step down, so route/3 raised instead of answering an
+    # outcome, red; restored, green.
+    test "an address read that fails leaves the sender's step standing and writes no row" do
+      pid = self()
+      config = sink_config(route_adapters: %{"dead_letter" => {RecordingRoute, %{pid: pid}}})
+      failing = %{config | repo: AddressReadFailingRepo}
+
+      config = %{
+        config
+        | executor: fn effect, context ->
+            answer = SendHandler.handle_effect(failing, effect, context)
+            send(pid, {:handled, answer})
+            answer
+          end
+      }
+
+      assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      # The refusal is still reported, whatever the read did.
+      assert_received {:handled, {:error, {:unregistered_route, "joined_records"}}}
+
+      assert {:ok, [%{event: %{name: "impression"}}]} =
+               Executions.inputs(config.store, execution_id)
+
+      # No refusal row: the read rolled back to its savepoint. The
+      # delivery's own row stands.
+      assert [%Ledger{outcome: "created_and_delivered", execution_id: ^execution_id}] =
+               DeliveryFixtures.ledger(config)
     end
 
     # THE reentrancy pin. sabotage: Delivery.deliver/4's
