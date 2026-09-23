@@ -1,6 +1,6 @@
 # ADR-0008: The receiver contract at publish: an execution-target send's literal event and a binding's event are checked against the receiving document's declaration through a host-supplied lookup, a receiver that declares nothing is judged by the engine's computed vocabulary, what cannot be read from a literal is reported unchecked, an unpublished receiver is a finding of its own, and the package ships pure functions the host's publish step calls
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -402,3 +402,100 @@ code half's tests, not claimed here over a live codebase.
 - `StatifierRouter.Contracts` is a new public module with three
   functions, and `check/3` becomes the one call that runs every
   publish-time check this package ships.
+
+## Note (2026-09-22, sr-fon): the engine release the Context waited for is published
+
+This Note records facts that changed after the record was written. It
+decides nothing, and no line above it was edited.
+
+The Context and the Consequences were written against statifier 2.6.0,
+and four of their sentences describe that tree, where each was true:
+
+- **The resolved engine.** The Context says statifier 2.6.0 is "the
+  version this package's `mix.lock` resolves". At `2d053d5`, `mix.exs`
+  requires `{:statifier, "~> 2.7"}` and `mix.lock` resolves statifier
+  2.7.0, published to Hex and tagged `v2.7.0` in statifier-ex. The shape
+  of `Statifier.Machine.Content.Send` and `Statifier.Machine.Param` the
+  same paragraph describes holds unchanged at 2.7.0: `event`, `target`
+  and `type` are `Statifier.Machine.expr()`, `{:static, value}` or
+  `{:compiled, compiled, source}`; `params` and `namelist` are lists of
+  `Statifier.Machine.Param`; and only a `namelist` entry may carry
+  `{:invalid, error}` (the `expr` typedoc of `Statifier.Machine.Param`).
+  Compiled at 2.7.0, the section's two examples give the one
+  instruction `["lit", "parcel"]` for `expr="'parcel'"` and
+  `["load", "doc_id"]` for `expr="doc_id"`.
+- **Where the engine's two functions are.** The Context says
+  `check_accepts/2` "is decided and not yet on main" and that neither
+  function "is in a published statifier release". Both
+  `Statifier.Chart.events/1` and `Statifier.Chart.check_accepts/2` are in
+  statifier 2.7.0. The `@doc` of `check_accepts/2` there states the
+  membership reading decision 2 relies on: `check_accepts(machine, [n])`
+  answers `unreachable: []` when some reachable descriptor matches `n`
+  and `[n]` when none does.
+- **The two cross-repo records' status.** The Context calls st-ADR-0071
+  and sb-ADR-0014 proposed. Both are accepted now, st-ADR-0071 on
+  statifier-ex's main and sb-ADR-0014 on statifier_blocks' main.
+- **The code half's wait.** The Consequences say the code half waits
+  for a published release carrying `check_accepts/2`. That release is
+  2.7.0, and the code half has landed as `StatifierRouter.Contracts`,
+  whose private `judge/3` calls `Statifier.Chart.check_accepts/2` for a
+  receiver that declares nothing and defines no descriptor matching of
+  its own.
+
+## Note (2026-09-22, sr-fon): accepted
+
+The status on line 3 reads `accepted`. The flip was made on the
+operator's grant of 2026-09-22 to flip proposed records in this
+repository, and nothing above this Note changed but that one word. The
+Note above it meets the sentences that were overtaken after the record
+was written.
+
+**Where the claims were verified.** Every claim this record makes about
+this package and its engine dependency was re-read by anchor at
+`2d053d513c5ddf38f2faba57d9cfd6412d79db6f`, with statifier 2.7.0 as
+`mix.lock` resolves it there:
+
+- The binding's `document` and `event` are required non-empty strings:
+  `StatifierRouter.Binding`'s moduledoc table and its `@required` list.
+- The reserved name is `StatifierRouter.SendHandler.execution_target/0`.
+- `StatifierRouter.Routes.unregistered/2` answers `unregistered` and
+  `unchecked`, reports `:typeexpr` and `:targetexpr`, and never reports
+  the reserved execution target; `StatifierRouter.Routes.unsupported_types/2`
+  composes `Statifier.Send.Types.unsupported_sends/2`.
+- The resolver's `resolve/2` callback takes `(scope, document)`, and
+  `{:error, :not_published}` appears only in its moduledoc's example
+  host (`StatifierRouter.Resolver`).
+- A resolver error surfaces as `{:error, {:unresolved_document,
+  document, reason}}` and an answer outside the resolver's type raises:
+  `StatifierRouter.Delivery`'s private `resolve/3`.
+- Nothing under `lib/` produces `dropped: unmatched_event`, so decision
+  5's account of what refuses today holds.
+- Decisions 1 to 4 and 6 are what `StatifierRouter.Contracts` builds:
+  selection on the literal configuration type and the literal reserved
+  target in its private `classify/4`; the literal `document` param in
+  `literal_document/1` and `literal_param/1`; the three answers of the
+  lookup, the three reasons and the raise on any other answer in
+  `judge/3`; the four unchecked reasons in `literal_event/1` and
+  `literal_document/1`; and the five keys, with both route functions
+  composed unchanged, in `check/3`. The surface is the three public
+  functions the record names, `undeclared_events/3`,
+  `undeclared_binding_events/2` and `check/3`.
+- No module under `lib/` adds a `Statifier.Validator` finding, and
+  neither `mix.exs` nor `mix.lock` names statifier_blocks.
+- The example is proved by the three publish cases in `corpus/cases/`,
+  `publish-undeclared-binding-event.json`,
+  `publish-undeclared-receiver-event.json` and
+  `publish-computed-set-fallback.json`, which the corpus runner answers
+  through `StatifierRouter.Contracts.check/3`.
+
+**One behaviour the code has that this record does not decide.** When a
+selected send's event and its `document` are both uncheckable, the code
+reports the event's reason; `StatifierRouter.Contracts`'s
+`t:unchecked/0` typedoc says so. Decision 3 lists the reasons and does
+not say which one a send that earns two carries. Accepting this record
+does not decide it; the open bead sr-583 carries whether it is pinned by
+a test or recorded in a later Note.
+
+The status column for this record in `docs/adr/README.md` still reads
+`proposed`. This repository flips that index in a change of its own,
+separate from the record's flip, so it lags this file until then.
