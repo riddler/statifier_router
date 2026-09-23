@@ -159,6 +159,9 @@ excludes them and `mix quality` runs them in a separate `--only isolated`
 run, its "Isolated tests" stage, which finishes before the suite starts and
 hands its coverage to the suite's floor. CI runs `mix quality`, so it runs
 both. A bare `mix test` is not the whole suite; `mix quality` is.
+Every other module that checks out a sandbox connection is
+`async: true, group: :database`, so no two sandbox transactions are open
+at once (`test/test_helper.exs` says why); a new one joins the group.
 
 Full `mix quality` must be green before any commit. The format stage runs in
 check mode (`format: [check: true]` in `.quality.exs`): drift fails the gate

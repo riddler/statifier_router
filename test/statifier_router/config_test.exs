@@ -1,5 +1,5 @@
 defmodule StatifierRouter.ConfigTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: true, group: :database
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Statifier.Invoke.Types
