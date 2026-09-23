@@ -328,3 +328,55 @@ reader reaching this record first should follow for the outbound case.
 The status cell for this record in `docs/adr/README.md` still reads
 proposed; it is flipped for all seven records together in a later bead,
 so the index lags this file by design until then.
+
+## Note (2026-09-22, sr-3cp): where each refusal and drop's publish-time twin is listed
+
+This Note points a reader at a table that now exists outside this
+repository. It decides nothing, and no line above it was edited.
+
+The engine repository keeps one page listing every refusal the family
+raises at run time beside the publish-time function that finds the same
+defect first, its twin, or the word NONE where no function does:
+`docs/publish-time-checks.md` in statifier-ex, read at `018ec64`. Its
+`statifier_router` section gives each refusal and drop this record
+names a row, citing this record by path:
+
+- key_refused (section 1): NONE, because `match` and `key` read the
+  event's payload.
+- dropped: no_execution (sections 1 and 2): NONE.
+- dropped: finished (sections 1 and 3): NONE.
+- The deferred `dropped: unmatched_event` (section 8): its row says an
+  event the receiving chart never listens for is not refused today, and
+  names as its twin `StatifierRouter.Contracts.check/3`, which falls
+  back to `Statifier.Chart.check_accepts/2` for a receiver that declares
+  nothing.
+
+The same section also lists, each with NONE, the errors section 7 says
+are not outcomes. duplicate and no_match are neither a refusal nor a
+drop here (sections 3 and 5), and the page gives them no row.
+
+**The deferred drop's twin is the receiver contract at publish.**
+ADR-0008 checks the literal event of every execution-target send and the
+event of every binding against the receiving document at publish. The
+package's composed check is
+`StatifierRouter.Contracts.check/3` (`lib/statifier_router/contracts.ex`,
+read at `d0202b2`), which reports those findings under
+`undeclared_events` and `undeclared_binding_events` and leaves to the
+host which of them blocks a publish (ADR-0008, decision 6).
+
+**A drop for a literal event name would be a bug in a publish check.**
+The page opens on the rule that a runtime refusal for something a literal
+in the source could have told us is a bug in the publish check. For this
+record's deferred drop, ADR-0008, decision 5 says when that holds: once
+`dropped: unmatched_event` exists, a drop of a literal name that no
+reachable transition of the receiver's chart matches, sent by a send or a
+binding the check passed, means a publish check has a bug - that check,
+or the receiver's own check of its declaration - only when the execution
+is stepped on the revision the check judged, in the scope it judged, and
+the host refuses a publish on `unreachable`. Revision drift, host policy
+and scope are the three cases decision 5 names where it does not. A drop
+of a name the check reported unchecked, such as an `eventexpr`, is the
+gap ADR-0008, decision 3 already names.
+
+Section 8 holds as written: the outcome is still deferred, and nothing
+under `lib/` produces it at `d0202b2`.
