@@ -1,8 +1,12 @@
 defmodule StatifierRouter.MigrationsTest do
   # Live migration tests manage their own DDL and rows outside the SQL
   # sandbox: setup_all switches the repo to :auto for the module and
-  # restores :manual on exit, hence async: false.
+  # restores :manual on exit, hence async: false. :auto is repo-global,
+  # so the module is also tagged :isolated: the default run excludes it
+  # and `mix test --only isolated` runs it alone (test_helper.exs).
   use ExUnit.Case, async: false
+
+  @moduletag :isolated
 
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox

@@ -93,11 +93,15 @@ jobs:
         run: mix deps.get
 
       # The gate is the whole job. It formats, compiles with warnings as
-      # errors, runs credo --strict, dialyzer, the deps audit, and the full
-      # suite with coverage, printing detail under any failing stage - so a
-      # red run is diagnosable from this log alone. Three stages report as
-      # skipped and always will: doctor, gettext, and sobelow, none installed
-      # here.
+      # errors, runs credo --strict, dialyzer, the deps audit, the suite
+      # with coverage, and - as its own "Isolated tests" stage, a separate
+      # `--only isolated` run that finishes before the suite starts - the
+      # modules that take real Postgres locks outside the SQL sandbox
+      # (.quality.exs, test/test_helper.exs). Either test step red fails
+      # this step and the job. It prints detail under any failing stage -
+      # so a red run is diagnosable from this log alone. Three stages
+      # report as skipped and always will: doctor, gettext, and sobelow,
+      # none installed here.
       #
       # Same reasoning as the toolchain step, applied to the gate itself: the
       # command is read out of .claude/wurk.json rather than written here, so
