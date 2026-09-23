@@ -913,3 +913,51 @@ options of its own. Under the default `on_exhausted: :raise` the error
 still reaches the caller as a raise once the retries are spent; a host
 that compiles Oban with `on_exhausted: :log` gets `{:error, exception}`
 back instead, a value answered over a transaction already lost.
+
+## Note (2026-09-23, sr-nfl): the refusal row's address read, and the composed key pinned whole
+
+A Note, not an amendment: it decides nothing new. The sr-p6u Note above
+decided that a ledger row this package could not write is not itself what
+takes the sender's step down, and the sr-d2u audit Note above left one
+question on that surface to this bead: whether the sender's address read
+ahead of a refusal row moves inside the bracket. Each of the three
+refusal rows is answered below.
+
+**The unregistered route's read is inside the bracket.** The read is made
+for the row and for nothing else, and a SELECT that fails inside the
+sending step's transaction leaves that transaction aborted exactly as a
+failed insert does. So `StatifierRouter.SendHandler`'s private
+`record_refusal/4` now makes `StatifierRouter.Addresses.by_execution/2`
+inside the savepoint the insert already had, and a read that fails rolls
+back to it: no row is written, and the sender is still answered
+`{:error, {:unregistered_route, name}}`. The row ADR-0006's delay
+Amendment adds is written by the same function, so its read moved with
+it. The sr-p6u Note's sentence "Only the insert is guarded" reads from
+here on as "only the read and the insert are guarded": the release stays
+outside, for the reason that sentence gives.
+
+**The execution target's read stays outside, and needs no bracket.** The
+private `to_execution/3` (read at `6370e75`) reads the sender's address
+row before any refusal or delivery, because the scope it reads is the
+send's own: ADR-0006, section 1 addresses the target inside it, and the
+delivery through `StatifierRouter.Delivery.deliver_event/4` needs it as
+much as a refusal row does. It is not a read made for a row, so there is
+no row's savepoint for it to sit in. A read that fails there raises
+unrescued and reaches the sender, which is what the audit Note's rule
+above calls safe: nothing answers a value over a transaction already
+lost.
+
+**The execution-target refusal row was already bracketed.** The private
+`refused/6` (read at `6370e75`) writes its row through the same bracket
+as the unregistered route's, under a savepoint of its own prefix, as the
+audit Note above records. That row's scope comes from the read the
+paragraph above keeps outside, so no read sits inside its bracket.
+
+**The composed key is pinned whole.** Section 4's key is written into a
+refusal row's `message_id` by the private `message_id/1` (read at
+`6370e75`): the scope half, the send's `send_id`, `macrostep`,
+`microstep`, `round`, `c_index` and `owner`, then the ordinal. The test
+"writes the composed key into the refusal row's message id in the
+record's order", in `test/statifier_router/send_handler_test.exs`, gives
+every component a value no other component carries and asserts the whole
+string, so writing any two components in each other's place fails it.
