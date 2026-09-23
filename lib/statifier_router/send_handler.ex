@@ -140,11 +140,20 @@ defmodule StatifierRouter.SendHandler do
   handler, which at the executor seam re-enters the sending execution as
   `error.communication` carrying the send's `sendid` and does not roll its
   step back. `{:send_refused, reason}` carries one of section 6's five
-  reasons and `{:send_undelivered, why}` a `dropped: no_execution` or a
-  `dropped: finished`. Four of the five refusals also write one
+  reasons, or the delay reason below, and `{:send_undelivered, why}` a
+  `dropped: no_execution` or a `dropped: finished`. Four of the five refusals also write one
   `send_refused` ledger row, whose `reason` column holds the record's own
   word for it: `document`, `key`, `create` or `self_address`. The row
   records that the sender was told; it does not stand in for telling it.
+
+  A **delayed** send to the reserved name is neither delivered nor
+  queued: the handler answers `{:error, {:send_refused, :delay}}` on both
+  shapes, before the route registry is asked, so the reason names the
+  reserved target rather than a route no host could have registered
+  (ADR-0006's delay Amendment). It is recorded the way the unregistered
+  route below is, under the reason word `delay`: one `send_refused` row
+  with `key` and `execution_id` empty when the composed key's scope half
+  names an address row, and a report with no row when it names none.
 
   ## The unregistered route
 
@@ -232,6 +241,10 @@ defmodule StatifierRouter.SendHandler do
   # ADR-0006, section 6's four reasons already have.
   @unregistered_route_reason "route"
 
+  # The reason word under `send_refused` for a delayed send to the
+  # execution target (ADR-0006's delay Amendment), in the same shape.
+  @delay_reason "delay"
+
   # ADR-0006, section 2: no binding supplies a horizon here, so the claim
   # takes ADR-0001, section 1's default, the same one
   # `StatifierRouter.Binding`'s struct carries.
@@ -247,10 +260,12 @@ defmodule StatifierRouter.SendHandler do
           | term()
 
   @typedoc """
-  Why an execution-to-execution send was refused (ADR-0006, section 6).
-  `unaddressed_sender` is the one of the five that writes no ledger row.
+  Why an execution-to-execution send was refused: section 6 of ADR-0006
+  names the first five, and that record's delay Amendment adds `delay`, a
+  delayed send to the execution target. `unaddressed_sender` never writes
+  a ledger row; `delay` writes one only when the sender has an address row.
   """
-  @type refusal :: :unaddressed_sender | :document | :key | :create | :self_address
+  @type refusal :: :unaddressed_sender | :document | :key | :create | :self_address | :delay
 
   @doc """
   The one `target` name ADR-0006, section 1 reserves for the execution
@@ -635,8 +650,19 @@ defmodule StatifierRouter.SendHandler do
   # Both shapes arrive here with the event and the composed key already
   # built, so the row's scope is the key's own scope half: the execution id
   # at the executor seam, the session id on the send-processor shape.
+  #
+  # A delayed send to the execution target is refused before the registry
+  # is asked (ADR-0006's delay Amendment): the reserved name can never be
+  # registered, so the lookup would only miss and name a route no host
+  # could have registered. It is refused by name, recorded the way the
+  # unregistered route is, and never queued.
   @spec enqueue(Config.t(), SendDelayed.t(), Statifier.Event.t(), Route.idempotency_key()) ::
           :ok | {:error, reason()}
+  defp enqueue(config, %SendDelayed{target: @execution_target}, _event, key) do
+    record_refusal(config, key, @delay_reason, DateTime.utc_now())
+    {:error, {:send_refused, :delay}}
+  end
+
   defp enqueue(config, send, event, key) do
     case Config.route(config, override_scope(), send.target) do
       {:ok, {_module, route_config}} -> schedule(config, send, event, route_config, key)
@@ -694,7 +720,7 @@ defmodule StatifierRouter.SendHandler do
   # it.
   @spec refusal(Config.t(), String.t() | nil, Route.idempotency_key()) :: {:error, reason()}
   defp refusal(config, name, key) do
-    record_refusal(config, key, DateTime.utc_now())
+    record_refusal(config, key, @unregistered_route_reason, DateTime.utc_now())
     {:error, {:unregistered_route, name}}
   end
 
@@ -711,16 +737,19 @@ defmodule StatifierRouter.SendHandler do
   # section 4 holds that at this seam the sender's session id is its
   # execution id, so a host that keeps the two the same is recorded on
   # that shape too.
-  @spec record_refusal(Config.t(), Route.idempotency_key(), DateTime.t()) :: :ok
-  defp record_refusal(config, {sender, _position, _ordinal} = key, now) do
+  #
+  # The same row, with the same scope rule, records a delayed send to the
+  # execution target under its own reason word.
+  @spec record_refusal(Config.t(), Route.idempotency_key(), String.t(), DateTime.t()) :: :ok
+  defp record_refusal(config, {sender, _position, _ordinal} = key, reason, now) do
     case Addresses.by_execution(config, sender) do
-      %Address{scope: scope} -> insert_refusal(config, scope, message_id(key), now)
+      %Address{scope: scope} -> insert_refusal(config, {scope, message_id(key)}, reason, now)
       nil -> :ok
     end
   end
 
-  @spec insert_refusal(Config.t(), String.t(), String.t(), DateTime.t()) :: :ok
-  defp insert_refusal(config, scope, message_id, now) do
+  @spec insert_refusal(Config.t(), {String.t(), String.t()}, String.t(), DateTime.t()) :: :ok
+  defp insert_refusal(config, {scope, message_id}, reason, now) do
     row = %Ledger{
       binding_id: @execution_target,
       message_id: message_id,
@@ -728,7 +757,7 @@ defmodule StatifierRouter.SendHandler do
       outcome: "send_refused",
       key: nil,
       execution_id: nil,
-      reason: @unregistered_route_reason,
+      reason: reason,
       inserted_at: now
     }
 
