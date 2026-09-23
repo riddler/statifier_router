@@ -412,11 +412,20 @@ statifier_persistence retires a chart it can prove nothing still needs, and
 anything pins the chart's content hash. It counts the pins in its own tables
 itself and asks the host's pin sources for the ones it cannot see. An address
 row is one it cannot see: the row lives in this package's table, and it is why
-a later event still reaches the execution it names, so a chart retired under
-it would leave that event routed to an execution whose chart is gone.
+a later event still reaches the execution it names.
 
-`StatifierRouter.PinSource` is this package's answer. It writes the module a
-host names at the retire call:
+Most of the time this package's vote only names the router in the refusal: the
+rows it counts name `:active` executions, and an `:active` execution on the
+hash refuses the retirement on its own. The vote decides the answer in one
+window: `retire_chart/4` reads the active ids before its transaction opens, and
+an execution that goes terminal between that read and the guarded write inside
+the transaction no longer refuses on its own. The address count, taken from
+the ids read earlier, still does.
+
+`StatifierRouter.PinSource` is this package's answer. The callback takes no
+configuration, so the host binds its own in a module it names at the retire
+call, and `use StatifierRouter.PinSource` is how this package spells that
+module:
 
 ```elixir
 defmodule MyApp.RouterPins do
@@ -436,10 +445,18 @@ the active executions on the hash, which the retire call hands every source as
 so those ids are the only handle this table can answer on, and the hash itself
 is not read.
 
-The pin releases when the address does. Nothing in the pin source retains a
-row or deletes one: an execution finishes, `StatifierRouter.Addresses.reap/2`
-stamps its row terminal and deletes it once the horizon has elapsed, and the
-next retire call counts one address fewer.
+Nothing forces the macro: a host can write the same module by hand, with
+`@behaviour StatifierPersistence.PinSource` and a `pins/2` that calls
+`StatifierRouter.PinSource.count/2` with its configuration. Name the host's
+module at the retire call, never `StatifierRouter.PinSource` itself: it
+defines no `pins/2`, so naming it refuses the retirement as a pin source
+failure.
+
+The pin releases when the execution leaves the `:active` set, not when its
+address row is deleted: the next retire call no longer asks about that
+execution, and counts one address fewer. Nothing in the pin source retains a
+row or deletes one; the row stands until `StatifierRouter.Addresses.reap/2`
+stamps it terminal and deletes it once the horizon has elapsed.
 
 ## Status
 
