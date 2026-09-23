@@ -961,3 +961,71 @@ refusal row's `message_id` by the private `message_id/1` (read at
 record's order", in `test/statifier_router/send_handler_test.exs`, gives
 every component a value no other component carries and asserts the whole
 string, so writing any two components in each other's place fails it.
+
+## Amendment (2026-09-23, sr-ha3): the three values the handler keeps in the calling process
+
+Status: proposed
+
+`StatifierRouter.SendHandler` keeps three values in the calling process:
+the configuration the send-processor callbacks serve (`put_config/1`),
+the scope a delivery runs under (`put_delivery_scope/1`, which
+`StatifierRouter.Delivery` sets for the length of a binding's delivery),
+and the execution a route is running under (`sending_execution/0`). Read
+at 3dcd54f, each had an edge. This Amendment decides all three, and the
+code that implements it lands in the same change.
+
+- **A route some scope overrides is not resolved without a scope.**
+  Decision 2 lets a scope override a route's configuration, and
+  `StatifierRouter.Config.route/3` resolves a `nil` scope to the
+  registered configuration unchanged (its own documentation, at 3dcd54f).
+  The handler asked it with whatever scope the calling process held: none
+  when it ran outside the process a delivery set it in, and none ever on
+  the send-processor shape, which no delivery reaches. A send to a route
+  some scope overrides therefore reached the registered configuration with
+  no error, whichever scope it belonged to. The handler now answers that
+  send `{:error, {:no_delivery_scope, name}}`, on both shapes and for a
+  delayed send as for a send. It is reported to the sender the way section
+  7 reports a miss, the sending step still commits, and no ledger row is
+  written. A route no scope overrides resolves the same in every scope, so
+  it still resolves with no scope in reach: refusing it would tell the
+  chart a send failed that could only ever have gone one way.
+  `StatifierRouter.Config.route/3` is unchanged, and so is a host firing a
+  queued row through it, because the row carries the configuration
+  resolved when it was scheduled (`StatifierRouter.TimerQueue`, "Firing a
+  row"). On the send-processor shape no delivery sets a scope, so a host
+  that overrides a route cannot send to that route from a live session;
+  the refusal says so where the send used to go to the registered
+  configuration.
+
+- **The route mark covers the timer queue at the executor seam.**
+  Decision 5 forbids a route called at the executor seam to call a door of
+  the sending execution, and `StatifierRouter.Delivery.deliver/4` refuses
+  while `sending_execution/0` names one. At 3dcd54f the mark was set only
+  around the hand-off to a route, so the host's queue code, which
+  `handle_effect/3` calls for a delayed send
+  (`c:StatifierRouter.TimerQueue.schedule/2`) and for a cancel
+  (`c:StatifierRouter.TimerQueue.cancel/3`) inside the same transaction
+  and under the same lock, ran unmarked. A timer queue is not a route, but
+  a nested step taken from it would be overwritten by the sender's step
+  the same way. So `handle_effect/3` marks both calls as it marks a route:
+  `sending_execution/0` names the execution while they run, and a
+  `StatifierRouter.route/3` called from them is answered
+  `{:error, {:reentrant_route, execution_id}}`. On the send-processor
+  shape nothing is marked, for a queue call as for a route, because no
+  delivery transaction is open there.
+
+- **A missing configuration is not a failed send.** On the send-processor
+  shape `perform/2` answers `{:error, {:no_config,
+  StatifierRouter.SendHandler}}` when the process it runs in holds no
+  configuration. The engine does not read that return
+  (`Statifier.Session`'s `perform_instruction/3` clause for a handler
+  instruction, at statifier 2.7.0, the version `mix.lock` resolves):
+  reporting through `Statifier.Session.failed_send/3` is the host's, as
+  the handler's moduledoc says. That reason says nothing about the send.
+  Nothing was attempted in that process, and because `perform/2` may be
+  called more than once for one send, an earlier call may already have
+  delivered it. So a host does not report it to the chart as a failed
+  send; it is the host's own configuration fault, answered by installing
+  the configuration where `perform/2` runs. The return is unchanged, and
+  every other `{:error, reason}` from `perform/2` is still a miss the host
+  reports.
