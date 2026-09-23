@@ -12,9 +12,15 @@ defmodule StatifierRouter.DeliveryRaceTest do
   Here each delivery is a real `BEGIN` / `COMMIT` on its own pooled
   connection, and the test holds the first open until the second is
   waiting on the unique index.
+
+  Tagged `:isolated`: `Sandbox.mode(TestRepo, :auto)` is repo-global, so
+  the default run excludes this module and `mix test --only isolated`
+  runs it in a run of its own (test_helper.exs).
   """
 
   use ExUnit.Case, async: false
+
+  @moduletag :isolated
 
   import Ecto.Query, only: [from: 2]
   import StatifierRouter.DeliveryFixtures

@@ -147,9 +147,18 @@ Always refer to state machines as **state charts**, as statifier-ex does.
 
 ```bash
 mix quality --profile loop   # inner loop: format, compile, credo, changed tests
-mix quality                  # full gate: + dialyzer, deps audit, coverage floor
-mix test                     # just the suite
+mix quality                  # full gate: + dialyzer, deps audit, coverage floor,
+                             #   and the isolated tests as a stage of their own
+mix test                     # the suite, less the :isolated modules
+mix test --only isolated     # the :isolated modules alone
 ```
+
+The modules tagged `:isolated` take real Postgres locks outside the SQL
+sandbox (they switch the shared repo to `:auto`), so the default `mix test`
+excludes them and `mix quality` runs them in a separate `--only isolated`
+run, its "Isolated tests" stage, which finishes before the suite starts and
+hands its coverage to the suite's floor. CI runs `mix quality`, so it runs
+both. A bare `mix test` is not the whole suite; `mix quality` is.
 
 Full `mix quality` must be green before any commit. The format stage runs in
 check mode (`format: [check: true]` in `.quality.exs`): drift fails the gate

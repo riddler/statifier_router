@@ -1,8 +1,9 @@
 # Quality configuration for statifier_router.
 #
 #   mix quality                 - full gate: format, compile, credo, dialyzer,
-#                                 deps audit, full test suite with coverage.
-#                                 Run before every commit.
+#                                 deps audit, full test suite with coverage,
+#                                 then the isolated tests in a run of their
+#                                 own. Run before every commit.
 #
 #   mix quality --profile loop  - inner loop while implementing: skips dialyzer
 #                                 and coverage, runs only the tests covering
@@ -36,10 +37,56 @@
   credo: [
     strict: true
   ],
+
+  # The second test step. The modules tagged :isolated take real Postgres
+  # locks outside the SQL sandbox by switching the one shared repo to
+  # :auto, which is repo-wide; beside the async suite that deadlocks
+  # tests they do not contain. test_helper.exs excludes the tag from the
+  # Tests stage, and this stage runs only it, in an OS process of its own.
+  #
+  # Not a second configuration of the Tests stage: it is a different
+  # slice of the suite, which that stage has no way to express next to
+  # the default one. `--only` with no tagged module fails the stage
+  # rather than passing on nothing.
+  #
+  # Coverage is still measured over the whole suite, against the same
+  # floor in coveralls.json: this stage exports its cover data
+  # (`--export-coverage`, into cover/, which .gitignore already ignores)
+  # through the json report type, which writes a file and applies no floor
+  # to the slice, and the Tests stage imports it (`--import-cover` below)
+  # before its own floor is checked. The live migration tests are the only
+  # tests of the migration modules, so without the import the floor would
+  # measure them at zero.
+  #
+  # kind: :writer is for ordering, not for the build. Writers run one at a
+  # time before the parallel analysis phase, so this finishes - and its
+  # cover data is on disk - before the Tests stage starts; as a reader it
+  # would run beside that stage against the same database, which is the
+  # interleaving the split exists to rule out.
+  custom: [
+    [
+      key: :isolated,
+      name: "Isolated tests",
+      command: "mix",
+      args: ["coveralls.json", "--only", "isolated", "--export-coverage", "isolated"],
+      env: [{"MIX_ENV", "test"}],
+      parse: :none,
+      kind: :writer
+    ]
+  ],
+
+  # `--import-cover` is an excoveralls switch, so it is right only where
+  # the Tests stage runs `mix coveralls`: the full gate. A run that makes it
+  # plain `mix test` (`--quick`, or `--test-scope` without the loop
+  # profile) refuses it as an unknown option; the loop profile clears it.
+  test: [
+    args: ["--import-cover", "cover"]
+  ],
+
   profiles: [
     loop: [
       stages: [:format, :compile, :credo, :test],
-      test: [scope: :changed, coverage: false]
+      test: [scope: :changed, coverage: false, args: []]
     ]
   ]
 ]
