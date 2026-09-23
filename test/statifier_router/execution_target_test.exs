@@ -351,14 +351,39 @@ defmodule StatifierRouter.ExecutionTargetTest do
       assert %Ledger{outcome: "send_refused", reason: "document"} =
                config |> ledger() |> Enum.find(&(&1.binding_id == "execution"))
     end
+
+    # The refusal row is written inside the sender's own transaction, where
+    # a failed insert leaves that transaction aborted. LedgerFailingRepo
+    # makes the send_refused insert fail in Postgres.
+    #
+    # sabotage: refused/6 wrote its row with a bare insert! again, outside
+    # write_guarded/3 (the shape before its bracket) -> the failed insert
+    # raised out of the executor and took the sender's step down, so
+    # route/3 raised instead of answering an outcome, red; restored, green.
+    test "a refusal row that cannot be written leaves the sender's step standing" do
+      config = failing_ledger(config("malformed_join"))
+
+      assert {:ok, [{:created_and_delivered, "impressions_to_join", sender}]} =
+               StatifierRouter.route(config, impression(), now: @now)
+
+      # The refusal is still reported, whatever the ledger did.
+      assert_received {:handled, {:error, {:send_refused, :document}}}
+
+      assert {:ok, [%{event: %{name: "impression"}}]} =
+               Executions.inputs(config.store, sender)
+
+      # The row rolled back to its savepoint; the delivery's own row stands.
+      assert [%Ledger{outcome: "created_and_delivered", execution_id: ^sender}] = ledger(config)
+    end
   end
 
   describe "a delivery that errors inside the sending step" do
-    # sabotage: deliver_event/4 settled through in_transaction/4, the
-    # rollback door deliver/4 uses, instead of its own savepoint -> the
-    # nested rollback aborted the sender's transaction, the persist tail
-    # raised DBConnection.ConnectionError out of the step and route/3
-    # never returned an outcome, red; restored, green.
+    # sabotage: deliver_event/4 settled through the rollback door deliver/4
+    # used to take, `c:Ecto.Repo.rollback/1` inside the transaction,
+    # instead of its own savepoint -> the nested rollback aborted the
+    # sender's transaction, the persist tail raised
+    # DBConnection.ConnectionError out of the step and route/3 never
+    # returned an outcome, red; restored, green.
     test "reports the real reason, leaves the sender's step standing, and leaves no target row" do
       config = config("unresolved_join")
 
@@ -458,6 +483,21 @@ defmodule StatifierRouter.ExecutionTargetTest do
     end
 
     %{config | executor: executor}
+  end
+
+  # The same configuration over LedgerFailingRepo, with the executor
+  # rebuilt around it so the handler writes through that repo too.
+  defp failing_ledger(config) do
+    pid = self()
+    failing = %{config | repo: StatifierRouter.LedgerFailingRepo}
+
+    executor = fn effect, context ->
+      answer = SendHandler.handle_effect(failing, effect, context)
+      send(pid, {:handled, answer})
+      answer
+    end
+
+    %{failing | executor: executor}
   end
 
   defp impression do

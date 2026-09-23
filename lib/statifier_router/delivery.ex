@@ -141,13 +141,18 @@ defmodule StatifierRouter.Delivery do
   `{:error, {:unresolved_document, document, reason}}` when the resolver
   answers `{:error, reason}`, and
   `{:error, {:chart_not_resolved, content_hash}}` when the chart resolver
-  answers `:error`, roll this delivery's own transaction back and are
-  returned. On `deliver/4` that rolls back the whole transaction, since it
-  is the outermost one; `deliver_event/4` rolls back to a savepoint of its
-  own instead and never touches the transaction it was called inside, and
-  its own documentation says why. A raise rolls back the same way and
-  propagates; nothing here rescues it. Effects the executor was handed
-  before a rollback stay fired (ADR-0003, section 2).
+  answers `:error`, roll this delivery's writes back and are returned. Both
+  doors do that the same way: the delivery runs inside an SQL savepoint of
+  its own, an error rolls back to that savepoint, and the reason is
+  returned as an ordinary value, with no `c:Ecto.Repo.rollback/1` anywhere
+  (ADR-0003, the Amendment of 2026-09-23). When the door opened the
+  transaction itself, that leaves it holding nothing of the delivery's,
+  which is ADR-0003, section 1's guarantee; when it was called inside a
+  caller's transaction, it undoes the delivery's writes and nothing of the
+  caller's. `deliver_event/4`'s documentation says why a rollback cannot
+  do this. A raise propagates; nothing here rescues it, and it takes an
+  enclosing transaction with it. Effects the executor was handed before a
+  rollback stay fired (ADR-0003, section 2).
 
   The execution id is a UXID with the prefix `ex`, minted by
   `UXID.generate!/1`; nothing is derived from the address (ADR-0002,
@@ -243,10 +248,10 @@ defmodule StatifierRouter.Delivery do
 
   ## This door takes a savepoint, and it does not roll back
 
-  `deliver/4` is the outermost transaction on its path, so the rollback its
-  error arm takes ends that transaction and answers its caller
-  `{:error, reason}`. This door is not outermost: it is called at the
-  executor seam, inside the sending execution's own `step/5`, which
+  `deliver/4` settles the same way, for the same reason: `route/3` is
+  usually the outermost transaction on its path, but nothing stops a host
+  from calling it inside its own. This door is never outermost at the
+  seam: it is called inside the sending execution's own `step/5`, which
   statifier_persistence has already opened a transaction for. A
   `c:Ecto.Repo.rollback/1` there would take the **sender's** transaction
   with it, answer a bare `:rollback` in place of the reason, and raise
@@ -283,12 +288,19 @@ defmodule StatifierRouter.Delivery do
   """
   @spec deliver_event(Config.t(), plan(), String.t(), envelope()) ::
           StatifierRouter.outcome() | {:error, term()}
-  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery) do
-    # The transaction is what gives the savepoint something to live in when
-    # this door is called outside one; inside the sending step's
-    # transaction, which is the shape the seam drives, it nests and the
-    # savepoint is the only thing that settles this delivery.
-    config.repo.transaction(fn -> guarded(config, plan, key, delivery) end)
+  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery),
+    do: settled(config, "sr_execution_target_", plan, key, delivery)
+
+  # The one way a delivery settles, on both doors. The transaction is what
+  # gives the savepoint something to live in when the door is called
+  # outside one; inside a caller's transaction - the sending step's at the
+  # executor seam, or a host's own around `StatifierRouter.route/3` - it
+  # nests, and the savepoint is the only thing that settles this delivery.
+  # No `c:Ecto.Repo.rollback/1` anywhere: under a nested transaction it
+  # would take the caller's transaction with it (`deliver_event/4`'s
+  # documentation says why).
+  defp settled(config, prefix, plan, key, delivery) do
+    config.repo.transaction(fn -> guarded(config, prefix, plan, key, delivery) end)
     |> case do
       {:ok, {:ok, outcome}} -> outcome
       {:ok, {:error, _reason} = error} -> error
@@ -296,8 +308,8 @@ defmodule StatifierRouter.Delivery do
     end
   end
 
-  defp guarded(config, plan, key, delivery) do
-    savepoint = "sr_execution_target_#{System.unique_integer([:positive])}"
+  defp guarded(config, prefix, plan, key, delivery) do
+    savepoint = prefix <> Integer.to_string(System.unique_integer([:positive]))
     config.repo.query!("SAVEPOINT " <> savepoint)
 
     case claimed(config, plan, key, delivery) do
@@ -314,27 +326,15 @@ defmodule StatifierRouter.Delivery do
   defp delivered(config, %Binding{} = binding, key, delivery) do
     SendHandler.put_delivery_scope(delivery.scope)
 
-    in_transaction(
+    settled(
       config,
+      "sr_delivery_",
       binding,
       key,
       Map.put(delivery, :event, Event.external(delivery.name, data: delivery.data))
     )
   after
     SendHandler.delete_delivery_scope()
-  end
-
-  defp in_transaction(config, plan, key, delivery) do
-    config.repo.transaction(fn ->
-      case claimed(config, plan, key, delivery) do
-        {:ok, outcome} -> outcome
-        {:error, reason} -> config.repo.rollback(reason)
-      end
-    end)
-    |> case do
-      {:ok, outcome} -> outcome
-      {:error, _reason} = error -> error
-    end
   end
 
   # The claim is the transaction's first write under every create mode: a

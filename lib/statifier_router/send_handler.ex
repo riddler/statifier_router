@@ -120,6 +120,9 @@ defmodule StatifierRouter.SendHandler do
   row - what `:always_new` produces - has no scope, and its send is
   refused as `unaddressed_sender`, the one refusal with no ledger row,
   because the ledger's `scope` is `NOT NULL` (ADR-0006, section 6).
+  Every other refusal's row is written under the savepoint bracket "The
+  unregistered route" below describes, so a row this package could not
+  write does not take the sender's step down.
 
   The branch is in `handle_effect/3`, beside `mine?/2` and before
   `hand_off/3`, and that placement is load-bearing rather than tidy.
@@ -570,6 +573,12 @@ defmodule StatifierRouter.SendHandler do
   # because the refusal is reported rather than raised. What each reason
   # leaves empty is the record's table: `key` is set from `create` on, and
   # `execution_id` only for `self_address`, which is the sender's own.
+  #
+  # The write takes the same savepoint bracket the unregistered route's
+  # row takes, for the same reason: a failed insert here would leave the
+  # sender's transaction aborted and take its step down, where section 3
+  # has the step stand. An insert that fails rolls back to its savepoint,
+  # writes no row, and the refusal is reported either way.
   @spec refused(
           Config.t(),
           Send.t(),
@@ -590,7 +599,7 @@ defmodule StatifierRouter.SendHandler do
       inserted_at: now
     }
 
-    config.repo.insert!(Config.put_meta(config, row))
+    write_guarded(config, row, "sr_send_refusal_")
     {:error, {:send_refused, why}}
   end
 
@@ -723,12 +732,17 @@ defmodule StatifierRouter.SendHandler do
       inserted_at: now
     }
 
-    # The transaction is what gives the savepoint something to live in
-    # when this handler is called outside one, as it is on the
-    # send-processor shape - which reaches this insert whenever the key's
-    # scope half names an address row; at the executor seam it nests and
-    # the savepoint is what settles this insert on its own.
-    config.repo.transaction(fn -> insert_guarded(config, row) end)
+    write_guarded(config, row, "sr_route_refusal_")
+  end
+
+  # The transaction is what gives the savepoint something to live in when
+  # this handler is called outside one, as it is on the send-processor
+  # shape - which reaches the unregistered route's insert whenever the
+  # key's scope half names an address row; at the executor seam it nests
+  # and the savepoint is what settles the insert on its own.
+  @spec write_guarded(Config.t(), Ledger.t(), String.t()) :: :ok
+  defp write_guarded(config, row, prefix) do
+    config.repo.transaction(fn -> insert_guarded(config, row, prefix) end)
     :ok
   end
 
@@ -753,9 +767,9 @@ defmodule StatifierRouter.SendHandler do
   # The rollback keeps no such guard, deliberately. It runs only where
   # the insert failed, so the savepoint is known to be there, and a raise
   # out of it means the connection is gone - and that raise stands.
-  @spec insert_guarded(Config.t(), Ledger.t()) :: :ok | :error
-  defp insert_guarded(config, row) do
-    savepoint = "sr_route_refusal_#{System.unique_integer([:positive])}"
+  @spec insert_guarded(Config.t(), Ledger.t(), String.t()) :: :ok | :error
+  defp insert_guarded(config, row, prefix) do
+    savepoint = prefix <> Integer.to_string(System.unique_integer([:positive]))
     config.repo.query!("SAVEPOINT " <> savepoint)
 
     inserted? =

@@ -227,9 +227,9 @@ defmodule StatifierRouter.DeliveryTest do
       assert_received {:effect, {:log, %{label: "impression_shown"}}}
     end
 
-    # sabotage: deliver/4's transaction function returned {:error, reason}
-    # instead of rolling back -> the address row committed, red; restored,
-    # green. Second mutation: resolve/3 returned the resolver's
+    # sabotage: guarded/5 returned {:error, reason} without rolling back to
+    # its savepoint -> the address row committed, red; restored, green.
+    # Second mutation: resolve/3 returned the resolver's
     # {:error, reason} as it came -> route/3 answered {:error, :not_found},
     # red; restored, green.
     test "an unresolvable document is route/3's error and creates nothing",
@@ -244,6 +244,44 @@ defmodule StatifierRouter.DeliveryTest do
       assert TestRepo.aggregate(Config.queryable(config, Dedupe), :count) == 0
       assert executions() == 0
       assert input_rows() == 0
+      assert ledger(config) == []
+    end
+
+    # A host may call route/3 inside a transaction of its own. There the
+    # delivery's transaction nests, db_connection 2.10.2 drops a nested
+    # transaction's options (its `conn_mode: :transaction` clause), and a
+    # `c:Ecto.Repo.rollback/1` would abort the host's transaction with the
+    # delivery's.
+    #
+    # sabotage: deliver/4 settled its error with `config.repo.rollback/1`
+    # inside the transaction again (the shape before the savepoint) -> the
+    # host's next statement raised DBConnection.ConnectionError,
+    # "transaction rolling back", red; restored, green.
+    test "an error inside a host's own transaction undoes the delivery and nothing of the host's",
+         %{config: config} do
+      config = %{config | bindings: [%{hd(config.bindings) | document: "unpublished"}]}
+
+      marker =
+        Config.put_meta(config, %Address{
+          scope: "7c1e",
+          document: "host_marker",
+          key: "marker",
+          execution_id: "ex_marker",
+          inserted_at: @now
+        })
+
+      assert {:ok, answer} =
+               TestRepo.transaction(fn ->
+                 TestRepo.insert!(marker)
+                 answer = StatifierRouter.route(config, impression(), now: @now)
+                 # The host's transaction is still usable after the error.
+                 TestRepo.query!("SELECT 1")
+                 answer
+               end)
+
+      assert answer == {:error, {:unresolved_document, "unpublished", :not_found}}
+      assert [%Address{document: "host_marker"}] = addresses(config)
+      assert TestRepo.aggregate(Config.queryable(config, Dedupe), :count) == 0
       assert ledger(config) == []
     end
 
