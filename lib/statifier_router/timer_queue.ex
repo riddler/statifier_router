@@ -26,6 +26,14 @@ defmodule StatifierRouter.TimerQueue do
   `send_id` alone deletes other executions' timers on the first cancel it
   serves.
 
+  The queue owes **at-most-once on the dedup key**. Under at-least-once
+  delivery the same delayed send can reach `c:schedule/2` more than once,
+  with the same `key` each time, and a queue that appends a row per call
+  fires that send once per call. So a `c:schedule/2` whose `key` the queue
+  already holds a row for adds no second row and answers `:ok`. Two
+  entries under one `{scope, send_id}` with different keys are two sends,
+  and both are kept.
+
   ## What a cancel does
 
   `c:cancel/3` deletes **that scope's** rows for its `send_id`, and no
@@ -39,6 +47,29 @@ defmodule StatifierRouter.TimerQueue do
   A cancel for a send already fired is a no-op, and a fire for a send
   already cancelled must not happen: the row is the single decision
   point, and both operations are writes against it.
+
+  ## Firing a row
+
+  This behaviour has no fire callback, because firing is the host's: the
+  queue is the host's and so is whatever wakes it when `delay_ms` has
+  passed. A host fires a row without leaving this package's public
+  surface:
+
+      {:ok, {module, _registered}} = StatifierRouter.Config.route(config, nil, entry.route)
+      :ok = module.deliver(entry.config, entry.event, entry.key)
+
+  `StatifierRouter.Config.route/3` answers the module serving the route
+  name the row carries; a scope overrides a route's configuration, never
+  its existence (ADR-0005, decision 2), so the module does not depend on
+  the scope passed. The configuration handed to
+  `c:StatifierRouter.Route.deliver/3` is the row's own `config`, the one
+  resolved under the delivery's scope when the send was scheduled, and
+  the key is the row's own `key`, on which the route owes at-most-once
+  in turn. `:error` from `StatifierRouter.Config.route/3` means the route
+  name was unregistered after the row was written.
+
+  The fire deletes the row in the same write that decides it fires, so
+  that a cancel and a fire of one row cannot both succeed.
   """
 
   @typedoc """
@@ -63,7 +94,13 @@ defmodule StatifierRouter.TimerQueue do
   @type t :: {module(), map()}
 
   @doc """
-  Records one delayed route send durably, keyed by `{scope, send_id}`.
+  Records one delayed route send durably, keyed by `{scope, send_id}`,
+  at most once per `entry.key`.
+
+  `entry.key` is the dedup key (ADR-0005, decision 5): when the queue
+  already holds a row with that key, this adds no second row and
+  answers `:ok`. Entries with different keys under one
+  `{scope, send_id}` are separate rows.
   """
   @callback schedule(queue_config :: map(), entry :: entry()) :: :ok | {:error, term()}
 

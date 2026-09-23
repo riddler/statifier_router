@@ -9,7 +9,13 @@ defmodule StatifierRouter.RecordingTimerQueue do
   Keying on the pair is the whole point of this stand-in: a queue keyed on
   the send id alone would answer a cancel by deleting every execution's
   row under that id, and a generated send id recurs in every execution on
-  a host. Test-only support code, not part of the package's public API.
+  a host.
+
+  It also honours the dedup key the way `c:StatifierRouter.TimerQueue.schedule/2`
+  obliges a queue to: an entry whose `key` it already holds is answered
+  `:ok` and adds no row, and entries with different keys under one
+  `{scope, send_id}` are kept side by side, oldest first. Test-only support
+  code, not part of the package's public API.
   """
 
   @behaviour StatifierRouter.TimerQueue
@@ -26,9 +32,13 @@ defmodule StatifierRouter.RecordingTimerQueue do
 
   @impl StatifierRouter.TimerQueue
   def schedule(_queue_config, entry) do
-    key = {entry.scope, entry.send_id}
-    Process.put(@rows_key, Map.update(rows(), key, [entry], &(&1 ++ [entry])))
-    :ok
+    if Enum.any?(entries(), &(&1.key == entry.key)) do
+      :ok
+    else
+      key = {entry.scope, entry.send_id}
+      Process.put(@rows_key, Map.update(rows(), key, [entry], &(&1 ++ [entry])))
+      :ok
+    end
   end
 
   @impl StatifierRouter.TimerQueue
