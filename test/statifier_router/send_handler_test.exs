@@ -146,6 +146,10 @@ defmodule StatifierRouter.SendHandlerTest do
 
   defp seam(execution_id), do: %{execution_id: execution_id, content_hash: "sha_1"}
 
+  # A staging scope pointing joined_records at another sink; dead_letter
+  # is overridden by no scope.
+  @staging %{"staging" => %{"joined_records" => %{sink: "staging_sink"}}}
+
   describe "the send-processor shape" do
     setup do
       on_exit(&SendHandler.delete_config/0)
@@ -376,6 +380,47 @@ defmodule StatifierRouter.SendHandlerTest do
                {:error, {:no_config, SendHandler}}
     end
 
+    # sabotage: resolve/2 answered Config.route/3's result without asking
+    # whether a scope was in reach -> perform/2 sent to the registered
+    # sink with no error, red; restored, green.
+    test "refuses a send to an overridden route, this shape having no delivery scope" do
+      effect = send_effect()
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, SendEvent.build(effect, "session_1"), %{
+          session_id: "session_1"
+        })
+
+      :ok = SendHandler.put_config(handler_config(route_overrides: @staging))
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
+               {:error, {:no_delivery_scope, "joined_records"}}
+
+      refute_received {:routed, _config, _event, _key}
+    end
+
+    # sabotage: perform/2's {:send_delayed, ...} arm called enqueue/4
+    # inside in_route/2 -> the queue saw a sending execution on a shape
+    # with no delivery transaction open, red; restored, green.
+    test "marks nothing while the queue runs on this shape" do
+      pid = self()
+      observe = fn call -> send(pid, {:queue, call, SendHandler.sending_execution()}) end
+      effect = delayed_effect()
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, SendEvent.build(effect, "session_1"), %{
+          session_id: "session_1"
+        })
+
+      :ok =
+        SendHandler.put_config(
+          handler_config(timer_queue: {RecordingTimerQueue, %{observe: observe}})
+        )
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+      assert_received {:queue, :schedule, nil}
+    end
+
     # sabotage: ioprocessors_entry/1 returned %{} -> spec 5.10's entry
     # carried no value for the registered type, red; restored, green.
     test "answers spec 5.10's entry for the type it is registered under" do
@@ -572,6 +617,53 @@ defmodule StatifierRouter.SendHandlerTest do
     end
   end
 
+  describe "the scope a route is resolved in" do
+    # sabotage: resolve/2 answered Config.route/3's result without asking
+    # whether a scope was in reach -> the send reached the registered
+    # sink with no error, red; restored, green.
+    test "refuses a send to an overridden route when no delivery scope is in reach" do
+      config = handler_config(route_overrides: @staging)
+
+      assert SendHandler.handle_effect(config, {:send, send_effect()}, seam("ex_1")) ==
+               {:error, {:no_delivery_scope, "joined_records"}}
+
+      refute_received {:routed, _config, _event, _key}
+    end
+
+    # sabotage: unscoped/3 refused whenever :route_overrides was non-empty
+    # -> dead_letter, which no scope overrides, was refused too, red;
+    # restored, green. sabotage: unscoped/3 counted an empty override map
+    # as an override -> the second config's joined_records was refused,
+    # red; restored, green.
+    test "resolves a route no scope overrides with no delivery scope in reach" do
+      config = handler_config(route_overrides: @staging)
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(target: "dead_letter")},
+               seam("ex_1")
+             ) == :ok
+
+      assert_received {:routed, %{sink: "dead_letter"}, _event, _key}
+
+      config = handler_config(route_overrides: %{"staging" => %{"joined_records" => %{}}})
+      assert SendHandler.handle_effect(config, {:send, send_effect()}, seam("ex_1")) == :ok
+      assert_received {:routed, %{sink: "joined_records"}, _event, _key}
+    end
+
+    # sabotage: enqueue/4 resolved through Config.route/3 directly -> the
+    # delayed send was queued under the registered configuration, red;
+    # restored, green.
+    test "refuses a delayed send to an overridden route when no delivery scope is in reach" do
+      config = handler_config(route_overrides: @staging, timer_queue: {RecordingTimerQueue, %{}})
+
+      assert SendHandler.handle_effect(config, {:send_delayed, delayed_effect()}, seam("ex_1")) ==
+               {:error, {:no_delivery_scope, "joined_records"}}
+
+      assert RecordingTimerQueue.entries() == []
+    end
+  end
+
   describe "the durable timer queue" do
     # sabotage: schedule/5 wrote the entry without the route name -> a
     # cancel, which carries no target, had nothing to fire against, red;
@@ -693,6 +785,27 @@ defmodule StatifierRouter.SendHandlerTest do
              ) == :ok
 
       assert SendHandler.handle_effect(handler_config(), {:cancel, cancel}, seam("ex_1")) == :ok
+    end
+
+    # sabotage: handle_effect/3's {:send_delayed, ...} arm, and separately
+    # its {:cancel, ...} arm, called the queue outside in_route/2 ->
+    # sending_execution/0 was nil inside the queue, red each time;
+    # restored, green.
+    test "names the sending execution while the queue runs, and only then" do
+      pid = self()
+      observe = fn call -> send(pid, {:queue, call, SendHandler.sending_execution()}) end
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{observe: observe}})
+
+      assert SendHandler.handle_effect(config, {:send_delayed, delayed_effect()}, seam("ex_1")) ==
+               :ok
+
+      assert_received {:queue, :schedule, "ex_1"}
+      assert SendHandler.sending_execution() == nil
+
+      cancel = %Cancel{send_id: "send_1", macrostep: 2, microstep: 0, round: 0, ordinal: 3}
+      assert SendHandler.handle_effect(config, {:cancel, cancel}, seam("ex_1")) == :ok
+      assert_received {:queue, :cancel, "ex_1"}
+      assert SendHandler.sending_execution() == nil
     end
 
     # sabotage: the %Config{timer_queue: nil} clause of schedule/5
@@ -825,6 +938,21 @@ defmodule StatifierRouter.SendHandlerTest do
       # delivery's own row stands.
       assert [%Ledger{outcome: "created_and_delivered", execution_id: ^execution_id}] =
                DeliveryFixtures.ledger(config)
+    end
+
+    # The scope a real delivery runs under reaches the handler, so a route
+    # some scope overrides resolves in it rather than being refused.
+    # sabotage: Delivery's delivered/4 skipped put_delivery_scope/1 -> the
+    # handler refused the send as no_delivery_scope and nothing was
+    # routed, red; restored, green.
+    test "resolves an overridden route in the scope of the delivery that sent it" do
+      config =
+        sink_config(route_overrides: %{@scope => %{"joined_records" => %{sink: "scoped_sink"}}})
+
+      assert {:ok, [{:created_and_delivered, _binding, _execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      assert_received {:routed, %{sink: "scoped_sink"}, %{name: "joined"}, _key}
     end
 
     # THE reentrancy pin. sabotage: Delivery.deliver/4's

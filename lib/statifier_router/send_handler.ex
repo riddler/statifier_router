@@ -29,6 +29,15 @@ defmodule StatifierRouter.SendHandler do
   which is what that function's own documentation requires: it is called
   by the host, never by `deliver/3` or `cancel/2`.
 
+  One answer is not a miss and is not reported:
+  `{:error, {:no_config, __MODULE__}}` says only that the process
+  `perform/2` ran in holds no configuration. Nothing was attempted there,
+  and because `perform/2` may be called more than once for one send, an
+  earlier call may already have delivered it, so reporting this answer
+  would tell the chart a send failed that may have gone. It is the host's
+  own configuration fault, answered by installing the configuration where
+  `perform/2` runs (ADR-0005, as its Amendment of 2026-09-23 has it).
+
   ## Where the configuration comes from on each shape
 
   `handle_effect/3` is handed the configuration, because the host builds
@@ -44,6 +53,21 @@ defmodule StatifierRouter.SendHandler do
   the process that performs the instructions, with `put_config/1`. That is
   the process the host's own session and executor run in; this package
   does not start sessions.
+
+  ## The scope a route is resolved in
+
+  A scope may override a route's configuration (ADR-0005, decision 2), and
+  the executor seam's context carries no scope, so
+  `StatifierRouter.Delivery` names the scope of the delivery it runs in the
+  same process. A send to a route that some scope in `:route_overrides`
+  overrides is resolved in that scope, and with no scope in reach it is
+  refused as `{:no_delivery_scope, name}` rather than sent to the
+  registered configuration, which would be the wrong one for every scope
+  that overrides it (ADR-0005, as its Amendment of 2026-09-23 has it). A
+  route no scope overrides resolves the same everywhere and needs none.
+  The send-processor shape is reached by no delivery and so never has a
+  scope: a host that overrides a route cannot send to it from a live
+  session, and is told so.
 
   ## The idempotency key, and the cancellation key
 
@@ -94,7 +118,13 @@ defmodule StatifierRouter.SendHandler do
   running under, and `StatifierRouter.Delivery.deliver/4` refuses for as
   long as it is set: a route that calls `StatifierRouter.route/3` is
   answered `{:error, {:reentrant_route, execution_id}}` and nothing is
-  stepped. That refusal reaches this package's own door only. A route that
+  stepped. The host's timer queue is called at the same seam, inside the
+  same transaction, for a delayed send and for a cancel, and it is marked
+  the same way while it runs: a queue is not a route, but a step it took
+  from there would be overwritten by the sender's all the same (ADR-0005,
+  as its Amendment of 2026-09-23 has it). On the send-processor shape
+  nothing is marked, because no delivery transaction is open there. That
+  refusal reaches this package's own door only. A route that
   calls `StatifierPersistence.Executions.step/5` directly reaches past it,
   and no reentrancy guard exists there; the record forbids that call, and
   this package cannot enforce it.
@@ -258,6 +288,7 @@ defmodule StatifierRouter.SendHandler do
           {:unregistered_route, String.t() | nil}
           | {:no_timer_queue, String.t() | nil}
           | {:no_config, module()}
+          | {:no_delivery_scope, String.t()}
           | {:send_refused, refusal()}
           | {:send_undelivered, :no_execution | :finished}
           | term()
@@ -308,13 +339,17 @@ defmodule StatifierRouter.SendHandler do
         {:send_delayed, %SendDelayed{} = send},
         %{execution_id: scope}
       ) do
-    if mine?(config, send),
-      do: enqueue(config, send, SendEvent.build(send, scope), key(send, scope)),
-      else: :ok
+    if mine?(config, send) do
+      in_route(scope, fn ->
+        enqueue(config, send, SendEvent.build(send, scope), key(send, scope))
+      end)
+    else
+      :ok
+    end
   end
 
   def handle_effect(%Config{} = config, {:cancel, %Cancel{} = cancel}, %{execution_id: scope}),
-    do: dequeue(config, cancel, scope)
+    do: in_route(scope, fn -> dequeue(config, cancel, scope) end)
 
   def handle_effect(%Config{}, _effect, _context), do: :ok
 
@@ -389,7 +424,9 @@ defmodule StatifierRouter.SendHandler do
 
   @doc """
   The configuration `put_config/1` installed, or
-  `{:error, {:no_config, __MODULE__}}` when the host installed none.
+  `{:error, {:no_config, __MODULE__}}` when the host installed none. That
+  error says nothing about any send: the moduledoc says why a host does
+  not report it to the chart.
   """
   @spec fetch_config() :: {:ok, Config.t()} | {:error, reason()}
   def fetch_config do
@@ -400,10 +437,12 @@ defmodule StatifierRouter.SendHandler do
   end
 
   @doc """
-  The execution a route is running under in the calling process, or `nil`.
+  The execution a route, or the timer queue, is running under in the
+  calling process at the executor seam, or `nil`.
   `StatifierRouter.Delivery.deliver/4` refuses for as long as it is set: a
-  route called at the executor seam may not re-enter the sending execution
-  (ADR-0005, decision 5).
+  route or a queue called at the executor seam may not re-enter the
+  sending execution (ADR-0005, decision 5, and its Amendment of
+  2026-09-23).
   """
   @spec sending_execution() :: String.t() | nil
   def sending_execution, do: Process.get(@in_route_key)
@@ -465,10 +504,35 @@ defmodule StatifierRouter.SendHandler do
   @spec route(Config.t(), String.t() | nil, Statifier.Event.t(), Route.idempotency_key()) ::
           :ok | {:error, reason()}
   defp route(config, name, event, key) do
-    case Config.route(config, override_scope(), name) do
+    case resolve(config, name) do
       {:ok, {module, route_config}} -> module.deliver(route_config, event, key)
+      {:error, _no_scope} = error -> error
       :error -> refusal(config, name, key)
     end
+  end
+
+  # The route `name` in the scope the calling process holds. With no scope
+  # in reach, a route that some scope overrides is refused rather than
+  # resolved to its registered configuration, which would be the wrong one
+  # for every scope that overrides it; a route no scope overrides resolves
+  # the same in every scope and needs none (ADR-0005, as its Amendment of
+  # 2026-09-23 has it). An unregistered name misses first, as `:error`.
+  @spec resolve(Config.t(), String.t() | nil) :: {:ok, Route.t()} | :error | {:error, reason()}
+  defp resolve(config, name) do
+    scope = override_scope()
+
+    case Config.route(config, scope, name) do
+      {:ok, _route} = found when is_nil(scope) -> unscoped(config, name, found)
+      found_or_missed -> found_or_missed
+    end
+  end
+
+  @spec unscoped(Config.t(), String.t(), {:ok, Route.t()}) ::
+          {:ok, Route.t()} | {:error, reason()}
+  defp unscoped(%Config{route_overrides: overrides}, name, found) do
+    if Enum.any?(overrides, fn {_scope, by_name} -> Map.get(by_name, name, %{}) != %{} end),
+      do: {:error, {:no_delivery_scope, name}},
+      else: found
   end
 
   # -------------------------------------------------------------------
@@ -667,8 +731,9 @@ defmodule StatifierRouter.SendHandler do
   end
 
   defp enqueue(config, send, event, key) do
-    case Config.route(config, override_scope(), send.target) do
+    case resolve(config, send.target) do
       {:ok, {_module, route_config}} -> schedule(config, send, event, route_config, key)
+      {:error, _no_scope} = error -> error
       :error -> refusal(config, send.target, key)
     end
   end
