@@ -5,11 +5,14 @@ defmodule StatifierRouter.ExecutionTargetTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Statifier.Effect.Send
+  alias Statifier.Effect.SendDelayed
   alias Statifier.Machine
+  alias Statifier.Send.Event, as: SendEvent
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
   alias StatifierRouter.Config
   alias StatifierRouter.RecordingRoute
+  alias StatifierRouter.RecordingTimerQueue
   alias StatifierRouter.Resolver.Static
   alias StatifierRouter.Schema.{Address, Ledger}
   alias StatifierRouter.SendHandler
@@ -406,6 +409,80 @@ defmodule StatifierRouter.ExecutionTargetTest do
     end
   end
 
+  describe "a delayed send to the execution target" do
+    # sabotage: enqueue/4's execution-target clause removed -> the send
+    # fell through to the route registry and was answered
+    # {:unregistered_route, "execution"} with a `route` row, red; restored,
+    # green.
+    # sabotage: the clause answered its reason without record_refusal/4 ->
+    # the sender was told but the ledger held no `delay` row, red; restored,
+    # green.
+    test "is refused by the delay reason, recorded under the sender's scope, and never queued" do
+      config = config("plain_join", timer_queue: {RecordingTimerQueue, %{}})
+      sender = sender(config)
+
+      assert SendHandler.handle_effect(config, {:send_delayed, delayed_effect()}, seam(sender)) ==
+               {:error, {:send_refused, :delay}}
+
+      assert RecordingTimerQueue.entries() == []
+
+      assert [
+               %Ledger{
+                 binding_id: "execution",
+                 scope: @scope,
+                 outcome: "send_refused",
+                 reason: "delay",
+                 key: nil,
+                 execution_id: nil,
+                 message_id: message_id
+               }
+             ] = config |> ledger() |> Enum.filter(&(&1.outcome == "send_refused"))
+
+      assert [^sender | _rest] = String.split(message_id, "/")
+      assert counter_addresses(config) == []
+    end
+
+    # sabotage: enqueue/4's execution-target clause answered
+    # {:send_refused, :unaddressed_sender} when the sender had no address
+    # row -> the sender heard a missing address rather than the delay that
+    # is refused whatever the address, red; restored, green.
+    test "tells a sender with no address row the same reason, and records nothing for it" do
+      config = config("plain_join", timer_queue: {RecordingTimerQueue, %{}})
+      _sender = sender(config)
+      before = length(ledger(config))
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send_delayed, delayed_effect()},
+               seam("ex_no_address")
+             ) == {:error, {:send_refused, :delay}}
+
+      assert length(ledger(config)) == before
+      assert RecordingTimerQueue.entries() == []
+    end
+
+    # sabotage: the execution-target branch moved out of enqueue/4 into
+    # handle_effect/3's {:send_delayed, ...} arm -> perform/2 on this shape
+    # missed the registry and answered {:unregistered_route, "execution"},
+    # red; restored, green.
+    test "answers the same reason on the send-processor shape" do
+      on_exit(&SendHandler.delete_config/0)
+      effect = delayed_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      assert {:ok, [{:handler, SendHandler, payload}]} =
+               SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      :ok =
+        SendHandler.put_config(config("plain_join", timer_queue: {RecordingTimerQueue, %{}}))
+
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
+               {:error, {:send_refused, :delay}}
+
+      assert RecordingTimerQueue.entries() == []
+    end
+  end
+
   describe "the reserved name at configuration time" do
     # sabotage: route_adapters/1 dropped its reserved-name check -> a host
     # registered a transport under the name a chart writes for the
@@ -454,7 +531,7 @@ defmodule StatifierRouter.ExecutionTargetTest do
 
   # The host's shape: the handler is the executor, so a `<send>` of the
   # registered type reaches this package from inside the delivery.
-  defp config(document) do
+  defp config(document, opts \\ []) do
     machines = machines()
     {:ok, store} = Storage.new(Storage.Ecto, persistence: TestPersistence)
 
@@ -472,7 +549,8 @@ defmodule StatifierRouter.ExecutionTargetTest do
         resolver: static,
         chart_resolver: fn content_hash -> Map.fetch(by_hash, content_hash) end,
         bindings: [impression_binding(document)],
-        send_type: @type_string
+        send_type: @type_string,
+        timer_queue: Keyword.get(opts, :timer_queue)
       )
 
     executor = fn effect, context ->
@@ -535,6 +613,23 @@ defmodule StatifierRouter.ExecutionTargetTest do
       },
       opts
     )
+  end
+
+  defp delayed_effect do
+    %SendDelayed{
+      event: "pair.joined",
+      target: "execution",
+      type: @type_string,
+      data: %{"document" => "placement_counter", "key" => "home_top"},
+      send_id: "send_1",
+      delay_ms: 1_000,
+      c_index: 3,
+      owner: nil,
+      macrostep: 1,
+      microstep: 0,
+      round: 0,
+      ordinal: 1
+    }
   end
 
   defp seam(execution_id), do: %{execution_id: execution_id, content_hash: "sha_1"}

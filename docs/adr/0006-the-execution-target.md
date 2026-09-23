@@ -551,3 +551,55 @@ decided nothing about the status, and this Note is what moves it.
 The status column for this record in `docs/adr/README.md` still reads
 `proposed`. That index is flipped once for all seven records by a
 separate bead, so it lags this file by design until then.
+
+## Amendment (2026-09-23, sr-73n): a delayed send to the execution target is refused by name, and `delay` is its reason
+
+Status: proposed
+
+Sections 1 to 6 describe a send the handler delivers at once. None of
+them says what a **delayed** send to the reserved name means - a
+`<send>` with a `delay` or a `delayexpr`, which reaches this package as
+the engine's delayed-send effect rather than as a send.
+
+- **The case.** The handler's delayed arm asked the route registry for
+  the send's `target` before this Amendment
+  (`StatifierRouter.SendHandler`'s `enqueue/4`, read at `3dcd54f`), and
+  the registry can never hold the reserved name:
+  `StatifierRouter.Config.new/1` refuses a route registered under it with
+  `{:reserved_route, name}` (`route_adapters/1`, read at `3dcd54f`). So
+  the sender was answered `{:error, {:unregistered_route, "execution"}}`
+  and a `route` row was written. That reason reads as a host
+  configuration error, a route the host forgot to register, when no host
+  could have registered it and the truth is that the feature is not
+  offered.
+- **The decision.** A delayed send to the execution target is out of
+  scope for now and is refused by name. It is neither delivered nor put
+  on the host's timer queue. The handler answers
+  `{:error, {:send_refused, :delay}}` on both shapes, before the route
+  registry is asked, and the sender hears it the way section 3 reports
+  every refusal.
+- **One reason is added under `send_refused`**, in the shape section 6's
+  reasons and the sr-p6u Note's `route` have:
+
+| Reason | Means | Ledger row |
+|---|---|---|
+| `delay` | a delayed send names the reserved target | one row, `key` and `execution_id` empty, when the sender has an address row; none otherwise |
+
+- **The scope is read as a route refusal's is, and so is the gap.** The
+  row's `scope` is read from the address row named by the scope half of
+  ADR-0005, section 4's composed key
+  (`StatifierRouter.Addresses.by_execution/2`, read at `3dcd54f`), exactly
+  as the sr-p6u Note reads it. A sender with no address row is told
+  `delay` and nothing is recorded, because the ledger's `scope` is
+  `NOT NULL`. Section 6's sentence that a refusal with no ledger row is
+  `unaddressed_sender` and nothing else takes this one exception: the
+  delay is refused whatever the address, so it is checked first, and a
+  sender told `unaddressed_sender` would be sent to fix an address only
+  to meet this refusal next.
+- **What this Amendment does not decide.** Support is left to a later
+  record: a timer-queue row that carries the reserved target and a fire
+  path that delivers it through `StatifierRouter.Delivery.deliver_event/4`.
+  It changes no immediate send, no other reason and no configuration-time
+  refusal, and it leaves line 3 as it is. The code half is the first
+  clause of `StatifierRouter.SendHandler`'s `enqueue/4`, in the same
+  change as this Amendment.
