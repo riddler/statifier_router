@@ -48,8 +48,8 @@ defmodule StatifierRouter.ConfigTest do
               }} = Config.new(repo: TestRepo, delivery: @delivery)
     end
 
-    # sabotage: fetch_repo/1 returned {:ok, nil} when :repo was absent ->
-    # red; restored, green.
+    # sabotage: fetch_module/2 returned {:ok, nil} when :repo was absent
+    # -> red; restored, green.
     test "refuses a missing or malformed repo" do
       assert Config.new([]) == {:error, {:missing_key, :repo}}
       assert Config.new(repo: "TestRepo") == {:error, {:invalid_value, :repo, "TestRepo"}}
@@ -174,6 +174,23 @@ defmodule StatifierRouter.ConfigTest do
 
       assert {:ok, %Config{bindings: [%Binding{id: "impressions_to_join"}, ^built]}} =
                Config.new(repo: TestRepo, delivery: @delivery, bindings: [@impressions, built])
+    end
+
+    # sabotage: build_binding/1 passed a %Binding{} through Binding.new/1
+    # again -> the altered struct was refused, red; restored, green.
+    # Second mutation: new/1 skipped refuse_reserved_id/1 -> the struct
+    # under the reserved id was accepted, red; restored, green.
+    test "keeps a prebuilt binding as given; the list-wide checks still apply" do
+      {:ok, built} = Binding.new(@clicks)
+      altered = %{built | source: 7}
+
+      assert {:ok, %Config{bindings: [^altered]}} =
+               Config.new(repo: TestRepo, delivery: @delivery, bindings: [altered])
+
+      reserved = StatifierRouter.SendHandler.execution_target()
+
+      assert Config.new(repo: TestRepo, delivery: @delivery, bindings: [%{built | id: reserved}]) ==
+               {:error, {:reserved_binding_id, reserved}}
     end
 
     # sabotage: build_bindings/1 skipped a binding Binding.new/1 refused ->
