@@ -351,20 +351,31 @@ names a row, citing this record by path:
   back to `Statifier.Chart.check_accepts/2` for a receiver that declares
   nothing.
 
-The same section also lists, each with NONE, the errors section 7 says
-are not outcomes. duplicate and no_match are neither a refusal nor a
-drop here (sections 3 and 5), and the page gives them no row.
+Section 7 counts the host's chart resolver failing as an error that is
+not an outcome, and the page does not give every such error NONE. When
+the failure is a resolver with no published chart for the document a
+binding or a literal `document` param names, the page's row names a
+twin: `StatifierRouter.Contracts.check/3`, with reason `:not_published`
+(ADR-0008, decision 4). The rows that cite section 7 themselves each
+carry NONE: the configured `:on_complete` route failing, a chart
+resolver with no chart for the content hash an existing execution
+started on, a malformed message or options handed to `route/3`, and a
+persistence step's error. duplicate and no_match are neither a refusal
+nor a drop here (sections 3 and 5), and the page gives them no row.
 
 **The deferred drop's twin is the receiver contract at publish.**
-ADR-0008 checks the literal event of every execution-target send and the
-event of every binding against the receiving document at publish. The
-package's composed check is
+At publish, ADR-0008 checks against the receiving document the event of
+every binding, and the event of an execution-target send when that event
+is a static name and the send's `document` param is literal (decision
+1). A send it selects but cannot judge, such as one with a literal event
+and a non-literal or missing `document`, is reported unchecked (decision
+3). The package's composed check is
 `StatifierRouter.Contracts.check/3` (`lib/statifier_router/contracts.ex`,
 read at `d0202b2`), which reports those findings under
 `undeclared_events` and `undeclared_binding_events` and leaves to the
 host which of them blocks a publish (ADR-0008, decision 6).
 
-**A drop for a literal event name would be a bug in a publish check.**
+**When a drop of a literal event name would be a bug in a publish check.**
 The page opens on the rule that a runtime refusal for something a literal
 in the source could have told us is a bug in the publish check. For this
 record's deferred drop, ADR-0008, decision 5 says when that holds: once
