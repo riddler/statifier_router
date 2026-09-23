@@ -20,9 +20,11 @@ defmodule StatifierRouter.FinalStateTest do
 
   # The chart pattern this bead documents: the `<final>` the join settles
   # in sends on its way in, so the send is emitted on the step that
-  # finishes the execution. The `<donedata>` beside it is what the host's
-  # `:on_complete` hook carries, and the two are deliberately different
-  # shapes so a test can tell which one it read.
+  # finishes the execution. The `<donedata>` beside it is what an
+  # `:on_complete` hook would be handed; the test that uses this document
+  # configures none, so the only thing its route sees is the send. The two
+  # have the same shape, one `via` param, with different values, so a test
+  # can tell which one it read.
   @sinking """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="waiting">
     <state id="waiting">
