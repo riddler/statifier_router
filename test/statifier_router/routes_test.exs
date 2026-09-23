@@ -129,13 +129,59 @@ defmodule StatifierRouter.RoutesTest do
       assert %{unregistered: [%{route: nil}]} = Routes.unregistered(config(), compile!(source))
     end
 
-    # Sabotage: dropping the `is_binary(config.send_type)` guard makes a
-    # configuration with no send type claim every send whose type is nil.
+    # Sabotage: claiming every literal-typed send (replacing classify/3's
+    # whole `is_binary(config.send_type) and type == config.send_type`
+    # condition with `true`) makes both sends findings and this goes red.
+    # Dropping only the `is_binary/1` guard does NOT: a send with no type
+    # is caught by classify/3's nil clause first, and a literal type is
+    # always a string, which never equals nil. The guard is defensive-only
+    # and says in classify/3 why it is kept.
     test "claims nothing when the configuration registers no send type" do
       config = config(send_type: nil, route_adapters: %{})
 
       assert %{unregistered: [], unchecked: []} =
                Routes.unregistered(config, compile!(DeliveryFixtures.join_sends()))
+    end
+
+    # Sabotage: walking each state's `<onentry>`/`<onexit>` blocks (their
+    # `content` indices) in unregistered/2 instead of the machine's flat
+    # `contents` tuple sees only the `<if>` node, never the send inside
+    # its branch, and this goes red.
+    test "finds a send nested inside an if element" do
+      source = """
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="on_loan">
+        <datamodel><data id="overdue" expr="true"/></datamodel>
+        <state id="on_loan">
+          <onentry>
+            <if cond="overdue">
+              <send type="myapp:sink" target="overdue_notices" event="loan.overdue"/>
+            </if>
+          </onentry>
+        </state>
+      </scxml>
+      """
+
+      assert %{unregistered: [%{route: "overdue_notices"}], unchecked: []} =
+               Routes.unregistered(config(), compile!(source))
+    end
+
+    # Sabotage: the same state-block walk in unregistered/2 never reaches
+    # a transition's executable content, so this send is lost and this
+    # goes red.
+    test "finds a send on a transition" do
+      source = """
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="on_loan">
+        <state id="on_loan">
+          <transition event="loan.returned" target="returned">
+            <send type="myapp:sink" target="hold_shelf" event="copy.returned"/>
+          </transition>
+        </state>
+        <final id="returned"/>
+      </scxml>
+      """
+
+      assert %{unregistered: [%{route: "hold_shelf"}], unchecked: []} =
+               Routes.unregistered(config(), compile!(source))
     end
 
     # Sabotage: a scope override that changed a route's existence rather

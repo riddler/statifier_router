@@ -154,6 +154,10 @@ defmodule StatifierRouter.Routes do
         add(acc, :unchecked, %{reason: :typeexpr, location: node.location})
 
       {:static, type} ->
+        # `is_binary/1` is defensive-only: `Config.new/1` admits a string
+        # or nil and a literal type is a string, so the comparison alone
+        # already fails for a configuration with no `:send_type`. It is
+        # kept so that rule does not rest on either of those two facts.
         if is_binary(config.send_type) and type == config.send_type,
           do: check_target(config, node, acc),
           else: acc
