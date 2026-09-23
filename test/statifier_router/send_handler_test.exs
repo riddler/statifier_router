@@ -179,22 +179,107 @@ defmodule StatifierRouter.SendHandlerTest do
              }
     end
 
-    # sabotage: the {:send_delayed, ...} clause of perform/2 answered :ok
-    # -> a delayed send was silently dropped on a shape that holds no
-    # timer, red; restored, green.
-    test "refuses a delayed send rather than dropping it, and writes no queue row" do
+    # sabotage: perform/2's {:send_delayed, ...} arm answered :ok without
+    # calling enqueue/4 -> no row was written on this shape, red;
+    # restored, green.
+    test "records a delayed send on the timer queue as one row under the composed key" do
       effect = delayed_effect()
       event = SendEvent.build(effect, "session_1")
 
       assert {:ok, [{:handler, SendHandler, payload}]} =
                SendHandler.deliver(effect, event, %{session_id: "session_1"})
 
+      # deliver/3 is pure: planning a delayed send writes no row.
+      assert RecordingTimerQueue.entries() == []
+
       :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+
+      assert [entry] = RecordingTimerQueue.entries()
+      assert [^entry] = RecordingTimerQueue.entries("session_1", "send_1")
+
+      assert entry == %{
+               scope: "session_1",
+               send_id: "send_1",
+               route: "joined_records",
+               config: %{pid: self(), sink: "joined_records"},
+               event: event,
+               key:
+                 {"session_1",
+                  %{
+                    send_id: "send_1",
+                    macrostep: 1,
+                    microstep: 0,
+                    round: 0,
+                    c_index: 4,
+                    owner: nil
+                  }, 2},
+               delay_ms: 5_000
+             }
+
+      # Recorded, not sent: nothing reaches the route until the host fires
+      # the row.
+      refute_received {:routed, _config, _event, _key}
+    end
+
+    # perform/2 MAY be called more than once for one send. The repeat
+    # carries the same composed key, and it is the queue's dedup on that
+    # key (the schedule/2 callback's obligation, honoured by
+    # RecordingTimerQueue) that adds no second row; this handler hands the
+    # queue the same key both times. sabotage (the handler's half):
+    # perform/2 handed the queue a fresh ordinal on each call -> two rows,
+    # red; restored, green. sabotage (the queue's half):
+    # RecordingTimerQueue.schedule/2 appended without checking the key ->
+    # two rows, red; restored, green.
+    test "a redelivered identical delayed send lands no second row" do
+      effect = delayed_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+
+      assert [_one] = RecordingTimerQueue.entries()
+    end
+
+    # sabotage: perform/2 handed the queue the planned key with its scope
+    # half replaced by a constant -> the row differed from the executor
+    # seam's, red; restored, green.
+    test "records the same row the executor seam records for the same scope" do
+      effect = delayed_effect()
+      event = SendEvent.build(effect, "ex_1")
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_1")) == :ok
+      assert [seam_entry] = RecordingTimerQueue.entries("ex_1", "send_1")
+      assert {:ok, 1} = RecordingTimerQueue.cancel(%{}, "ex_1", "send_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "ex_1"})
+
+      :ok = SendHandler.put_config(config)
+      assert SendHandler.perform(payload, %{session_id: "ex_1"}) == :ok
+
+      assert [^seam_entry] = RecordingTimerQueue.entries("ex_1", "send_1")
+    end
+
+    # sabotage: the %Config{timer_queue: nil} clause of schedule/5
+    # answered :ok -> a delayed send with nowhere durable to go was
+    # dropped silently on this shape too, red; restored, green.
+    test "refuses a delayed send when the host registered no queue" do
+      effect = delayed_effect()
+      event = SendEvent.build(effect, "session_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      :ok = SendHandler.put_config(handler_config())
 
       assert SendHandler.perform(payload, %{session_id: "session_1"}) ==
-               {:error, {:delayed_send_unsupported, "send_1"}}
-
-      assert RecordingTimerQueue.entries() == []
+               {:error, {:no_timer_queue, "send_1"}}
     end
 
     # sabotage: perform/2 answered :ok for an unregistered route -> the
@@ -235,15 +320,58 @@ defmodule StatifierRouter.SendHandlerTest do
 
     # sabotage: cancel/2 returned {:ok, []} -> the instruction the session
     # routes back to perform/2 was never planned, red; restored, green.
-    test "plans a cancel, which writes no queue row on this shape" do
+    # sabotage: perform/2's {:cancel, ...} arm answered :ok without calling
+    # dequeue/3 -> the row stood after the cancel, red; restored, green.
+    test "plans a cancel and performs it against the queue, in its own session only" do
+      :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+      effect = delayed_effect()
+
+      for session_id <- ["session_1", "session_2"] do
+        {:ok, [{:handler, SendHandler, payload}]} =
+          SendHandler.deliver(effect, SendEvent.build(effect, session_id), %{
+            session_id: session_id
+          })
+
+        assert SendHandler.perform(payload, %{session_id: session_id}) == :ok
+      end
+
       cancel = %Cancel{send_id: "send_1", macrostep: 2, microstep: 0, round: 0, ordinal: 2}
 
       assert {:ok, [{:handler, SendHandler, payload}]} =
                SendHandler.cancel(cancel, %{session_id: "session_1"})
 
-      :ok = SendHandler.put_config(handler_config(timer_queue: {RecordingTimerQueue, %{}}))
+      # cancel/2 is pure: planning the cancel deletes nothing.
+      assert [_row] = RecordingTimerQueue.entries("session_1", "send_1")
+
       assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
-      assert RecordingTimerQueue.entries() == []
+      assert RecordingTimerQueue.entries("session_1", "send_1") == []
+      assert [%{scope: "session_2"}] = RecordingTimerQueue.entries("session_2", "send_1")
+
+      # A cancel for a send already gone is a no-op, not an error.
+      assert SendHandler.perform(payload, %{session_id: "session_1"}) == :ok
+    end
+
+    # sabotage: perform/2's {:cancel, ...} arm, and separately its
+    # {:send_delayed, ...} arm, answered :ok for a missing configuration ->
+    # the refusal disappeared, red each time; restored, green.
+    test "refuses a delayed send and a cancel when the host installed no configuration" do
+      effect = delayed_effect()
+
+      {:ok, [{:handler, SendHandler, delayed}]} =
+        SendHandler.deliver(effect, SendEvent.build(effect, "session_1"), %{
+          session_id: "session_1"
+        })
+
+      cancel = %Cancel{send_id: "send_1", macrostep: 2, microstep: 0, round: 0, ordinal: 2}
+
+      {:ok, [{:handler, SendHandler, cancelled}]} =
+        SendHandler.cancel(cancel, %{session_id: "session_1"})
+
+      assert SendHandler.perform(delayed, %{session_id: "session_1"}) ==
+               {:error, {:no_config, SendHandler}}
+
+      assert SendHandler.perform(cancelled, %{session_id: "session_1"}) ==
+               {:error, {:no_config, SendHandler}}
     end
 
     # sabotage: ioprocessors_entry/1 returned %{} -> spec 5.10's entry
