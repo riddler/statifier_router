@@ -447,6 +447,66 @@ defmodule StatifierRouter.SendHandlerTest do
       assert [%{scope: "ex_2"}] = RecordingTimerQueue.entries("ex_2", "send_1")
     end
 
+    # The queue's at-most-once on the dedup key (the schedule/2 callback's
+    # obligation), driven through handle_effect/3 at the executor seam: the
+    # same delayed send handed over twice is one row. sabotage:
+    # RecordingTimerQueue.schedule/2 appended without checking the key -> two
+    # rows, red; restored, green.
+    test "the same delayed send scheduled twice is one row under its dedup key" do
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+      effect = delayed_effect()
+
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_1")) == :ok
+      assert SendHandler.handle_effect(config, {:send_delayed, effect}, seam("ex_1")) == :ok
+
+      assert [_one] = RecordingTimerQueue.entries("ex_1", "send_1")
+    end
+
+    # Spec 6.3 cancels every delayed send under an id, so one cancel may
+    # delete more than one row. Driven through handle_effect/3's cancel arm
+    # at the executor seam, which calls the TimerQueue's cancel/3 (not
+    # SendHandler.cancel/2, the send-processor shape's planning callback).
+    # sabotage: dequeue/3 answered {:error, :ambiguous_cancel} for a count
+    # above one -> the cancel failed the step, red; restored, green.
+    test "one cancel deletes every row in its scope under the send id" do
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+      first = delayed_effect()
+      second = %{first | macrostep: 2, ordinal: 5}
+
+      assert SendHandler.handle_effect(config, {:send_delayed, first}, seam("ex_1")) == :ok
+      assert SendHandler.handle_effect(config, {:send_delayed, second}, seam("ex_1")) == :ok
+      assert SendHandler.handle_effect(config, {:send_delayed, first}, seam("ex_2")) == :ok
+      assert [_first, _second] = RecordingTimerQueue.entries("ex_1", "send_1")
+
+      cancel = %Cancel{send_id: "send_1", macrostep: 3, microstep: 0, round: 0, ordinal: 1}
+      assert SendHandler.handle_effect(config, {:cancel, cancel}, seam("ex_1")) == :ok
+
+      assert RecordingTimerQueue.entries("ex_1", "send_1") == []
+      assert [%{scope: "ex_2"}] = RecordingTimerQueue.entries("ex_2", "send_1")
+    end
+
+    # The TimerQueue moduledoc's "Firing a row" recipe, run as written: a
+    # host fires a queued row through Config.route/3 and the route's own
+    # deliver/3, with nothing outside the public surface. sabotage:
+    # schedule/5 wrote the entry's route as the send's event name in place
+    # of its target -> Config.route/3 answered :error for the row, red;
+    # restored, green.
+    test "a host fires a queued row with the route name, config, event and key it carries" do
+      config = handler_config(timer_queue: {RecordingTimerQueue, %{}})
+
+      assert SendHandler.handle_effect(config, {:send_delayed, delayed_effect()}, seam("ex_1")) ==
+               :ok
+
+      assert [entry] = RecordingTimerQueue.entries("ex_1", "send_1")
+
+      assert {:ok, {module, _registered}} = Config.route(config, nil, entry.route)
+      assert module.deliver(entry.config, entry.event, entry.key) == :ok
+
+      assert_received {:routed, %{sink: "joined_records"}, event, key}
+      assert event == entry.event
+      assert key == entry.key
+    end
+
     # sabotage: dequeue/3's {:ok, _deleted} clause answered {:error, ...}
     # for a zero count -> a cancel matching nothing failed the step, red;
     # restored, green.
