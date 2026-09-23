@@ -861,19 +861,55 @@ inside work a caller's transaction encloses.
 `StatifierPersistence.Executions`' private `serialized/5`, and what that
 package says of the trap belongs in its own records. Read at its
 `af0cb5c`, its `lib/` calls no `c:Ecto.Repo.rollback/1` and asks for no
-`mode: :savepoint`; the one place it answers a value over a failed
-statement is `StatifierPersistence.PinSource.collect/3`, which turns a
-pin source's raise - a failed read in this package's `count/2` among
-them - into an error return, so a retirement run inside a caller's
-transaction would answer over a transaction already lost.
+`mode: :savepoint`. Three places answer a value where the transaction
+may already be lost:
+
+- The Ecto adapter's `insert_execution/2`
+  (`lib/statifier_persistence/storage/ecto.ex`, the
+  `{:error, %Changeset{}} -> {:error, :execution_exists}` arm) answers
+  a refusal after an `INSERT` its unique constraint failed, and Postgres
+  has aborted the transaction over that statement. That package's own
+  foot Note on its ADR-0004 records the same.
+- The same adapter's private `insert_input/5` answers
+  `{:error, {:adapter, :seq_conflict}}` from the same shape over the
+  input log's unique `(execution_id, seq)` index.
+- `StatifierPersistence.PinSource.collect/3` turns a pin source's raise
+  - a failed read in this package's `count/2` among them - into an error
+  return, so a retirement run inside a caller's transaction would answer
+  over a transaction already lost.
+
+The first two do not bite this package's deliveries. A delivery never
+hands `create/4` an execution id that exists: it mints a fresh one, and
+the address row's unique index settles a race before `create/4` is
+reached (ADR-0003, section 3). A sequence conflict needs a second writer
+of one execution's input log outside `step/5`'s lock. And were either
+refusal to come back inside a delivery, the delivery's own savepoint was
+opened before the failed `INSERT`, so rolling back to it returns the
+enclosing transaction to a usable state before the reason is answered.
+The third is statifier_persistence's to settle.
 
 **statifier_oban.** Read at its `93bddde`, and changed by nothing here.
-`StatifierOban.Timer.schedule/3` and `StatifierOban.Timer.cancel/3` reach
-`Oban.insert/2` and `Oban.cancel_all_jobs/2`. At oban 2.23.1, the version
-its `mix.lock` resolves, the Basic engine wraps the insert in
-`Oban.Repo.transaction/3` and the cancel is one update; neither calls a
-rollback, so a failed statement raises. One edge is recorded rather than
-judged: that transaction retries a retryable error, and Oban's own
-documentation of `Oban.Repo.transaction/3` warns that inside an existing
-transaction a retry masks the real error and asks for `retry: false`
-there; the Basic engine calls that transaction with no options of its own.
+Every function in its `lib/` that reaches the database was found by
+searching for `Oban.insert`, `Oban.cancel_all_jobs` and `Oban.Repo`:
+
+| Function | Can run inside | Verdict |
+|---|---|---|
+| `StatifierOban.Timer.schedule/3` (`Oban.insert/2`) | the sending step's transaction | safe: no rollback; a failed statement raises |
+| `StatifierOban.Timer.cancel/3` (`Oban.cancel_all_jobs/2`) | the sending step's transaction | safe: one update, no rollback |
+| `StatifierOban.Invoke.Handler.perform_start/3` (`Oban.insert/2`, through its private `enqueue/4`) | the sending step's transaction, from a host's invoke handler | safe: no rollback; its refusals are answered before the insert |
+| `StatifierOban.Invoke.Handler.perform_cancel/3` (`Oban.cancel_all_jobs/2`) | the sending step's transaction, from a host's invoke handler | safe: one update, no rollback |
+| `StatifierOban.Invoke.FanOut.start/5` (`Oban.insert/2`, one per child) | the fan-out job's own perform, in `StatifierOban.Invoke.Worker` | not reached from a caller's transaction: Oban does not wrap a job's perform in one. Were it called inside one, the same verdict as `perform_start/3`: no rollback, and an `{:error, reason}` it answers is `Oban.insert/2`'s own, subject to the retry edge below |
+| `StatifierOban.Invoke.FanOut.cancel_unstarted/3` (`Oban.cancel_all_jobs/2`) | wherever the host's settlement calls it, a step's transaction included | safe: one update, no rollback |
+| `StatifierOban.Timer.pending_for/2` (`Oban.Repo.all/2`), and the pin source `use StatifierOban.Timer.PinSource` writes over it | `StatifierPersistence.Executions.retire_chart/4` | safe here: a failed read raises; statifier_persistence's `collect/3` is the answer over it, above |
+
+At oban 2.23.1, the version its `mix.lock` resolves, the Basic engine
+wraps an insert in `Oban.Repo.transaction/3` and a cancel is one update;
+neither calls a rollback. One edge is recorded rather than judged: that
+transaction retries `Postgrex.Error` and `DBConnection.ConnectionError`,
+and Oban's own documentation of `Oban.Repo.transaction/3` warns that
+inside an existing transaction a retry masks the real error and asks for
+`retry: false` there; the Basic engine calls that transaction with no
+options of its own. Under the default `on_exhausted: :raise` the error
+still reaches the caller as a raise once the retries are spent; a host
+that compiles Oban with `on_exhausted: :log` gets `{:error, exception}`
+back instead, a value answered over a transaction already lost.
