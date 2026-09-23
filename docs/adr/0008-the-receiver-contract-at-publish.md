@@ -409,7 +409,8 @@ This Note records facts that changed after the record was written. It
 decides nothing, and no line above it was edited.
 
 The Context and the Consequences were written against statifier 2.6.0,
-and four of their sentences describe that tree, where each was true:
+and the sentences below, in four groups, describe the state of the day
+the record was written, where each was true:
 
 - **The resolved engine.** The Context says statifier 2.6.0 is "the
   version this package's `mix.lock` resolves". At `2d053d5`, `mix.exs`
@@ -417,8 +418,10 @@ and four of their sentences describe that tree, where each was true:
   2.7.0, published to Hex and tagged `v2.7.0` in statifier-ex. The shape
   of `Statifier.Machine.Content.Send` and `Statifier.Machine.Param` the
   same paragraph describes holds unchanged at 2.7.0: `event`, `target`
-  and `type` are `Statifier.Machine.expr()`, `{:static, value}` or
-  `{:compiled, compiled, source}`; `params` and `namelist` are lists of
+  and `type` are each typed `Statifier.Machine.expr() | nil` in
+  `Statifier.Machine.Content.Send`'s `t/0`: `{:static, value}`,
+  `{:compiled, compiled, source}`, or `nil` when the author wrote neither
+  the attribute nor its `*expr` sibling; `params` and `namelist` are lists of
   `Statifier.Machine.Param`; and only a `namelist` entry may carry
   `{:invalid, error}` (the `expr` typedoc of `Statifier.Machine.Param`).
   Compiled at 2.7.0, the section's two examples give the one
