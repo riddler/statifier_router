@@ -8,8 +8,15 @@ defmodule StatifierRouter.PinSource do
   address row is one it cannot: it lives in this package's table, in a
   package statifier_persistence does not depend on, and it is the reason
   a later event still reaches the execution it names (ADR-0002,
-  section 1). A retirement taken while such a row stands would leave that
-  event routed to an execution whose chart is gone.
+  section 1).
+
+  Most of the time the vote only names the router in the refusal: a row
+  counted here names an `:active` execution, and an `:active` execution on
+  the hash refuses the retirement on its own. The vote decides the answer
+  in one window: `retire_chart/4` reads the active ids before its
+  transaction opens, and an execution that goes terminal between that
+  read and the guarded write inside the transaction no longer refuses on
+  its own. The count taken here, from the ids read earlier, still does.
 
   ## What the count is
 
@@ -27,17 +34,20 @@ defmodule StatifierRouter.PinSource do
   a row naming an `:active` execution has no horizon running against it
   yet. The rows this source counts are live addresses by construction.
 
-  So the pin releases exactly when the address it stands for is gone: the
-  execution finishes, the reaper stamps the row terminal and deletes it
-  once the horizon has elapsed, and the next retire call counts one pin
-  fewer. Nothing here retains a row, and nothing here deletes one.
+  So the pin releases when the execution leaves the `:active` set, not
+  when its address row is deleted: the next retire call no longer hands
+  this source that execution's id, and counts one pin fewer, while the
+  row itself stands until the reaper stamps it terminal and deletes it
+  once the horizon has elapsed. Nothing here retains a row, and nothing
+  here deletes one.
 
   ## How a host installs it
 
   The behaviour's callback takes a content hash and a context and nothing
-  else, so the configuration this source reads the table through has to be
-  bound into the module. `use StatifierRouter.PinSource` writes that
-  module, with `:config` an expression it evaluates on every call:
+  else, so the host binds the configuration this source reads the table
+  through in a module of its own. `use StatifierRouter.PinSource` is how
+  this package spells that module, with `:config` an expression it
+  evaluates on every call:
 
       defmodule MyApp.RouterPins do
         use StatifierRouter.PinSource, config: MyApp.Router.config()
@@ -49,9 +59,20 @@ defmodule StatifierRouter.PinSource do
 
       StatifierPersistence.Executions.retire_chart(store, content_hash, [MyApp.RouterPins])
 
-  A host that would rather not `use` a macro writes the same module by
-  hand against `StatifierPersistence.PinSource` and delegates to
-  `count/2` from its own `pins/2`.
+  Nothing forces the macro. A host that would rather not `use` it writes
+  the same module by hand, with `@behaviour StatifierPersistence.PinSource`
+  and a `pins/2` that calls `count/2` with its own configuration, and it
+  works the same.
+
+  `StatifierRouter.PinSource` itself is not a pin source: it defines no
+  `pins/2`. Naming it at the retire call retires nothing and refuses with
+  the source-failure arm:
+
+      {:error,
+       {:pin_source_failed,
+        {StatifierRouter.PinSource, {:raised, %UndefinedFunctionError{}}}}}
+
+  The module to name is the one the host wrote.
 
   ## A source that cannot answer raises
 
