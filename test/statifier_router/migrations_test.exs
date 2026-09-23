@@ -78,16 +78,28 @@ defmodule StatifierRouter.MigrationsTest do
     {:ok, config: config}
   end
 
-  # A run that goes red between the DDL and `on_exit` strands the kx tables:
-  # the down that would have removed them either never runs or removes only
-  # part of the set. `migrate/1` cannot recover from that on its own, because
-  # it folds `:already_up` into `:ok` - the version row outlives the tables,
-  # so the next `migrate(:up)` reports success and creates nothing, and every
-  # test then fails on a missing relation. Clearing both halves is what makes
-  # the run after a red one start clean: every version's tables by their
-  # schema-qualified names, and the `schema_migrations` row `migrate/1` reads.
-  # The migrator is called with no `:prefix`, so that row is in the repo's
-  # default schema rather than under @schema.
+  # Clears what an earlier run left in the database, so the run after a red
+  # or aborted one starts clean. Two leftover states need it, and each needs
+  # a different half:
+  #
+  # - A `down/1` that completes but drops only part of the set (the sabotage
+  #   on "runs down and up again cleanly" below is one) leaves the surviving
+  #   tables in place, while `Ecto.Migrator.down/4` still deletes the
+  #   `schema_migrations` row. The next `migrate(:up)` runs V01's CREATE
+  #   TABLE against a table that is already there and raises 42P07
+  #   duplicate_table in setup_all, so every test in the module is invalid.
+  #   The DROP half clears this state; the DELETE half finds no row.
+  # - A run that stops before its `on_exit` down (the VM killed mid-run)
+  #   leaves every table and the version row. Deleting the row alone raises
+  #   42P07 as above. Dropping the tables alone leaves the row with nothing
+  #   under it, and `migrate/1` folds `:already_up` into `:ok`, so the next
+  #   `migrate(:up)` creates nothing and every test fails on 42P01
+  #   undefined_table. The DELETE half is what stops that.
+  #
+  # Hence both halves: every version's tables by their schema-qualified
+  # names, and the `schema_migrations` row `migrate/1` reads. The migrator
+  # is called with no `:prefix`, so that row is in the repo's default
+  # schema rather than under @schema.
   defp clear_leftovers do
     for table <- @tables do
       SQL.query!(TestRepo, ~s(DROP TABLE IF EXISTS "#{@schema}"."#{table}"), [])
