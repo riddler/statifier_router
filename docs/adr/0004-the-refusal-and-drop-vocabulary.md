@@ -399,9 +399,13 @@ outside a delivery fails. It decides nothing new, and no line above it
 was edited.
 
 Section 7 lists the Repo unavailable among the failures that are not an
-outcome, and says `route/3` returns `{:error, reason}` for it. That holds
-for the Repo inside a delivery, where the delivery record's transaction
-answers for it. It does not describe the key_refused row. Section 4 says
+outcome, and says `route/3` returns `{:error, reason}` for it. Inside a
+delivery that holds only for an `{:error, reason}` the repo returns:
+ADR-0003, section 1 says an error returned there rolls the delivery back
+and is `route/3`'s `{:error, reason}`, while a Repo failure that raises
+there, such as a dropped connection or a lock wait ended by a timeout,
+rolls the delivery back and propagates to `route/3`'s caller unrescued.
+The key_refused row is outside any delivery. Section 4 says
 that row, decided before any delivery, is written on its own, and it is
 written with a bang insert (`StatifierRouter.key_refused/5`, read at
 `c0753db`). A Repo failure on that write raises; `route/3` does not
