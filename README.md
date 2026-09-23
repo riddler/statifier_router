@@ -507,7 +507,7 @@ decision record that fixes it, in [docs/adr/](https://github.com/riddler/statifi
 ```elixir
 def deps do
   [
-    {:statifier_router, "~> 0.3.0"}
+    {:statifier_router, "~> 0.4.0"}
   ]
 end
 ```
