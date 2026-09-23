@@ -10,6 +10,30 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/ma
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.3.0] 2026-09-22
+
+Feature release: the receiver contract at publish. A host gets `StatifierRouter.Contracts`, pure functions its own publish step calls to find every execution-target `<send>` and every binding whose event the receiving document does not accept, judged through a lookup the host supplies, and `StatifierRouter.Contracts.check/3`, which runs every publish-time check this package ships and answers one report under five named keys. Which finding blocks a publish stays the host's decision.
+
+Upgrading: one dependency floor moves, and no other: `statifier` to `~> 2.7`, the release carrying `Statifier.Chart.check_accepts/2`, which `StatifierRouter.Contracts` calls to judge a receiver that declares no events. No migration and no new configuration option.
+
+### Added
+
+- `StatifierRouter.Contracts.undeclared_events/3` lists every `<send>` to the
+  reserved execution target whose literal event its receiving document does
+  not accept, judged through a host-supplied lookup, with the sends an
+  expression or a missing `event` or `document` left unchecked.
+- `StatifierRouter.Contracts.undeclared_binding_events/2` lists every binding
+  whose event its document does not accept, with the binding's id.
+- `StatifierRouter.Contracts.check/3` runs every publish-time check the package
+  ships - both `StatifierRouter.Routes` checks and the two above - and answers
+  one report under five named keys.
+
+### Changed
+
+- The `statifier` requirement moves to `~> 2.7`, the release carrying
+  `Statifier.Chart.check_accepts/2`, which judges a receiver that declares no
+  events.
+
 ## [0.2.0] 2026-09-22
 
 Feature release: the outbound half, the execution target and the source invoke. A chart now reaches the world through named routes a host registers and overrides per scope, addresses another durable execution by document and key through the same one transaction a binding's delivery uses, and holds an `<invoke>` open as a subscription to a binding. A host gets the `StatifierRouter.Route` and `StatifierRouter.TimerQueue` behaviours, `StatifierRouter.SendHandler` for both shapes a registered send type arrives in, `StatifierRouter.Webhook` as a Plug-shaped front, `StatifierRouter.Routes` for a publish-time check of the routes a machine sends to, and `StatifierRouter.PinSource` so an addressed execution holds its chart back from retirement.
