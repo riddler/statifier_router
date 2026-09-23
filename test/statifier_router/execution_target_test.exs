@@ -1,5 +1,5 @@
 defmodule StatifierRouter.ExecutionTargetTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: true, group: :database
 
   import Ecto.Query, only: [from: 2]
 

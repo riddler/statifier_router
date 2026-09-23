@@ -1,5 +1,5 @@
 defmodule StatifierRouter.WebhookTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: true, group: :database
 
   import StatifierRouter.DeliveryFixtures,
     only: [bindings: 0, config: 1, executions: 0, ledger: 1]

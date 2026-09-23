@@ -1,5 +1,5 @@
 defmodule StatifierRouter.DeliveryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: true, group: :database
 
   import StatifierRouter.DeliveryFixtures
 

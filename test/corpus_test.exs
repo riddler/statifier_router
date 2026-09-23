@@ -12,7 +12,7 @@ defmodule StatifierRouter.CorpusTest do
   that process and the sandbox hides nothing a case compares.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: true, group: :database
 
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierRouter.CorpusRunner
