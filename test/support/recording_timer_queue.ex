@@ -14,8 +14,11 @@ defmodule StatifierRouter.RecordingTimerQueue do
   It also honours the dedup key the way `c:StatifierRouter.TimerQueue.schedule/2`
   obliges a queue to: an entry whose `key` it already holds is answered
   `:ok` and adds no row, and entries with different keys under one
-  `{scope, send_id}` are kept side by side, oldest first. Test-only support
-  code, not part of the package's public API.
+  `{scope, send_id}` are kept side by side, oldest first. A queue
+  configuration carrying an `:observe` fun has it called with `:schedule`
+  or `:cancel` at the start of that call, so a test can look at the calling
+  process from inside the queue. Test-only support code, not part of the
+  package's public API.
   """
 
   @behaviour StatifierRouter.TimerQueue
@@ -31,7 +34,9 @@ defmodule StatifierRouter.RecordingTimerQueue do
   def entries(scope, send_id), do: Map.get(rows(), {scope, send_id}, [])
 
   @impl StatifierRouter.TimerQueue
-  def schedule(_queue_config, entry) do
+  def schedule(queue_config, entry) do
+    observe(queue_config, :schedule)
+
     if Enum.any?(entries(), &(&1.key == entry.key)) do
       :ok
     else
@@ -42,11 +47,15 @@ defmodule StatifierRouter.RecordingTimerQueue do
   end
 
   @impl StatifierRouter.TimerQueue
-  def cancel(_queue_config, scope, send_id) do
+  def cancel(queue_config, scope, send_id) do
+    observe(queue_config, :cancel)
     {deleted, kept} = Map.pop(rows(), {scope, send_id}, [])
     Process.put(@rows_key, kept)
     {:ok, length(deleted)}
   end
 
   defp rows, do: Process.get(@rows_key, %{})
+
+  defp observe(%{observe: observe}, call) when is_function(observe, 1), do: observe.(call)
+  defp observe(_queue_config, _call), do: :ok
 end
