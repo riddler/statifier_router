@@ -21,7 +21,7 @@ defmodule StatifierRouter.Config do
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
-  | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it | `nil` |
+  | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it; an `{:error, _}` from that route rolls the delivery back, finishing step included, so a route that never succeeds keeps the execution from finishing (see below) | `nil` |
   | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
   | `:prefix` | the Postgres schema the tables live in, as a string | `nil` (the repo's default) |
@@ -57,9 +57,30 @@ defmodule StatifierRouter.Config do
   from `:route_adapters` is refused with `{:unregistered_on_complete,
   name}` rather than missed on the one delivery that would have used it.
   It is what `StatifierRouter.Delivery` hands an execution's donedata to
-  on the delivery that finishes the execution; the README's "A finished
-  execution reaches a sink" says what that delivery does and what it
-  cannot do.
+  on the delivery that finishes the execution, inside that delivery's
+  transaction; the README's "A finished execution reaches a sink" sets it
+  beside the chart's own way of telling a sink.
+
+  An `{:error, reason}` from that route settles the delivery as
+  `{:error, {:on_complete, route_name, reason}}` and rolls it back, the
+  finishing step with it (ADR-0003, section 1). That is deliberate: a
+  terminal execution has no `error.communication` transition left to
+  take, so rolling back is the only way the hand-off is not lost. Its
+  consequence is that **a route that never succeeds is a poison pill**.
+  The delivery that would finish the execution never commits, so the
+  execution stays at the position it held before that step; each time the
+  source hands the same message over again, the step runs again, its
+  effects reach the executor again, the route is called again and the
+  delivery fails again, and the front sees a message that fails every
+  time. An execution that would finish on `create/4` is rolled back whole
+  instead, and each new attempt creates it under a new execution id
+  (ADR-0003, section 2). The route must therefore be safe to call again
+  under the same idempotency key - the at-most-once obligation
+  `StatifierRouter.Route` states - and must eventually succeed. Nothing in
+  this package retries or holds a failed message, so the number of
+  attempts is bounded only by the source's own redelivery policy (the
+  producer's contract, `StatifierRouter.Broadway`'s "Redelivery is the
+  producer's contract").
 
   ## What the checks here do and do not catch
 

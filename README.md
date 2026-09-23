@@ -222,9 +222,12 @@ finals can send a different shape from each. What this pattern does not
 reach is the execution's donedata, which is not addressable from
 executable content; that is the second way.
 
-**In the host**, `:on_complete` names a registered route that every
-finished execution's donedata is handed to, whichever `<final>` it settled
-in:
+**In the host**, `:on_complete` names a registered route that an
+execution's donedata is handed to when a delivery through this package
+finishes it, whichever `<final>` it settled in. Every door this package
+owns delivers that way; a host that calls
+`StatifierPersistence.Executions.create/4` or `step/5` itself reaches past
+the router, and a termination reached that way fires nothing:
 
 ```elixir
 StatifierRouter.Config.new(
@@ -263,6 +266,17 @@ missing on the one delivery that had something to hand over. An
 terminal execution has no `error.communication` transition left to take,
 so rolling back and being redriven is the only way the hand-off is not
 lost.
+
+That makes a route that never succeeds a poison pill. The finishing
+delivery never commits, so the execution stays where it was before that
+step, and every time the source hands the message over again the step
+re-runs, its effects are re-emitted, the route fails again and the front
+sees the same message fail. Wire only a route that is safe to call again
+under the same idempotency key and that eventually succeeds: this package
+retries nothing and holds no failed message, so the source's own
+redelivery policy is the only bound on the attempts.
+`StatifierRouter.Config`'s documentation of `:on_complete` says the same
+where the option is set.
 
 ## A webhook front
 
