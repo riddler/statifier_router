@@ -974,28 +974,53 @@ and the execution a route is running under (`sending_execution/0`). Read
 at 3dcd54f, each had an edge. This Amendment decides all three, and the
 code that implements it lands in the same change.
 
-- **A route some scope overrides is not resolved without a scope.**
-  Decision 2 lets a scope override a route's configuration, and
-  `StatifierRouter.Config.route/3` resolves a `nil` scope to the
-  registered configuration unchanged (its own documentation, at 3dcd54f).
-  The handler asked it with whatever scope the calling process held: none
-  when it ran outside the process a delivery set it in, and none ever on
-  the send-processor shape, which no delivery reaches. A send to a route
-  some scope overrides therefore reached the registered configuration with
-  no error, whichever scope it belonged to. The handler now answers that
-  send `{:error, {:no_delivery_scope, name}}`, on both shapes and for a
-  delayed send as for a send. It is reported to the sender the way section
-  7 reports a miss, the sending step still commits, and no ledger row is
-  written. A route no scope overrides resolves the same in every scope, so
-  it still resolves with no scope in reach: refusing it would tell the
-  chart a send failed that could only ever have gone one way.
+- **At the executor seam, a route some scope overrides is not resolved
+  without a scope.** Decision 2 lets a scope override a route's
+  configuration, and `StatifierRouter.Config.route/3` resolves a `nil`
+  scope to the registered configuration unchanged (its own documentation,
+  at 3dcd54f). The handler asked it with whatever scope the calling
+  process held: none when it ran outside the process a delivery set it
+  in, and none ever on the send-processor shape, which no delivery
+  reaches. A send to a route some scope overrides therefore reached the
+  registered configuration with no error, whichever scope it belonged to.
+  At the executor seam (`handle_effect/3`, and the completion hook that
+  shares its path) the handler now answers that send
+  `{:error, {:no_delivery_scope, name}}`, for a delayed send as for a
+  send. It is reported to the sender the way section 7 reports a miss,
+  the sending step still commits, and no ledger row is written. A route
+  no scope overrides resolves the same in every scope, so it still
+  resolves with no scope in reach: refusing it would tell the chart a send
+  failed that could only ever have gone one way.
   `StatifierRouter.Config.route/3` is unchanged, and so is a host firing a
   queued row through it, because the row carries the configuration
   resolved when it was scheduled (`StatifierRouter.TimerQueue`, "Firing a
-  row"). On the send-processor shape no delivery sets a scope, so a host
-  that overrides a route cannot send to that route from a live session;
-  the refusal says so where the send used to go to the registered
-  configuration.
+  row").
+
+- **On the send-processor shape the lookup is unchanged.** There
+  `perform/2` still resolves a send, and a delayed send, to an overridden
+  route's registered configuration, with no override applied and no
+  error. A refusal there would reach no one: the engine discards
+  `perform/2`'s return (`Statifier.Session`'s `perform_instruction/3`
+  clause for a handler instruction, at statifier 2.7.0, the version
+  `mix.lock` resolves), and this package gives a host no public way to
+  name a scope on that shape (`put_delivery_scope/1` is `@doc false`). So
+  a refusal would turn a send that goes somewhere into one that goes
+  nowhere and is reported to nobody. A live session's send to an
+  overridden route therefore still misses its scope's override; a public
+  way to name a scope on that shape is a separate change.
+
+- **What this narrows.** Decision 5 says both entry points "look the
+  route up by `target` in decision 2's registry, and call the same
+  adapter". After this Amendment the two shapes look the same name up in
+  the same registry but can answer differently: with no scope in reach,
+  the executor seam refuses a route some scope overrides, and the
+  send-processor shape calls the registered adapter. The Consequences
+  paragraph headed "The registry is not a per-execution capability" says
+  a chart fails for want of a route the same way everywhere, at decision
+  7's publish-time check. A send refused as `no_delivery_scope` fails at
+  run time and only where no scope is in reach, which that check cannot
+  see; it is a host arrangement that fails, not a missing route, and the
+  sender hears it as `error.communication`.
 
 - **The route mark covers the timer queue at the executor seam.**
   Decision 5 forbids a route called at the executor seam to call a door of

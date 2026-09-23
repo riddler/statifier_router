@@ -59,15 +59,20 @@ defmodule StatifierRouter.SendHandler do
   A scope may override a route's configuration (ADR-0005, decision 2), and
   the executor seam's context carries no scope, so
   `StatifierRouter.Delivery` names the scope of the delivery it runs in the
-  same process. A send to a route that some scope in `:route_overrides`
-  overrides is resolved in that scope, and with no scope in reach it is
-  refused as `{:no_delivery_scope, name}` rather than sent to the
+  same process. At the executor seam a send to a route that some scope in
+  `:route_overrides` overrides is resolved in that scope, and with no
+  scope in reach it is refused as `{:no_delivery_scope, name}`, which
+  re-enters the sender as `error.communication`, rather than sent to the
   registered configuration, which would be the wrong one for every scope
   that overrides it (ADR-0005, as its Amendment of 2026-09-23 has it). A
   route no scope overrides resolves the same everywhere and needs none.
-  The send-processor shape is reached by no delivery and so never has a
-  scope: a host that overrides a route cannot send to it from a live
-  session, and is told so.
+
+  The send-processor shape is reached by no delivery, so it has no scope,
+  and there a send to an overridden route still resolves to the
+  registered configuration, with no override applied and no error. The
+  engine discards `perform/2`'s return, so a refusal on that shape would
+  tell neither the chart nor the host anything; a host that needs a
+  scope's override for a live session's send does not get it today.
 
   ## The idempotency key, and the cancellation key
 
@@ -293,6 +298,9 @@ defmodule StatifierRouter.SendHandler do
           | {:send_undelivered, :no_execution | :finished}
           | term()
 
+  # Which of the two host shapes a route is resolved for.
+  @typep shape :: :seam | :processor
+
   @typedoc """
   Why an execution-to-execution send was refused: section 6 of ADR-0006
   names the first five, and that record's delay Amendment adds `delay`, a
@@ -341,7 +349,7 @@ defmodule StatifierRouter.SendHandler do
       ) do
     if mine?(config, send) do
       in_route(scope, fn ->
-        enqueue(config, send, SendEvent.build(send, scope), key(send, scope))
+        enqueue(config, send, SendEvent.build(send, scope), key(send, scope), :seam)
       end)
     else
       :ok
@@ -375,7 +383,7 @@ defmodule StatifierRouter.SendHandler do
 
   def perform({:send, %Send{} = effect, event, key}, _ctx) do
     case fetch_config() do
-      {:ok, config} -> route(config, effect.target, event, key)
+      {:ok, config} -> route(config, effect.target, event, key, :processor)
       {:error, _reason} = error -> error
     end
   end
@@ -385,7 +393,7 @@ defmodule StatifierRouter.SendHandler do
   # executor seam writes, under the key deliver/3 composed.
   def perform({:send_delayed, %SendDelayed{} = effect, event, key}, _ctx) do
     case fetch_config() do
-      {:ok, config} -> enqueue(config, effect, event, key)
+      {:ok, config} -> enqueue(config, effect, event, key, :processor)
       {:error, _reason} = error -> error
     end
   end
@@ -485,7 +493,7 @@ defmodule StatifierRouter.SendHandler do
         ) :: :ok | {:error, reason()}
   def deliver_to_route(%Config{} = config, name, execution_id, event, key)
       when is_binary(name) and is_binary(execution_id) do
-    in_route(execution_id, fn -> route(config, name, event, key) end)
+    in_route(execution_id, fn -> route(config, name, event, key, :seam) end)
   end
 
   # -------------------------------------------------------------------
@@ -497,28 +505,34 @@ defmodule StatifierRouter.SendHandler do
   @spec hand_off(Config.t(), Send.t(), String.t()) :: :ok | {:error, reason()}
   defp hand_off(config, send, scope) do
     in_route(scope, fn ->
-      route(config, send.target, SendEvent.build(send, scope), key(send, scope))
+      route(config, send.target, SendEvent.build(send, scope), key(send, scope), :seam)
     end)
   end
 
-  @spec route(Config.t(), String.t() | nil, Statifier.Event.t(), Route.idempotency_key()) ::
+  @spec route(Config.t(), String.t() | nil, Statifier.Event.t(), Route.idempotency_key(), shape()) ::
           :ok | {:error, reason()}
-  defp route(config, name, event, key) do
-    case resolve(config, name) do
+  defp route(config, name, event, key, shape) do
+    case resolve(config, name, shape) do
       {:ok, {module, route_config}} -> module.deliver(route_config, event, key)
       {:error, _no_scope} = error -> error
       :error -> refusal(config, name, key)
     end
   end
 
-  # The route `name` in the scope the calling process holds. With no scope
-  # in reach, a route that some scope overrides is refused rather than
-  # resolved to its registered configuration, which would be the wrong one
-  # for every scope that overrides it; a route no scope overrides resolves
-  # the same in every scope and needs none (ADR-0005, as its Amendment of
-  # 2026-09-23 has it). An unregistered name misses first, as `:error`.
-  @spec resolve(Config.t(), String.t() | nil) :: {:ok, Route.t()} | :error | {:error, reason()}
-  defp resolve(config, name) do
+  # The route `name` in the scope the calling process holds. At the
+  # executor seam, with no scope in reach, a route that some scope
+  # overrides is refused rather than resolved to its registered
+  # configuration, which would be the wrong one for every scope that
+  # overrides it; a route no scope overrides resolves the same in every
+  # scope and needs none. On the send-processor shape the lookup is
+  # unchanged: the engine discards `perform/2`'s return, so a refusal there
+  # would reach no one (ADR-0005, as its Amendment of 2026-09-23 has it).
+  # An unregistered name misses first, as `:error`.
+  @spec resolve(Config.t(), String.t() | nil, shape()) ::
+          {:ok, Route.t()} | :error | {:error, reason()}
+  defp resolve(config, name, :processor), do: Config.route(config, override_scope(), name)
+
+  defp resolve(config, name, :seam) do
     scope = override_scope()
 
     case Config.route(config, scope, name) do
@@ -723,15 +737,21 @@ defmodule StatifierRouter.SendHandler do
   # registered, so the lookup would only miss and name a route no host
   # could have registered. It is refused by name, recorded the way the
   # unregistered route is, and never queued.
-  @spec enqueue(Config.t(), SendDelayed.t(), Statifier.Event.t(), Route.idempotency_key()) ::
+  @spec enqueue(
+          Config.t(),
+          SendDelayed.t(),
+          Statifier.Event.t(),
+          Route.idempotency_key(),
+          shape()
+        ) ::
           :ok | {:error, reason()}
-  defp enqueue(config, %SendDelayed{target: @execution_target}, _event, key) do
+  defp enqueue(config, %SendDelayed{target: @execution_target}, _event, key, _shape) do
     record_refusal(config, key, @delay_reason, DateTime.utc_now())
     {:error, {:send_refused, :delay}}
   end
 
-  defp enqueue(config, send, event, key) do
-    case resolve(config, send.target) do
+  defp enqueue(config, send, event, key, shape) do
+    case resolve(config, send.target, shape) do
       {:ok, {_module, route_config}} -> schedule(config, send, event, route_config, key)
       {:error, _no_scope} = error -> error
       :error -> refusal(config, send.target, key)
