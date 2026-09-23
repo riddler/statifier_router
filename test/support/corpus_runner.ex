@@ -35,6 +35,17 @@ defmodule StatifierRouter.CorpusRunner do
   rather than run: a member left out would otherwise be a comparison that
   cannot fail.
 
+  A case whose `expected` holds `contracts` is a publish case instead: it
+  runs no script and delivers nothing. The runner builds the same
+  configuration, takes the chart its `document` names, and answers with
+  `StatifierRouter.Contracts.check/3` over the two, under the host's
+  lookup built from the case's `declarations`: a document the map names
+  declares those event names, a document it leaves out that has a chart
+  under `corpus/charts/` declares nothing and is judged by that chart's
+  computed vocabulary, and any other document is not published. The
+  report is written the way a case writes it: keys and reasons as
+  strings, and each location as its start `line` and `column`.
+
   `run/1` answers with what the case's `expected` object compares against,
   in the same shape.
   """
@@ -44,10 +55,12 @@ defmodule StatifierRouter.CorpusRunner do
   alias Statifier.Effect.{Cancel, SendDelayed}
   alias Statifier.Event
   alias Statifier.Machine
+  alias Statifier.Parser.Location
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
   alias StatifierRouter.Addresses
   alias StatifierRouter.Config
+  alias StatifierRouter.Contracts
   alias StatifierRouter.RecordingRoute
   alias StatifierRouter.Resolver
   alias StatifierRouter.Schema.{Address, Ledger}
@@ -116,8 +129,26 @@ defmodule StatifierRouter.CorpusRunner do
   `expected.sends`, when the case's scope and document address more than
   one execution or never address one, or when a ledger row names another
   execution.
+
+  A publish case, one whose `expected` holds `contracts`, answers with
+  `contracts` alone, and raises when it carries a non-empty `script`: a
+  step it would not run is a step the case could not check.
   """
   @spec run(map()) :: map()
+  def run(%{"expected" => %{"contracts" => _contracts}} = kase) do
+    if Map.get(kase, "script", []) != [] do
+      raise ArgumentError,
+            "the case #{kase["id"]} expects contracts, runs no script and carries one"
+    end
+
+    config = config(kase, self())
+    machines = machines()
+    machine = Map.fetch!(machines, kase["document"])
+    lookup = lookup(Map.get(kase, "declarations", %{}), machines)
+
+    %{"contracts" => config |> Contracts.check(machine, lookup) |> case_terms()}
+  end
+
   def run(%{"scope" => scope, "document" => document, "script" => script} = kase) do
     runner = self()
     expects_sends!(kase)
@@ -385,4 +416,35 @@ defmodule StatifierRouter.CorpusRunner do
     {:ok, machine} = config.chart_resolver.(record.content_hash)
     Storage.load_execution_position(config.store, execution_id, machine)
   end
+
+  # -- a publish case -------------------------------------------------------
+
+  # The host's lookup (ADR-0008, decision 2) over the corpus: a document
+  # the case's `declarations` names declares those names; one it leaves
+  # out declares nothing when the corpus has its chart, and is otherwise
+  # not published.
+  defp lookup(declarations, machines) do
+    fn document ->
+      case {Map.fetch(declarations, document), Map.fetch(machines, document)} do
+        {{:ok, names}, _chart} -> {:ok, names}
+        {:error, {:ok, machine}} -> {:ok, :undeclared, machine}
+        {:error, :error} -> {:error, :not_published}
+      end
+    end
+  end
+
+  # `Contracts.check/3`'s report as a case writes it: string keys, atoms
+  # as strings, and a location as its start line and column.
+  defp case_terms(%Location{start_line: line, start_column: column}),
+    do: %{"line" => line, "column" => column}
+
+  defp case_terms(map) when is_map(map) and not is_struct(map),
+    do: Map.new(map, fn {key, value} -> {to_string(key), case_terms(value)} end)
+
+  defp case_terms(list) when is_list(list), do: Enum.map(list, &case_terms/1)
+
+  defp case_terms(atom) when is_atom(atom) and not is_boolean(atom) and not is_nil(atom),
+    do: Atom.to_string(atom)
+
+  defp case_terms(value), do: value
 end

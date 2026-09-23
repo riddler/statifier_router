@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A parcel scanned from depot to doorstep: one execution per parcel id.
+
+  A parcel waits at the depot until it is scanned onto a van, and is then
+  in transit until it is either delivered at the doorstep or returned to
+  the depot. Both endings are final.
+
+  This chart is the receiving document of the publish cases: its computed
+  vocabulary is the three event names its transitions listen for,
+  parcel.scanned, parcel.delivered and parcel.returned.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="predicator" initial="at_depot">
+  <state id="at_depot">
+    <transition event="parcel.scanned" target="in_transit"/>
+  </state>
+
+  <state id="in_transit">
+    <transition event="parcel.delivered" target="delivered"/>
+    <transition event="parcel.returned" target="returned"/>
+  </state>
+
+  <final id="delivered"/>
+  <final id="returned"/>
+</scxml>
