@@ -811,3 +811,69 @@ the commit this flip was cut from, and each holds:
 With the flip, decision 5's sentence that on the send-processor shape the
 live session holds its own timers is superseded for registered types, as
 the Amendment says. Decision 5 is left as written; the Amendment governs.
+
+## Note (2026-09-23, sr-d2u): which writes a caller's transaction can lose, audited
+
+A Note, not an amendment: it decides nothing new. ADR-0003's Amendment of
+the same date carries the one decision the audit needed; everything else
+below is a write brought under the bracket the sr-p6u Note above
+describes, or a path recorded as safe with its reason.
+
+**The trap.** A `c:Ecto.Repo.transaction/2` called inside another
+transaction gets no savepoint, whatever mode it asks for: db_connection
+answers a nested transaction with `def transaction(%DBConnection{conn_mode:
+:transaction} = conn, fun, _opts)` in `DBConnection`, at db_connection
+2.10.2, the version `mix.lock` resolves, and the options are dropped. A
+`c:Ecto.Repo.rollback/1` inside such a transaction, or any statement that
+fails there, loses the enclosing transaction, even when the caller is
+handed a well-formed `{:error, reason}`. The remedy this package uses is
+the one the sr-p6u Note describes: an explicit `SAVEPOINT` before the
+work, `RELEASE SAVEPOINT` on success, `ROLLBACK TO SAVEPOINT` on a handled
+error, and the reason answered as an ordinary return, the savepoint's
+name minted from `System.unique_integer/1`.
+
+**The rule the audit applies.** A path that may run inside a caller's
+transaction is safe when every failure in it either is settled at a
+savepoint of its own and answered as a value, or raises and reaches the
+caller unrescued, so that nothing answers over a transaction already
+lost. A raise is left a raise: a host callback reached from the executor
+seam must not raise, and one that does loses the sending step's
+transaction and propagates. A path is a hit when it calls
+`c:Ecto.Repo.rollback/1`, or answers a value after a failed statement,
+inside work a caller's transaction encloses.
+
+**This package's paths, read at `bfcc84d`.**
+
+| Path | Can run inside | Verdict |
+|---|---|---|
+| `StatifierRouter.Delivery.deliver/4`, the door `StatifierRouter.route/3` and `StatifierRouter.Webhook.handle/3` reach | a host's own transaction | fixed: it called `c:Ecto.Repo.rollback/1`; it now settles at a savepoint (ADR-0003, the Amendment of 2026-09-23) |
+| `StatifierRouter.Delivery.deliver_event/4` | the sending step's transaction | safe: settled at a savepoint of its own |
+| the execution-target refusal row, `refused/6` in `StatifierRouter.SendHandler` | the sending step's transaction | fixed: it was a bare insert; it now takes the unregistered route row's bracket, so a row that cannot be written does not take the step down, as ADR-0006, section 3 has the step stand |
+| the unregistered route row, `insert_refusal/4` in `StatifierRouter.SendHandler` | the sending step's transaction; the send-processor shape | safe: bracketed, as the sr-p6u Note above records |
+| the sender's address read ahead of either refusal row, `StatifierRouter.Addresses.by_execution/2` | the sending step's transaction | safe: a failed read raises unrescued; it sits outside the bracket, and whether it moves inside is bead `sr-nfl`'s |
+| every write inside a delivery - `StatifierRouter.Dedupe.claim/4`, the address insert, the terminal stamp, the ledger row - and `route/3`'s `key_refused` row | a host's own transaction | safe: nothing rescues a failed statement, which raises out of `route/3` (ADR-0003, section 1) |
+| `StatifierRouter.subscribe/3` and `StatifierRouter.cancel/2`, and `StatifierRouter.SourceInvoke`'s `start/3` and `cancel/3` that call them | a host's invoke handler at the executor seam | safe: no rollback; every refusal is answered before any write, and a failed statement raises |
+| `StatifierRouter.Addresses.reap/2` and `StatifierRouter.Dedupe.reap/2` | wherever the host schedules them | safe: no rollback; a failed statement raises |
+| `StatifierRouter.PinSource.count/2` | `StatifierPersistence.Executions.retire_chart/4` | safe here: a failed read raises, which is how a pin source refuses; what the caller does with that raise is statifier_persistence's, below |
+| a route adapter's `c:StatifierRouter.Route.deliver/3` and a timer queue's `c:StatifierRouter.TimerQueue.schedule/2` and `c:StatifierRouter.TimerQueue.cancel/3` | the sending step's transaction | the host's: the rule above binds the host's code, and this package cannot enforce it |
+
+**statifier_persistence.** The transaction most of this nests inside is
+`StatifierPersistence.Executions`' private `serialized/5`, and what that
+package says of the trap belongs in its own records. Read at its
+`af0cb5c`, its `lib/` calls no `c:Ecto.Repo.rollback/1` and asks for no
+`mode: :savepoint`; the one place it answers a value over a failed
+statement is `StatifierPersistence.PinSource.collect/3`, which turns a
+pin source's raise - a failed read in this package's `count/2` among
+them - into an error return, so a retirement run inside a caller's
+transaction would answer over a transaction already lost.
+
+**statifier_oban.** Read at its `93bddde`, and changed by nothing here.
+`StatifierOban.Timer.schedule/3` and `StatifierOban.Timer.cancel/3` reach
+`Oban.insert/2` and `Oban.cancel_all_jobs/2`. At oban 2.23.1, the version
+its `mix.lock` resolves, the Basic engine wraps the insert in
+`Oban.Repo.transaction/3` and the cancel is one update; neither calls a
+rollback, so a failed statement raises. One edge is recorded rather than
+judged: that transaction retries a retryable error, and Oban's own
+documentation of `Oban.Repo.transaction/3` warns that inside an existing
+transaction a retry masks the real error and asks for `retry: false`
+there; the Basic engine calls that transaction with no options of its own.

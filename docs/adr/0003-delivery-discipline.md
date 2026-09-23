@@ -516,3 +516,52 @@ license it.
 - **The index lags by design.** The status cell for this record in
   `docs/adr/README.md` is flipped by a separate bead after all seven
   records have flipped.
+
+## Amendment (2026-09-23, sr-d2u): a delivery settles its error at a savepoint of its own, so it may run inside a caller's transaction
+
+Status: proposed
+
+Section 1 says that an `{:error, reason}` from any step of a delivery
+"rolls the whole transaction back and is `route/3`'s `{:error, reason}`".
+It was written for `route/3` as the outermost transaction on its path,
+which is how this package's own fronts call it. Nothing stops a host from
+calling `route/3` inside a transaction of its own, and there a rollback
+does not do what section 1 says.
+
+- **The cause.** The delivery's transaction nests inside the caller's,
+  and db_connection answers a nested transaction with a clause that drops
+  its options: `def transaction(%DBConnection{conn_mode: :transaction} =
+  conn, fun, _opts)` in `DBConnection`, at db_connection 2.10.2, the
+  version this package's `mix.lock` resolves. So `mode: :savepoint`
+  creates no savepoint there, and a `c:Ecto.Repo.rollback/1` inside marks
+  the connection failed. The caller is answered `{:error, reason}` while
+  its own transaction is already lost: its next statement raises
+  `DBConnection.ConnectionError` with "transaction rolling back".
+- **The decision.** A delivery settles an `{:error, reason}` the way
+  `StatifierRouter.Delivery.deliver_event/4` already settles one
+  (ADR-0006, section 2): it runs inside an explicit SQL savepoint of its
+  own, rolls back to that savepoint on an error, and answers the reason as
+  an ordinary return. Neither door calls `c:Ecto.Repo.rollback/1`.
+- **Section 1's guarantee holds where it was written.** When `route/3` is
+  the outermost transaction, the rollback to the savepoint leaves the
+  transaction holding nothing of the delivery's and it commits empty: no
+  dedupe row, no address row, no execution, no input and no ledger row
+  survive, as section 1 lists. When a host calls `route/3` inside its own
+  transaction, the error undoes the delivery's writes and nothing of the
+  host's, and the host's transaction stays usable.
+- **A raise is unchanged.** Section 1's paragraph on a raise still holds:
+  nothing rescues it, it propagates, and it takes any enclosing
+  transaction with it. A savepoint does not keep a transaction open
+  against a raise; the sr-a69 Note above names that tension, and this
+  Amendment does not decide it.
+- **The savepoint statements are statements.** On a connection that has
+  gone away, the rollback to the savepoint raises instead of the delivery
+  answering `{:error, reason}`. That raise is section 1's raise case.
+- **The host's repo answers `query!/1`.** `deliver_event/4` already needed
+  it for the same bracket, and every `Ecto.Adapters.SQL` repo does.
+
+**Where the code is.** `StatifierRouter.Delivery`, whose module
+documentation says the same where an implementer will read it, in the
+pull request that carries this Amendment. The delivery tests pin it with a
+host transaction that calls `route/3`, meets an unresolved document, and
+still commits the row it wrote before the call.
