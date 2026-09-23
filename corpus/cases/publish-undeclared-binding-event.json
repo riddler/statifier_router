@@ -1,0 +1,30 @@
+{
+  "id": "publish-undeclared-binding-event",
+  "description": "A binding routes the depot feed's missing-parcel report into the parcel document as parcel.lost, and the parcel document declares only parcel.scanned and parcel.delivered: the binding is refused at publish because the receiver does not declare the name.",
+  "document": "parcel",
+  "scope": "7c1e",
+  "bindings": [
+    {
+      "id": "depot_lost",
+      "source": "depot_feed",
+      "match": "event.kind == 'lost'",
+      "key": "event.parcel_id",
+      "document": "parcel",
+      "event": "parcel.lost"
+    }
+  ],
+  "declarations": {
+    "parcel": ["parcel.scanned", "parcel.delivered"]
+  },
+  "expected": {
+    "contracts": {
+      "unsupported_types": [],
+      "unregistered_routes": [],
+      "unchecked": [],
+      "undeclared_events": [],
+      "undeclared_binding_events": [
+        {"event": "parcel.lost", "document": "parcel", "binding_id": "depot_lost", "reason": "undeclared"}
+      ]
+    }
+  }
+}

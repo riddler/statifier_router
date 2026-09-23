@@ -1,0 +1,21 @@
+{
+  "id": "publish-undeclared-receiver-event",
+  "description": "The depot's chart sends parcel.returned to a parcel's execution, and the parcel document declares only parcel.scanned and parcel.delivered: the send is refused at publish because the receiver does not declare the name, even though its chart would take it.",
+  "document": "depot",
+  "scope": "7c1e",
+  "bindings": [],
+  "declarations": {
+    "parcel": ["parcel.scanned", "parcel.delivered"]
+  },
+  "expected": {
+    "contracts": {
+      "unsupported_types": [],
+      "unregistered_routes": [],
+      "unchecked": [],
+      "undeclared_events": [
+        {"event": "parcel.returned", "document": "parcel", "location": {"line": 18, "column": 7}, "reason": "undeclared"}
+      ],
+      "undeclared_binding_events": []
+    }
+  }
+}

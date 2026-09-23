@@ -1,0 +1,17 @@
+{
+  "id": "publish-computed-set-fallback",
+  "description": "The same depot chart and its send of parcel.returned, with the parcel document declaring nothing: the receiver is judged by its chart's computed vocabulary, Statifier.Chart.check_accepts/2 finds a reachable transition on parcel.returned, and the send is accepted.",
+  "document": "depot",
+  "scope": "7c1e",
+  "bindings": [],
+  "declarations": {},
+  "expected": {
+    "contracts": {
+      "unsupported_types": [],
+      "unregistered_routes": [],
+      "unchecked": [],
+      "undeclared_events": [],
+      "undeclared_binding_events": []
+    }
+  }
+}

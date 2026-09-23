@@ -7,7 +7,9 @@ case is a JSON document with no term of any programming language in it, so
 a runner in another language can execute the same files. The runner in
 this repository is `test/support/corpus_runner.ex`, and
 `test/corpus_test.exs` runs every case under `mix test`, against the real
-delivery and a real Postgres database.
+delivery and a real Postgres database. A publish case, below, drives no
+delivery: it holds a chart, the host's declarations and what the receiver
+contract at publish reports over them.
 
 The corpus is a test fixture. It is not part of the published package.
 
@@ -47,8 +49,28 @@ A timer is a `<send>` with a `delay` and no `target`, and every timer a
 chart cancels is cancelled by its send id. A `target` therefore appears
 only on a routed send, and names a route a case registers rather than a
 host scheme; `test/corpus_test.exs` checks both halves of that against
-every chart. statifier hands timers to the host as effects; see "The
-runner plays the host" below.
+every chart. The one other `target` a chart may write is the reserved
+execution target, `execution`, which names another execution rather
+than a route (ADR-0006, section 1) and which no case can register as a
+route. statifier hands timers to the host as effects; see "The runner
+plays the host" below.
+
+## The charts: a parcel and its depot
+
+`charts/parcel.scxml` is a parcel scanned from depot to doorstep, one
+execution per parcel id: it waits in `at_depot` until `parcel.scanned`,
+is then `in_transit`, and ends in `delivered` on `parcel.delivered` or
+in `returned` on `parcel.returned`. Those three names are its computed
+vocabulary.
+
+`charts/depot.scxml` is the depot's handling of a parcel a courier
+brings back. On `courier.nobody_home` it sends `parcel.returned` to the
+parcel's own execution: the host's send type in `type`, the reserved
+execution target in `target`, and the receiving document and the
+parcel's key as `<param>`s, which is how ADR-0006 spells a send from one
+execution to another.
+
+The publish cases use these two charts only.
 
 ## A case
 
@@ -91,11 +113,12 @@ runner plays the host" below.
 |---|---|
 | `id` | the case's name, the same as its file name without `.json` |
 | `description` | one sentence on what the case shows |
-| `document` | the document every binding in the case addresses; its chart is `charts/<document>.scxml` |
+| `document` | the document every binding in the case addresses; its chart is `charts/<document>.scxml`. In a publish case, the document whose chart is checked |
 | `scope` | the host scope every delivery routes under |
 | `routes` | the route names the case registers, each served by a recording adapter that hands nothing anywhere; a chart that sends to a route absent from this list is refused rather than delivered |
 | `bindings` | the bindings, as ADR-0001 fixes them: `match` and `key` are predicator source strings, and a binding's enumerated values (`create`, `order`) are strings |
-| `script` | the steps, in order (below) |
+| `script` | the steps, in order (below); a publish case has none |
+| `declarations` | optional, publish cases only: the host's declarations, an object from a document id to the list of event names it declares (see "A publish case") |
 | `expected` | what the case checks at the end (below); a key left out is not checked, with the one exception `sends` names |
 
 A step is one of:
@@ -120,6 +143,7 @@ A step is one of:
 | `timers` | the event names of the timers still pending, sorted |
 | `sends` | every send a route was handed, in the order the routes were handed them, each as `route` and `event` (the event's `name` and its resolved `data`); the match is exact, so a case states `[]` to assert that no send was handed anywhere |
 | `datamodel` | the named datamodel entries of the execution |
+| `contracts` | what the receiver contract at publish reports; a case that states it is a publish case (see "A publish case") |
 
 `sends` is the one member a case may not leave out once it registers
 routes: the runner raises on a case with `routes` and no `expected.sends`
@@ -130,6 +154,43 @@ A case addresses exactly one execution: its scope and document name one
 address. Execution ids are minted at delivery and appear nowhere in a
 case, and an address row the reaper deletes does not take the execution
 the case compares with it.
+
+## A publish case
+
+A case whose `expected` holds `contracts` is a publish case. It runs no
+script and addresses no execution; the runner raises on a publish case
+that carries steps, because a step it would not run is one the case
+could not check. The runner builds the case's configuration from its
+`scope`, `routes` and `bindings`, takes the chart `document` names, and
+compares `contracts` with `StatifierRouter.Contracts.check/3` over the
+two, under the lookup ADR-0008 decision 2 describes, built from
+`declarations`:
+
+- a document `declarations` names declares exactly those event names;
+- a document it leaves out whose chart is under `charts/` declares
+  nothing, and is judged by that chart's computed vocabulary through
+  `Statifier.Chart.check_accepts/2`;
+- any other document is not published.
+
+`contracts` holds the report's five lists, each compared exactly:
+`unsupported_types`, `unregistered_routes`, `unchecked`,
+`undeclared_events` and `undeclared_binding_events`. A finding is an
+object of strings: `event`, `document`, `reason` (`undeclared`,
+`undeclared_by_computed_set` or `not_published`), and either `binding_id`
+for a binding or `location` for a `<send>`, the element's start as
+`line` and `column`.
+
+The publish cases prove one refusal: an event a sender or a binding
+names that the receiving document does not accept is refused at publish,
+before any chart or configuration ships, where at run time the event
+would be delivered and the receiver would take no transition (ADR-0008).
+`publish-undeclared-receiver-event` proves it for a send to the execution
+target, `publish-undeclared-binding-event` for a binding, and
+`publish-computed-set-fallback` proves that a receiver which declares
+nothing is judged by its chart's computed vocabulary and accepts a name
+its chart takes. This suite shares no schema with statifier's own corpus
+or with the reference host's cases: each suite states its cases in its
+own shape.
 
 ## A case is language-neutral
 
@@ -170,4 +231,7 @@ data, which is what ADR-0005 makes a route.
 | `grace-click-after-expiry` | a click in the grace period that follows a closed window: the window and then the late click each reach `dead_letter`, and the click is kept in `late_clicks` as well |
 | `redelivered-impression` | the impression's message delivered again in every state the execution rests in once it holds the impression (`awaiting_click`, `closed`, and after it finished), each a duplicate; a new message for the same impression during the grace period, delivered and absorbed |
 | `two-clicks-for-one-impression` | an impression and two clicks: the first joins, the second arrives in the grace period, reaches `dead_letter` and is kept in `late_clicks` |
+| `publish-undeclared-receiver-event` | the depot's send of `parcel.returned` against a `parcel` that declares only `parcel.scanned` and `parcel.delivered`: refused as `undeclared`, though the parcel's chart would take the name |
+| `publish-computed-set-fallback` | the same send against a `parcel` that declares nothing: judged by the parcel chart's computed vocabulary through `Statifier.Chart.check_accepts/2`, which holds `parcel.returned`, and accepted |
+| `publish-undeclared-binding-event` | a binding that routes the depot feed's missing-parcel report into `parcel` as `parcel.lost`, against the same two declared names: refused as `undeclared` |
 | `reaped-address-drop` | a click for an impression whose execution finished and whose address row the reaper then deleted: a drop on the ledger, and nothing handed to a route |

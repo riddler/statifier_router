@@ -4,8 +4,8 @@ defmodule StatifierRouter.CorpusTest do
   against the real delivery, and checks that the corpus keeps the rules
   `corpus/README.md` sets for it: every case is language-neutral JSON named
   for its id, no timer carries a `<send>` with a `target`, and every
-  `target` a chart does write names a route the corpus registers rather
-  than a host scheme.
+  `target` a chart does write names a route the corpus registers, or the
+  reserved execution target, rather than a host scheme.
 
   Each case runs in its own SQL sandbox: the runner routes, fires timers
   and reads back from the test's one process, so every write is ordered by
@@ -16,6 +16,7 @@ defmodule StatifierRouter.CorpusTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierRouter.CorpusRunner
+  alias StatifierRouter.SendHandler
   alias StatifierRouter.TestRepo
 
   setup do
@@ -39,6 +40,13 @@ defmodule StatifierRouter.CorpusTest do
       # deadline: the runner's fire_due/3 compares with `!= :gt`, so a send
       # due exactly at the boundary fires and the case goes green again with
       # the cancel gone. Any case rewrite must keep that advance sub-1h.
+      # The publish cases: publish-undeclared-receiver-event's
+      # undeclared_events emptied -> that case red; publish-undeclared-
+      # binding-event's undeclared_binding_events emptied -> that case red;
+      # the runner's lookup made to answer {:ok, []}, and separately
+      # {:error, :not_published}, for a document the declarations leave
+      # out -> publish-computed-set-fallback red each time, so it holds
+      # only through the computed vocabulary; each restored, green.
       test "#{Path.basename(path, ".json")} holds what it expects" do
         kase = CorpusRunner.load!(@path)
         assert CorpusRunner.run(kase) == kase["expected"]
@@ -47,7 +55,7 @@ defmodule StatifierRouter.CorpusTest do
   end
 
   describe "the corpus" do
-    test "carries the eight cases corpus/README.md lists" do
+    test "carries the cases corpus/README.md lists" do
       ids = Enum.map(CorpusRunner.case_paths(), &Path.basename(&1, ".json"))
 
       assert ids == [
@@ -56,6 +64,9 @@ defmodule StatifierRouter.CorpusTest do
                "grace-click-after-expiry",
                "impression-then-click",
                "impression-then-expiry",
+               "publish-computed-set-fallback",
+               "publish-undeclared-binding-event",
+               "publish-undeclared-receiver-event",
                "reaped-address-drop",
                "redelivered-impression",
                "two-clicks-for-one-impression"
@@ -94,21 +105,49 @@ defmodule StatifierRouter.CorpusTest do
 
       for path <- CorpusRunner.chart_paths(),
           [tag] <- Regex.scan(~r/<send\s[^>]*>/, File.read!(path)) do
-        if tag =~ ~r/\sdelay=/ do
-          refute tag =~ ~r/\starget=/, "#{path}: the timer #{tag} carries a target"
-        else
-          assert [[_, type]] = Regex.scan(~r/\stype="([^"]*)"/, tag),
-                 "#{path}: the send #{tag} carries no type"
+        assert_send_tag(path, tag, routes)
+      end
+    end
 
-          assert type == CorpusRunner.send_type(),
-                 "#{path}: the send #{tag} is not the host's send type"
+    # The execution target is reserved (ADR-0006, section 1): a send that
+    # writes it names another execution rather than a route, and no case
+    # can register it, because `StatifierRouter.Config.new/1` refuses a
+    # route adapter under it. It is the one target a chart may write that
+    # no case registers; every other unregistered name still fails.
+    # sabotage: the exemption widened to accept any target -> this test
+    # red on the depot_audit send; restored, green.
+    test "exempts the reserved execution target and no other unregistered name" do
+      routes = CorpusRunner.route_names()
+      execution = SendHandler.execution_target()
+      refute execution in routes
 
-          assert [[_, target]] = Regex.scan(~r/\starget="([^"]*)"/, tag),
-                 "#{path}: the send #{tag} carries no target"
+      send =
+        ~s(<send type="#{CorpusRunner.send_type()}" target="#{execution}" event="parcel.returned">)
 
-          assert target in routes,
-                 "#{path}: the send #{tag} names no route the corpus registers"
-        end
+      assert_send_tag("parcel", send, routes)
+
+      unregistered =
+        ~s(<send type="#{CorpusRunner.send_type()}" target="depot_audit" event="parcel.returned">)
+
+      refute "depot_audit" in routes
+
+      assert_raise ExUnit.AssertionError, ~r/names no route the corpus registers/, fn ->
+        assert_send_tag("parcel", unregistered, routes)
+      end
+    end
+
+    # sabotage: the script guard in CorpusRunner.run/1's publish clause
+    # removed -> this test red, the case answering its contracts with the
+    # step ignored; restored, green.
+    test "fails a publish case that carries a script" do
+      kase =
+        CorpusRunner.case_paths()
+        |> Enum.find(&(Path.basename(&1, ".json") == "publish-computed-set-fallback"))
+        |> CorpusRunner.load!()
+        |> Map.put("script", [%{"advance" => "PT1H"}])
+
+      assert_raise ArgumentError, ~r/runs no script and carries one/, fn ->
+        CorpusRunner.run(kase)
       end
     end
 
@@ -128,6 +167,27 @@ defmodule StatifierRouter.CorpusTest do
       assert_raise ArgumentError, ~r/states no expected sends/, fn ->
         CorpusRunner.run(kase)
       end
+    end
+  end
+
+  # One `<send>` tag of a chart: a timer carries no target; any other send
+  # carries the host's send type and a target that is a route some case
+  # registers, or the reserved execution target.
+  defp assert_send_tag(path, tag, routes) do
+    if tag =~ ~r/\sdelay=/ do
+      refute tag =~ ~r/\starget=/, "#{path}: the timer #{tag} carries a target"
+    else
+      assert [[_, type]] = Regex.scan(~r/\stype="([^"]*)"/, tag),
+             "#{path}: the send #{tag} carries no type"
+
+      assert type == CorpusRunner.send_type(),
+             "#{path}: the send #{tag} is not the host's send type"
+
+      assert [[_, target]] = Regex.scan(~r/\starget="([^"]*)"/, tag),
+             "#{path}: the send #{tag} carries no target"
+
+      assert target == SendHandler.execution_target() or target in routes,
+             "#{path}: the send #{tag} names no route the corpus registers"
     end
   end
 
