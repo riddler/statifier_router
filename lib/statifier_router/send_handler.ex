@@ -20,9 +20,9 @@ defmodule StatifierRouter.SendHandler do
   called with no process, no clock and no I/O. They compose the key and
   return one `{:handler, __MODULE__, payload}` instruction;
   `c:Statifier.Send.Processor.perform/2` is the impure half and calls the
-  adapter. `perform/2` MAY be called more than once for the same send, so
-  a route owes at-most-once on the key rather than this module owing
-  exactly-once.
+  adapter, or the timer queue for a delayed send and a cancel. `perform/2`
+  MAY be called more than once for the same send, so a route owes
+  at-most-once on the key rather than this module owing exactly-once.
 
   A miss on that shape comes back as `perform/2`'s `{:error, reason}`.
   Reporting it through `Statifier.Session.failed_send/3` is the **host's**,
@@ -60,23 +60,30 @@ defmodule StatifierRouter.SendHandler do
 
   ## Delayed sends
 
-  On the process-less shape a `%Statifier.Effect.SendDelayed{}` is
-  recorded on the configuration's `:timer_queue`, and a
-  `%Statifier.Effect.Cancel{}` deletes that scope's rows for its send id.
-  Nothing is scheduled in memory: this package resumes on every delivery,
-  and a live session's holds are not part of `Statifier.Position`.
+  On both shapes a `%Statifier.Effect.SendDelayed{}` is recorded on the
+  configuration's `:timer_queue`, and a `%Statifier.Effect.Cancel{}`
+  deletes that scope's rows for its send id (ADR-0005, decision 5, as its
+  Amendment of 2026-09-22 has it). Nothing is scheduled in memory: this
+  package resumes on every delivery, and a live session's holds are not
+  part of `Statifier.Position`.
 
-  On the send-processor shape this handler writes no queue row, which is
-  what ADR-0005 decision 5 says: only the process-less shape writes the
-  durable queue. It also holds no timer, because it is not a process. A
-  delayed send on that shape is therefore refused by `perform/2` rather
-  than dropped, and the refusal reaches the chart through the host's
-  `Statifier.Session.failed_send/3` like any other miss. ADR-0005 decision
-  5 and `Statifier.Send.Processor`'s moduledoc do not agree about who
-  holds that timer - the record leaves it with the live session, the
-  behaviour says the session schedules nothing and the processor owns the
-  delay - and resolving that disagreement is a record's work, not this
-  module's.
+  At the executor seam `handle_effect/3` does both, with the execution id
+  as the scope. On the send-processor shape the session schedules nothing
+  for a delayed send - `Statifier.Send.Processor` gives the delay to the
+  processor - so `perform/2` records the send on the same queue, with the
+  event and the composed key `deliver/3` planned, and performs a planned
+  cancel through the same queue's `c:StatifierRouter.TimerQueue.cancel/3`,
+  with the session id as the scope. The row is the same one the executor
+  seam writes for the same scope: the same route, configuration, event,
+  key and delay.
+
+  `perform/2` may be handed the same delayed send more than once, and each
+  time it carries the same key. What keeps a repeat from becoming a second
+  row is the queue's, not this handler's:
+  `c:StatifierRouter.TimerQueue.schedule/2` adds no row for a key it
+  already holds. A host that registered no queue is refused on either
+  shape, as `{:no_timer_queue, send_id}`, rather than having the send
+  dropped.
 
   ## What a route may not do from the executor seam
 
@@ -231,7 +238,6 @@ defmodule StatifierRouter.SendHandler do
   @type reason ::
           {:unregistered_route, String.t() | nil}
           | {:no_timer_queue, String.t() | nil}
-          | {:delayed_send_unsupported, String.t() | nil}
           | {:no_config, module()}
           | {:send_refused, refusal()}
           | {:send_undelivered, :no_execution | :finished}
@@ -281,7 +287,9 @@ defmodule StatifierRouter.SendHandler do
         {:send_delayed, %SendDelayed{} = send},
         %{execution_id: scope}
       ) do
-    if mine?(config, send), do: enqueue(config, send, scope), else: :ok
+    if mine?(config, send),
+      do: enqueue(config, send, SendEvent.build(send, scope), key(send, scope)),
+      else: :ok
   end
 
   def handle_effect(%Config{} = config, {:cancel, %Cancel{} = cancel}, %{execution_id: scope}),
@@ -316,14 +324,22 @@ defmodule StatifierRouter.SendHandler do
     end
   end
 
-  # ADR-0005 decision 5 gives the durable queue to the process-less shape
-  # only, and this handler is not a process, so there is nothing here to
-  # hold a delay with. Refused rather than dropped: the engine's guarantee
-  # is that a failed send is never lost silently.
-  def perform({:send_delayed, %SendDelayed{} = effect, _event, _key}, _ctx),
-    do: {:error, {:delayed_send_unsupported, effect.send_id}}
+  # ADR-0005 decision 5 as amended: the processor owns a registered type's
+  # delayed send on this shape too, so it goes on the same queue the
+  # executor seam writes, under the key deliver/3 composed.
+  def perform({:send_delayed, %SendDelayed{} = effect, event, key}, _ctx) do
+    case fetch_config() do
+      {:ok, config} -> enqueue(config, effect, event, key)
+      {:error, _reason} = error -> error
+    end
+  end
 
-  def perform({:cancel, %Cancel{}, _scope}, _ctx), do: :ok
+  def perform({:cancel, %Cancel{} = cancel, scope}, _ctx) do
+    case fetch_config() do
+      {:ok, config} -> dequeue(config, cancel, scope)
+      {:error, _reason} = error -> error
+    end
+  end
 
   @impl Statifier.Send.Processor
   def ioprocessors_entry(type) when is_binary(type), do: %{"location" => type}
@@ -607,28 +623,41 @@ defmodule StatifierRouter.SendHandler do
   defp to_id_part(value) when is_integer(value), do: Integer.to_string(value)
   defp to_id_part(value), do: inspect(value)
 
-  @spec enqueue(Config.t(), SendDelayed.t(), String.t()) :: :ok | {:error, reason()}
-  defp enqueue(config, send, scope) do
-    key = key(send, scope)
-
+  # Both shapes arrive here with the event and the composed key already
+  # built, so the row's scope is the key's own scope half: the execution id
+  # at the executor seam, the session id on the send-processor shape.
+  @spec enqueue(Config.t(), SendDelayed.t(), Statifier.Event.t(), Route.idempotency_key()) ::
+          :ok | {:error, reason()}
+  defp enqueue(config, send, event, key) do
     case Config.route(config, override_scope(), send.target) do
-      {:ok, {_module, route_config}} -> schedule(config, send, scope, route_config, key)
+      {:ok, {_module, route_config}} -> schedule(config, send, event, route_config, key)
       :error -> refusal(config, send.target, key)
     end
   end
 
-  @spec schedule(Config.t(), SendDelayed.t(), String.t(), map(), Route.idempotency_key()) ::
-          :ok | {:error, reason()}
-  defp schedule(%Config{timer_queue: nil}, send, _scope, _route_config, _key),
+  @spec schedule(
+          Config.t(),
+          SendDelayed.t(),
+          Statifier.Event.t(),
+          map(),
+          Route.idempotency_key()
+        ) :: :ok | {:error, reason()}
+  defp schedule(%Config{timer_queue: nil}, send, _event, _route_config, _key),
     do: {:error, {:no_timer_queue, send.send_id}}
 
-  defp schedule(%Config{timer_queue: {module, queue_config}}, send, scope, route_config, key) do
+  defp schedule(
+         %Config{timer_queue: {module, queue_config}},
+         send,
+         event,
+         route_config,
+         {scope, _position, _ordinal} = key
+       ) do
     module.schedule(queue_config, %{
       scope: scope,
       send_id: send.send_id,
       route: send.target,
       config: route_config,
-      event: SendEvent.build(send, scope),
+      event: event,
       key: key,
       delay_ms: send.delay_ms
     })
