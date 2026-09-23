@@ -88,12 +88,21 @@ defmodule StatifierRouter.Config do
   deeper check on its executor gets it from statifier_persistence, not from
   here.
 
-  Each binding is built with `StatifierRouter.Binding.new/1`, in the order
-  given, and the resolved configuration keeps that order: it is the order
+  Each binding given as a map or keyword list is built with
+  `StatifierRouter.Binding.new/1`. The resolved configuration keeps the
+  bindings in the order given: it is the order
   `StatifierRouter.route/3` returns its outcomes in. A duplicate binding
   `id` is a fault of the list rather than of any one binding, so it is
   refused here, naming the duplicated `id`, before any event is routed
   (ADR-0001, section 1).
+
+  A `%StatifierRouter.Binding{}` in the list is trusted as
+  `StatifierRouter.Binding.new/1` built it and kept as given: it is not
+  passed through `StatifierRouter.Binding.new/1` again, so its programs
+  are not recompiled and its fields are not re-checked. A struct built or
+  altered any other way is the host's to keep valid. The two checks on
+  the list as a whole, the reserved `id` and the duplicated `id`, apply to
+  it all the same.
 
   The four tables are the address table of ADR-0002 (`addresses`), the
   dedupe table of ADR-0003 (`dedupe`), the ledger of ADR-0004

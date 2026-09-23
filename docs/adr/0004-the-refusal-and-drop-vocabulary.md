@@ -391,3 +391,27 @@ gap ADR-0008, decision 3 already names.
 
 Section 8 holds as written: the outcome is still deferred, and nothing
 under `lib/` produces it at `d0202b2`.
+
+## Note (2026-09-23, sr-p1e): a raise from the key_refused row's own write propagates
+
+This Note says what happens when the one ledger write this package makes
+outside a delivery fails. It decides nothing new, and no line above it
+was edited.
+
+Section 7 lists the Repo unavailable among the failures that are not an
+outcome, and says `route/3` returns `{:error, reason}` for it. That holds
+for the Repo inside a delivery, where the delivery record's transaction
+answers for it. It does not describe the key_refused row. Section 4 says
+that row, decided before any delivery, is written on its own, and it is
+written with a bang insert (`StatifierRouter.key_refused/5`, read at
+`c0753db`). A Repo failure on that write raises; `route/3` does not
+rescue it, so the raise propagates to `route/3`'s caller rather than
+becoming `{:error, reason}`, and no key_refused row is left behind.
+
+ADR-0003, section 1 decides that `route/3` does not rescue, but its words
+are about a raise inside a delivery. The same rule reaches this write:
+nothing between it and `route/3`'s caller rescues, and a front treats
+this raise as ADR-0003, section 1 says it treats any other: it does not
+acknowledge the message, and the source hands it over again. The test
+"a raise from the key_refused ledger write propagates out of route/3"
+(`test/statifier_router/route_test.exs`, added with this Note) pins it.

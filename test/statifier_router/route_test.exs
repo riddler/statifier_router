@@ -284,31 +284,32 @@ defmodule StatifierRouter.RouteTest do
         end
       end
     end
+
+    # sabotage: check_answer/3's delivered, created_and_delivered and
+    # dropped clauses each dropped the id pin, one clause at a time -> no
+    # raise for that shape's foreign id, red each time; restored, green.
+    test "an outcome naming another binding raises, whatever its shape" do
+      config = config([@clicks])
+
+      for answer <- [
+            {:delivered, "impressions_to_join", "ex_9k2q"},
+            {:created_and_delivered, "impressions_to_join", "ex_4m8p"},
+            {:dropped, "impressions_to_join", :no_execution},
+            {:dropped, "impressions_to_join", :finished}
+          ] do
+        RecordingDelivery.answer("clicks_to_join", answer)
+        answered = Regex.escape(inspect(answer))
+
+        assert_raise ArgumentError,
+                     ~r/answered #{answered} for the binding "clicks_to_join"/,
+                     fn ->
+                       StatifierRouter.route(config, click(), now: @now)
+                     end
+      end
+    end
   end
 
   describe "refusal reasons" do
-    # sabotage: refusal_reason/2 mapped {:non_boolean, v} to
-    # {:match, {:error, v}} -> red on the first assertion; restored, green.
-    test "Binding's refusal tags map to ADR-0004's reason terms, one mapping" do
-      error = %Predicator.Errors.TypeMismatchError{
-        message: "boom",
-        expected: :boolean,
-        got: :undefined,
-        operation: :logical_not
-      }
-
-      assert StatifierRouter.refusal_reason(:match, {:non_boolean, "click"}) ==
-               {:match, {:value, "click"}}
-
-      assert StatifierRouter.refusal_reason(:match, {:evaluation_error, error}) ==
-               {:match, {:error, error}}
-
-      assert StatifierRouter.refusal_reason(:key, {:invalid_key, 42}) == {:key, {:value, 42}}
-
-      assert StatifierRouter.refusal_reason(:key, {:evaluation_error, error}) ==
-               {:key, {:error, error}}
-    end
-
     # sabotage: route_binding/4 recorded a refusing match under the :key
     # tag -> red; restored, green.
     test "a refusing match and each refusing key reach the ledger with their reason" do
@@ -338,6 +339,26 @@ defmodule StatifierRouter.RouteTest do
       assert reasons["numeric_key"] == "{:key, {:value, 3}}"
       assert reasons["not_missing"] =~ "{:match, {:error, %Predicator.Errors.TypeMismatchError{"
       assert reasons["arithmetic_key"] =~ "{:key, {:error, %Predicator.Errors.TypeMismatchError{"
+    end
+
+    # sabotage: key_refused/5 rescued the ledger insert and returned the
+    # outcome anyway -> no raise, red; restored, green.
+    test "a raise from the key_refused ledger write propagates out of route/3" do
+      {:ok, config} =
+        Config.new(
+          repo: TestRepo,
+          delivery: RecordingDelivery,
+          bindings: [@clicks],
+          prefix: "no_such_schema"
+        )
+
+      refused = event("ad_events/5/0390", %{"kind" => "click"})
+
+      assert_raise Postgrex.Error, ~r/no_such_schema/, fn ->
+        StatifierRouter.route(config, refused, now: @now)
+      end
+
+      refute_received {:deliver, _, _, _}
     end
   end
 

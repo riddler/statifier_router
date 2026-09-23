@@ -95,7 +95,9 @@ defmodule StatifierRouter do
   bindings after it are not evaluated, `route/3` returns that error, and
   what was already written for the bindings before it stays written
   (ADR-0004, section 7). A raise inside a delivery is not rescued: it
-  propagates out of `route/3` (ADR-0003, section 1).
+  propagates out of `route/3` (ADR-0003, section 1). Neither is a raise
+  from writing a key_refused row: a Repo failure there propagates too,
+  rather than becoming `{:error, reason}`.
 
   ## The delivery seam
 
@@ -352,11 +354,10 @@ defmodule StatifierRouter do
 
   # The one mapping from StatifierRouter.Binding's refusal tags to the
   # reason terms of ADR-0004, section 1.
-  @doc false
   @spec refusal_reason(:match | :key, Binding.refusal()) :: refusal_reason()
-  def refusal_reason(program, {:evaluation_error, error}), do: {program, {:error, error}}
-  def refusal_reason(:match, {:non_boolean, value}), do: {:match, {:value, value}}
-  def refusal_reason(:key, {:invalid_key, value}), do: {:key, {:value, value}}
+  defp refusal_reason(program, {:evaluation_error, error}), do: {program, {:error, error}}
+  defp refusal_reason(:match, {:non_boolean, value}), do: {:match, {:value, value}}
+  defp refusal_reason(:key, {:invalid_key, value}), do: {:key, {:value, value}}
 
   defp validate_event(%{message_id: message_id}) when message_id in [nil, ""],
     do: {:error, :no_message_id}
