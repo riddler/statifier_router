@@ -519,7 +519,7 @@ license it.
 
 ## Amendment (2026-09-23, sr-d2u): a delivery settles its error at a savepoint of its own, so it may run inside a caller's transaction
 
-Status: proposed
+Status: accepted
 
 Section 1 says that an `{:error, reason}` from any step of a delivery
 "rolls the whole transaction back and is `route/3`'s `{:error, reason}`".
@@ -565,3 +565,35 @@ documentation says the same where an implementer will read it, in the
 pull request that carries this Amendment. The delivery tests pin it with a
 host transaction that calls `route/3`, meets an unresolved document, and
 still commits the row it wrote before the call.
+
+## Note (2026-09-23, sr-n7c): the savepoint Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The `Status:` line of the `## Amendment (2026-09-23,
+sr-d2u)` moved from `proposed` to `accepted` on the operator's word of
+2026-09-23, in session, after its code shipped in statifier_router
+0.4.0 (tag `v0.4.0`, at `fdf4071`). The record's own status on line 3
+was already `accepted` and was not touched, and the record's row in
+`docs/adr/README.md` carries that status rather than the Amendment's,
+so it does not move.
+
+Every claim the Amendment makes was re-verified by anchor at `fdf4071`,
+and each holds. `lib/statifier_router/delivery.ex` has no commit since
+the one that carried the Amendment.
+
+- db_connection 2.10.2 is the version `mix.lock` resolves, and its
+  `DBConnection.transaction/3` carries the quoted clause for a
+  connection already in a transaction, which ignores its options.
+- `StatifierRouter.Delivery`'s `deliver/4` and `deliver_event/4` both
+  settle through one private function that opens an explicit
+  `SAVEPOINT`, releases it on an outcome and rolls back to it on an
+  `{:error, reason}`, answering the reason as an ordinary return
+  through `query!/1`; no `c:Ecto.Repo.rollback/1` is called anywhere in
+  `lib/`.
+- Nothing in the delivery rescues a raise, and `StatifierRouter.route/3`'s
+  documentation says a raise propagates.
+- The module documentation says the same as the Amendment, and the
+  delivery tests' "an error inside a host's own transaction undoes the
+  delivery and nothing of the host's" is the pin the Amendment names:
+  a host transaction that calls `route/3`, meets an unresolved
+  document and still commits the row it wrote first.
