@@ -38,6 +38,19 @@
     strict: true
   ],
 
+  # The published docs are part of the package, so the gate checks them the
+  # way HexDocs and hex.pm will read them. The Docs stage runs `mix docs` and
+  # fails on any ExDoc warning. The Doc links stage fails on the link rules
+  # ExDoc accepts silently: a README relative link to a file not in the
+  # package files, a published relative link to a file that is not an extra,
+  # two extras sharing a basename, and a silent rewrite to a different extra.
+  # That is how two relative links into docs/adr/ and changelog.d/ shipped in
+  # 0.1.0, rendered as links to the README itself with `mix docs` clean.
+  # `:auto` runs both whenever ex_doc is installed, which it is in dev and
+  # test.
+  docs: [enabled: :auto],
+  doc_links: [enabled: :auto],
+
   # The second test step. The modules tagged :isolated take real Postgres
   # locks outside the SQL sandbox by switching the one shared repo to
   # :auto, which is repo-wide; beside the async suite that deadlocks
