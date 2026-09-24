@@ -67,6 +67,19 @@ defmodule StatifierRouter.ContractsTest do
     """
   end
 
+  # A send to the parcel written with `delay` or `delayexpr` (the given
+  # attribute), its event attribute and its params as given.
+  defp delayed(delay_attr, event_attr, params) do
+    """
+    <send type="#{@type_string}" target="execution" #{event_attr} #{delay_attr}>#{params}</send>
+    """
+  end
+
+  @parcel_params ~s(<param name="document" expr="'parcel'"/><param name="key" expr="parcel_id"/>)
+
+  # A lookup a delayed send must never reach.
+  defp never_asked, do: fn document -> flunk("the lookup was asked for #{document}") end
+
   defp declared(names), do: fn "parcel" -> {:ok, names} end
   defp undeclared, do: fn "parcel" -> {:ok, :undeclared, compile!(@parcel)} end
   defp unpublished, do: fn _document -> {:error, :not_published} end
@@ -266,6 +279,78 @@ defmodule StatifierRouter.ContractsTest do
     end
   end
 
+  describe "undeclared_events/3 for a delayed send (ADR-0008, the 2026-09-23 Amendment)" do
+    # Sabotage: dropping delivery_reason/4's `delay != nil` clause judges
+    # the send by the lookup, which flunks, and this goes red.
+    test "a literal delay with a literal event and document is a :delay finding, lookup unasked" do
+      machine =
+        compile!(
+          courier_round(delayed(~s(delay="2h"), ~s(event="parcel.delivered"), @parcel_params))
+        )
+
+      assert %{undeclared: [finding], unchecked: []} =
+               Contracts.undeclared_events(config(), machine, never_asked())
+
+      assert %{event: "parcel.delivered", document: "parcel", reason: :delay} = finding
+      assert %Statifier.Parser.Location{start_line: 4} = finding.location
+    end
+
+    # Sabotage: narrowing delivery_reason/4's clause to a static delay
+    # (`{:static, _}`) judges the delayexpr send by the lookup, which
+    # flunks, and this goes red.
+    test "a delayexpr is a delayed send and gives the same finding" do
+      machine =
+        compile!(
+          courier_round(
+            delayed(~s(delayexpr="reminder_after"), ~s(event="parcel.delivered"), @parcel_params)
+          )
+        )
+
+      assert %{
+               undeclared: [%{event: "parcel.delivered", document: "parcel", reason: :delay}],
+               unchecked: []
+             } = Contracts.undeclared_events(config(), machine, never_asked())
+    end
+
+    # Sabotage: checking the delay before literal_event/1 and
+    # literal_document/1 in judge_send/3 (a :delay finding for any
+    # delayed send) turns each of these into a finding and this goes red.
+    test "a delayed send whose event or document is not literal keeps its unchecked reason" do
+      variants = [
+        {~s(eventexpr="outcome"), @parcel_params, :eventexpr},
+        {"", @parcel_params, :no_event},
+        {~s(event="parcel.delivered"), ~s(<param name="document" expr="receiver"/>),
+         :document_expr},
+        {~s(event="parcel.delivered"), ~s(<param name="key" expr="parcel_id"/>), :no_document}
+      ]
+
+      for delay_attr <- [~s(delay="2h"), ~s(delayexpr="reminder_after")],
+          {event_attr, params, reason} <- variants do
+        machine = compile!(courier_round(delayed(delay_attr, event_attr, params)))
+
+        assert %{undeclared: [], unchecked: [%{reason: ^reason}]} =
+                 Contracts.undeclared_events(config(), machine, never_asked()),
+               "#{delay_attr} #{event_attr} #{params}"
+      end
+    end
+
+    # Sabotage: answering :delay from delivery_reason/4 for every send
+    # (widening its `delay != nil` guard to a nil delay too) makes the
+    # undelayed send a finding and this goes red.
+    test "an undelayed send beside a delayed one is judged by the lookup as before" do
+      sends =
+        to_parcel("parcel.scanned") <>
+          delayed(~s(delay="2h"), ~s(event="parcel.delivered"), @parcel_params)
+
+      assert %{undeclared: [%{event: "parcel.delivered", reason: :delay}], unchecked: []} =
+               Contracts.undeclared_events(
+                 config(),
+                 compile!(courier_round(sends)),
+                 declares_both()
+               )
+    end
+  end
+
   describe "undeclared_events/3 selects only execution-target sends of the configuration's type" do
     # Sabotage: replacing the `node.target == {:static, execution_target()}`
     # test in classify/4 with `true` judges the route and targetexpr
@@ -403,6 +488,23 @@ defmodule StatifierRouter.ContractsTest do
 
       assert [%{reason: :typeexpr}, %{reason: :eventexpr}, %{reason: :targetexpr}] =
                report.unchecked
+    end
+
+    # Sabotage: dropping delivery_reason/4's `delay != nil` clause passes
+    # the declared delayed send and empties `undeclared_events`.
+    test "carries a delayed send's :delay finding under undeclared_events" do
+      sends = delayed(~s(delay="2h"), ~s(event="parcel.delivered"), @parcel_params)
+      report = Contracts.check(config(), compile!(courier_round(sends)), declares_both())
+
+      assert %{
+               undeclared_events: [
+                 %{event: "parcel.delivered", document: "parcel", reason: :delay}
+               ],
+               unchecked: [],
+               unregistered_routes: [],
+               unsupported_types: [],
+               undeclared_binding_events: []
+             } = report
     end
 
     # Sabotage: dropping each entry's location from the unsupported_types

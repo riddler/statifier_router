@@ -41,15 +41,18 @@ defmodule StatifierRouter.Contracts do
   `ArgumentError`. The lookup takes no scope: the host builds it over the
   scope it is publishing into (ADR-0008, decision 2).
 
-  ## The three reasons
+  ## The reasons
 
   A finding carries `reason`, which says which contract refused it
-  (ADR-0008, decisions 2 and 4):
+  (ADR-0008, decisions 2 and 4, and its 2026-09-23 Amendment):
 
   - `:undeclared` - the receiver declares names and this is not one.
   - `:undeclared_by_computed_set` - the receiver declares nothing, and no
     reachable transition of its chart matches this name.
   - `:not_published` - the lookup answered `{:error, :not_published}`.
+  - `:delay` - the `<send>` writes `delay` or `delayexpr`. A delayed send
+    to the execution target is never delivered, so the lookup is not
+    asked. A binding has no delay and never carries this reason.
 
   ## What cannot be checked
 
@@ -59,6 +62,8 @@ defmodule StatifierRouter.Contracts do
   the shape `StatifierRouter.Routes.unregistered/2`'s own unchecked
   entries have (ADR-0008, decision 3). The reasons are `:eventexpr`,
   `:no_event`, `:document_expr` and `:no_document`; see `t:unchecked/0`.
+  A delayed send that cannot be judged keeps its unchecked entry and is
+  not a `:delay` finding.
   A send whose `type` or `target` is an expression is not selected here
   at all: `StatifierRouter.Routes.unregistered/2` reports it, and
   `check/3` carries that list once.
@@ -96,8 +101,11 @@ defmodule StatifierRouter.Contracts do
   alias StatifierRouter.Routes
   alias StatifierRouter.SendHandler
 
-  @typedoc "Which contract refused a name; see the moduledoc."
-  @type reason :: :undeclared | :undeclared_by_computed_set | :not_published
+  @typedoc """
+  Which contract refused a name; see the moduledoc. `:delay` is a
+  `<send>`'s only; a binding finding never carries it.
+  """
+  @type reason :: :undeclared | :undeclared_by_computed_set | :not_published | :delay
 
   @typedoc """
   The host's lookup: a receiving document id to its declared names, to
@@ -112,8 +120,8 @@ defmodule StatifierRouter.Contracts do
 
   @typedoc """
   One execution-target `<send>` whose literal event its receiver does not
-  accept: the event, the receiving document, the `<send>` element's
-  location and the reason.
+  accept, or which is delayed: the event, the receiving document, the
+  `<send>` element's location and the reason.
   """
   @type finding :: %{
           event: String.t(),
@@ -152,7 +160,7 @@ defmodule StatifierRouter.Contracts do
           event: String.t(),
           document: String.t(),
           binding_id: String.t(),
-          reason: reason()
+          reason: :undeclared | :undeclared_by_computed_set | :not_published
         }
 
   @typedoc "What `check/3` answers; see its `@doc`."
@@ -189,6 +197,12 @@ defmodule StatifierRouter.Contracts do
     `unreachable: []`. This is the fallback for a receiver that declares
     nothing, and it is the engine's relation, not a copy of it.
   - `{:error, :not_published}` - a finding with reason `:not_published`.
+
+  A judged send that writes `delay` or `delayexpr` is a finding with
+  reason `:delay` instead, and the lookup is not called for it: a delayed
+  send to the execution target is refused at run time whatever its event
+  (ADR-0008's 2026-09-23 Amendment). A delayed send that cannot be judged
+  is an unchecked entry like any other.
 
   A finding is `%{event, document, location, reason}`. A selected send
   that cannot be judged is an unchecked entry `%{reason, location}` with
@@ -262,7 +276,9 @@ defmodule StatifierRouter.Contracts do
   `:undeclared_events` or `:undeclared_binding_events` carries one of the
   three reasons, `:undeclared`, `:undeclared_by_computed_set` (the
   receiver declares nothing and `Statifier.Chart.check_accepts/2` finds
-  no reachable transition for the name) or `:not_published`. Every
+  no reachable transition for the name) or `:not_published`; a finding
+  under `:undeclared_events` may instead carry `:delay`, for a judged
+  `<send>` that writes `delay` or `delayexpr`. Every
   `:unchecked` entry is `%{reason, location}`, its reason one of
   `:typeexpr`, `:targetexpr`, `:eventexpr`, `:no_event`, `:document_expr`
   or `:no_document`. Which finding blocks a publish is the host's
@@ -299,7 +315,7 @@ defmodule StatifierRouter.Contracts do
   defp judge_send(lookup, %Content.Send{} = node, acc) do
     with {:ok, event} <- literal_event(node),
          {:ok, document} <- literal_document(node) do
-      case judge(lookup, document, event) do
+      case delivery_reason(lookup, node, document, event) do
         nil ->
           acc
 
@@ -315,6 +331,17 @@ defmodule StatifierRouter.Contracts do
       {:unchecked, reason} -> add(acc, :unchecked, %{reason: reason, location: node.location})
     end
   end
+
+  # ADR-0008's 2026-09-23 Amendment: a delayed send (a `delay` or a
+  # `delayexpr`) to the execution target is never delivered, so it is a
+  # finding of its own and the lookup is not asked.
+  @spec delivery_reason(lookup(), Content.Send.t(), String.t(), String.t()) :: reason() | nil
+  defp delivery_reason(_lookup, %Content.Send{delay: delay}, _document, _event)
+       when delay != nil,
+       do: :delay
+
+  defp delivery_reason(lookup, %Content.Send{}, document, event),
+    do: judge(lookup, document, event)
 
   @spec literal_event(Content.Send.t()) ::
           {:ok, String.t()} | {:unchecked, :eventexpr | :no_event}
