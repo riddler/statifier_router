@@ -176,7 +176,8 @@ two, under the lookup ADR-0008 decision 2 describes, built from
 `unsupported_types`, `unregistered_routes`, `unchecked`,
 `undeclared_events` and `undeclared_binding_events`. A finding is an
 object of strings: `event`, `document`, `reason` (`undeclared`,
-`undeclared_by_computed_set` or `not_published`), and either `binding_id`
+`undeclared_by_computed_set` or `not_published`, or `delay` for a `<send>`
+that writes `delay` or `delayexpr`), and either `binding_id`
 for a binding or `location` for a `<send>`, the element's start as
 `line` and `column`.
 
