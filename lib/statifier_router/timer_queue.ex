@@ -26,7 +26,7 @@ defmodule StatifierRouter.TimerQueue do
   `send_id` alone deletes other executions' timers on the first cancel it
   serves.
 
-  The queue owes **at-most-once on the dedup key**. Under at-least-once
+  The queue holds **at most one row per dedup key**. Under at-least-once
   delivery the same delayed send can reach
   `c:StatifierRouter.TimerQueue.schedule/2` more than once, with the same
   `key` each time, and a queue that appends a row per call fires that send
@@ -34,6 +34,17 @@ defmodule StatifierRouter.TimerQueue do
   `key` the queue already holds a row for adds no second row and answers
   `:ok`. Two entries under one `{scope, send_id}` with different keys are
   two sends, and both are kept.
+
+  That rule dedups against the rows the queue still holds, and a fire
+  deletes its row (see "Firing a row" below), so the rule alone does not
+  make a send fire at most once: a repeat that reaches
+  `c:StatifierRouter.TimerQueue.schedule/2` after the row has fired adds
+  a row, and that row fires again. The delivery stays at most once end to
+  end because the fire hands the route the row's own `key`, and the route
+  owes at-most-once on that key (ADR-0005, decision 4): the second firing
+  reaches the route under a key it has already served. A queue that also
+  remembers the keys it has fired, and adds no row for one of them, stops
+  the repeat before the route; this behaviour does not require it.
 
   ## What a cancel does
 
@@ -53,8 +64,26 @@ defmodule StatifierRouter.TimerQueue do
 
   This behaviour has no fire callback, because firing is the host's: the
   queue is the host's and so is whatever wakes it when `delay_ms` has
-  passed. A host fires a row without leaving this package's public
-  surface:
+  passed. A host fires a row in two steps, without leaving this package's
+  public surface.
+
+  **First, the fire-time check.** A delayed send whose owner has ended is
+  discarded without being delivered: spec 6.2 requires it, and once the
+  queue holds the send nothing but the fire can do it.
+  `Statifier.Send.Processor` says so for the send-processor shape - the
+  processor owns the delay, "and spec 6.2's discard at termination is its
+  fire-time check" - and statifier-ex's ADR-0054, decision 4 says how the
+  check is read, and in which order. A row
+  `StatifierRouter.SendHandler.perform/2` wrote is scoped by a session id,
+  and fires only while that session still exists and is not halted: it is
+  found under its id (`Registry.lookup(Statifier.Registry, scope)` for a
+  session registered there), and `Statifier.Session.status/1` reports it
+  `:running`. A row written at the executor seam is scoped by an
+  execution id, and fires only while that execution's stored record
+  reads `:active`. A row whose owner fails the check is deleted with no
+  delivery, in the write that would have fired it.
+
+  **Then the delivery.**
 
       {:ok, {module, _registered}} = StatifierRouter.Config.route(config, nil, entry.route)
       :ok = module.deliver(entry.config, entry.event, entry.key)
@@ -69,8 +98,9 @@ defmodule StatifierRouter.TimerQueue do
   in turn. `:error` from `StatifierRouter.Config.route/3` means the route
   name was unregistered after the row was written.
 
-  The fire deletes the row in the same write that decides it fires, so
-  that a cancel and a fire of one row cannot both succeed.
+  A fire, like a cancel, is a write against the row (ADR-0005, decision
+  5): the fire deletes the row in the same write that decides it fires,
+  so that a cancel and a fire of one row cannot both succeed.
   """
 
   @typedoc """
@@ -97,12 +127,14 @@ defmodule StatifierRouter.TimerQueue do
 
   @doc """
   Records one delayed route send durably, keyed by `{scope, send_id}`,
-  at most once per `entry.key`.
+  with at most one held row per `entry.key`.
 
   `entry.key` is the dedup key (ADR-0005, decision 5): when the queue
   already holds a row with that key, this adds no second row and
   answers `:ok`. Entries with different keys under one
-  `{scope, send_id}` are separate rows.
+  `{scope, send_id}` are separate rows. A row already fired is no longer
+  held, so a repeat after the fire is absorbed by the route's
+  at-most-once on the key (ADR-0005, decision 4), as the moduledoc says.
   """
   @callback schedule(queue_config :: map(), entry :: entry()) :: :ok | {:error, term()}
 
