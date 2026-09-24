@@ -4,7 +4,7 @@ defmodule StatifierRouter.SendHandler do
   reaches a host in (ADR-0005, decision 5). It implements
   `Statifier.Send.Processor` for a live `Statifier.Session`, and it offers
   `handle_effect/3` for a process-less host to call from
-  `StatifierPersistence.Executor.execute/2`. Both entry points compose the
+  `c:StatifierPersistence.Executor.execute/2`. Both entry points compose the
   same key, resolve the same route name, and reach the same adapter, so
   there is no second implementation to keep in step.
 
@@ -325,7 +325,7 @@ defmodule StatifierRouter.SendHandler do
   # -------------------------------------------------------------------
 
   @doc """
-  Handles one effect at `StatifierPersistence.Executor.execute/2`, with
+  Handles one effect at `c:StatifierPersistence.Executor.execute/2`, with
   that seam's context. An effect whose type is not the configuration's
   `:send_type`, and every effect that is not a send, a delayed send or a
   cancel, is ignored.

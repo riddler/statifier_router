@@ -14,9 +14,10 @@ defmodule StatifierRouter.Resolver do
   execution record carries (ADR-0002, the Amendment at its foot).
 
   A resolver is a module implementing this behaviour, the documented form,
-  or an arity-2 fun with `c:resolve/2`'s own signature, accepted wherever a
-  module is. A host with a publish store (a blocks document store, a
-  database table of published revisions) implements `c:resolve/2` over it:
+  or an arity-2 fun with `c:StatifierRouter.Resolver.resolve/2`'s own
+  signature, accepted wherever a module is. A host with a publish store (a
+  blocks document store, a database table of published revisions)
+  implements `c:StatifierRouter.Resolver.resolve/2` over it:
 
       defmodule MyApp.PublishedCharts do
         @behaviour StatifierRouter.Resolver
@@ -57,7 +58,7 @@ defmodule StatifierRouter.Resolver do
 
   @typedoc """
   A resolver: a module implementing this behaviour, or an arity-2 fun with
-  `c:resolve/2`'s own signature.
+  `c:StatifierRouter.Resolver.resolve/2`'s own signature.
   """
   @type t :: module() | (scope :: String.t(), document :: String.t() -> result())
 

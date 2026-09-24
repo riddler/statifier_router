@@ -100,11 +100,11 @@ defmodule StatifierRouter.Config do
 
   `:resolver` and `:executor` are checked to different depths, on purpose.
   `StatifierRouter.Resolver` is this package's own behaviour, so a resolver
-  module is held to it: loadable and exporting `resolve/2`
-  (`StatifierRouter.Resolver.valid?/1`). `StatifierPersistence.Executor` is
-  the dependency's, normalized per effect by
-  `StatifierPersistence.Executor.run/3`, so an executor is checked for the
-  shape that option takes - a module name or an arity-2 fun - and the
+  module is held to it: loadable and exporting `resolve/2`, by that
+  module's internal validity check. `StatifierPersistence.Executor` is the
+  dependency's, normalized per effect by an internal function of
+  statifier_persistence, so an executor is checked for the shape that
+  option takes - a module name or an arity-2 fun - and the
   dependency's own dispatch rule is left to it. A host that wants the
   deeper check on its executor gets it from statifier_persistence, not from
   here.

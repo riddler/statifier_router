@@ -258,8 +258,8 @@ defmodule StatifierRouter do
   Returns `{:ok, :cancelled}`, or `{:ok, :not_subscribed}` when no such row
   is there - which is not an error: the engine may plan a cancel for an
   invocation that is already over, and a handler must tolerate cancelling
-  an `invoke_id` it no longer knows (`Statifier.Invoke.Handler`'s
-  `c:cancel/2`, statifier 2.6.0). Calling it twice is therefore harmless.
+  an `invoke_id` it no longer knows (`c:Statifier.Invoke.Handler.cancel/2`,
+  statifier 2.6.0). Calling it twice is therefore harmless.
 
   It touches nothing else: not the execution, not its address row, not its
   input log, not its ledger rows, not a delayed send the chart armed, and
@@ -274,12 +274,13 @@ defmodule StatifierRouter do
       itself on state exit; `StatifierRouter.SourceInvoke.cancel/3` is the
       delegate that turns a `%Statifier.Effect.CancelInvoke{}` into this
       call, and a host with no source invokes never calls it.
-    * `StatifierRouter.SendHandler.cancel/2` - **a delayed send's**. It
+    * `StatifierRouter.SendHandler`'s implementation of
+      `c:Statifier.Send.Processor.cancel/2` - **a delayed send's**. It
       takes a `%Statifier.Effect.Cancel{}` and a scope map, and it is
       reached from the executor seam for spec 6.3's `<cancel sendid>`,
       which the chart author writes. It is not called on state exit: the
       engine cancels no delayed send there (ADR-0007, section 4).
-    * `StatifierRouter.TimerQueue.cancel/3` - **a queued timer's**. It is
+    * `c:StatifierRouter.TimerQueue.cancel/3` - **a queued timer's**. It is
       a callback on the host's queue adapter, not a function a host calls
       on this package; `SendHandler` calls it.
   """

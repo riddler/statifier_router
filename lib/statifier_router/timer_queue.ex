@@ -15,10 +15,10 @@ defmodule StatifierRouter.TimerQueue do
 
   ## The two keys are two keys
 
-  `c:schedule/2` is handed an entry whose **cancellation key** is
-  `{scope, send_id}` and whose **dedup key** is the composed
-  `t:StatifierRouter.Route.idempotency_key/0` riding beside it. They are
-  not one key, and the queue is keyed on the first.
+  `c:StatifierRouter.TimerQueue.schedule/2` is handed an entry whose
+  **cancellation key** is `{scope, send_id}` and whose **dedup key** is
+  the composed `t:StatifierRouter.Route.idempotency_key/0` riding beside
+  it. They are not one key, and the queue is keyed on the first.
 
   A send id is not a key on its own. A generated one is minted off a
   per-execution counter and an author-written one is reused verbatim, so
@@ -27,22 +27,23 @@ defmodule StatifierRouter.TimerQueue do
   serves.
 
   The queue owes **at-most-once on the dedup key**. Under at-least-once
-  delivery the same delayed send can reach `c:schedule/2` more than once,
-  with the same `key` each time, and a queue that appends a row per call
-  fires that send once per call. So a `c:schedule/2` whose `key` the queue
-  already holds a row for adds no second row and answers `:ok`. Two
-  entries under one `{scope, send_id}` with different keys are two sends,
-  and both are kept.
+  delivery the same delayed send can reach
+  `c:StatifierRouter.TimerQueue.schedule/2` more than once, with the same
+  `key` each time, and a queue that appends a row per call fires that send
+  once per call. So a `c:StatifierRouter.TimerQueue.schedule/2` whose
+  `key` the queue already holds a row for adds no second row and answers
+  `:ok`. Two entries under one `{scope, send_id}` with different keys are
+  two sends, and both are kept.
 
   ## What a cancel does
 
-  `c:cancel/3` deletes **that scope's** rows for its `send_id`, and no
-  other scope's. It may legitimately match more than one row, because
-  spec 6.3 cancels every delayed send under an id, and a cancel matching
-  nothing is a no-op rather than an error. A cancel carries nothing that
-  identifies the route - `%Statifier.Effect.Cancel{}` has no `event`,
-  `target` or `type` - which is why `t:entry/0` carries the route name it
-  was scheduled against.
+  `c:StatifierRouter.TimerQueue.cancel/3` deletes **that scope's** rows for
+  its `send_id`, and no other scope's. It may legitimately match more than
+  one row, because spec 6.3 cancels every delayed send under an id, and a
+  cancel matching nothing is a no-op rather than an error. A cancel
+  carries nothing that identifies the route - `%Statifier.Effect.Cancel{}`
+  has no `event`, `target` or `type` - which is why `t:entry/0` carries
+  the route name it was scheduled against.
 
   A cancel for a send already fired is a no-op, and a fire for a send
   already cancelled must not happen: the row is the single decision
@@ -73,7 +74,8 @@ defmodule StatifierRouter.TimerQueue do
   """
 
   @typedoc """
-  One delayed route send, as it is handed to `c:schedule/2`.
+  One delayed route send, as it is handed to
+  `c:StatifierRouter.TimerQueue.schedule/2`.
 
   `scope` and `send_id` are the cancellation key; `key` is the dedup key;
   `route` is the route name the send was scheduled against, and `config`
