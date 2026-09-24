@@ -66,8 +66,9 @@
   # floor in coveralls.json: this stage exports its cover data
   # (`--export-coverage`, into cover/, which .gitignore already ignores)
   # through the json report type, which writes a file and applies no floor
-  # to the slice, and the Tests stage imports it (`--import-cover` below)
-  # before its own floor is checked. The live migration tests are the only
+  # to the slice, and the Tests stage's `mix coveralls` imports it (the
+  # `coveralls` alias in mix.exs adds `--import-cover cover`) before its
+  # own floor is checked. The live migration tests are the only
   # tests of the migration modules, so without the import the floor would
   # measure them at zero.
   #
@@ -88,18 +89,16 @@
     ]
   ],
 
-  # `--import-cover` is an excoveralls switch, so it is right only where
-  # the Tests stage runs `mix coveralls`: the full gate. A run that makes it
-  # plain `mix test` (`--quick`, or `--test-scope` without the loop
-  # profile) refuses it as an unknown option; the loop profile clears it.
-  test: [
-    args: ["--import-cover", "cover"]
-  ],
+  # No Tests stage args. The stage hands the same args to `mix coveralls`
+  # on the full gate and to plain `mix test` on `--quick` and on a
+  # `--test-scope` run, and `mix test` refuses excoveralls' `--import-cover`
+  # as an unknown option, so the import is the `coveralls` alias in mix.exs
+  # instead: it reaches only the command that measures coverage.
 
   profiles: [
     loop: [
       stages: [:format, :compile, :credo, :test],
-      test: [scope: :changed, coverage: false, args: []]
+      test: [scope: :changed, coverage: false]
     ]
   ]
 ]
