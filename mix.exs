@@ -20,6 +20,7 @@ defmodule StatifierRouter.MixProject do
       source_url: @source_url,
       docs: docs(),
       package: package(),
+      aliases: aliases(),
       test_coverage: [tool: ExCoveralls],
       dialyzer: [plt_add_apps: [:ex_unit]],
       preferred_cli_env: [
@@ -40,6 +41,24 @@ defmodule StatifierRouter.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  # `mix coveralls` imports the cover data the gate's "Isolated tests"
+  # stage exports into cover/, so the whole-suite figure and its floor
+  # count the :isolated modules too (.quality.exs says why the suite is
+  # split). The import lives here rather than in the Tests stage's args
+  # because the gate passes those args to plain `mix test` as well, on
+  # `--quick` and on a `--test-scope` run, and `mix test` refuses an
+  # excoveralls switch. An alias of the same name runs the task itself.
+  #
+  # A directory with no .coverdata imports nothing. A `mix coveralls` run
+  # by hand imports whatever export the last gate left in cover/; only
+  # the full gate's figure, which rewrites that export first, is the one
+  # to trust.
+  defp aliases do
+    [
+      coveralls: ["coveralls --import-cover cover"]
+    ]
+  end
 
   defp docs do
     [
