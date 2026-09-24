@@ -10,6 +10,19 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/ma
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.4.1] 2026-09-23
+
+Patch release: the publish-time contract check now flags a delayed send to the execution target. `StatifierRouter.Contracts.check/3` and `StatifierRouter.Contracts.undeclared_events/3` report such a `<send>` as a finding with reason `:delay`, the send `StatifierRouter.SendHandler` refuses at run time, so a host's publish step can catch it before a document goes live; `t:StatifierRouter.Contracts.reason/0` gains `:delay`. No migration, no new configuration option, and no dependency floor moves.
+
+### Changed
+
+- `StatifierRouter.Contracts.check/3` and `undeclared_events/3` report a
+  delayed `<send>` to the execution target (one that writes `delay` or
+  `delayexpr`) with a literal event and a literal `document` as a finding
+  with reason `:delay`, without calling the lookup, because such a send
+  is refused at run time; before, it passed whenever its receiver
+  declared the event.
+
 ## [0.4.0] 2026-09-23
 
 Feature release: a live session's delayed send, and the refusals and savepoints a host reads. `StatifierRouter.SendHandler.perform/2` now records a live session's delayed send on the host's `StatifierRouter.TimerQueue`, the same row the executor seam writes, and performs its cancel through that queue; a delayed send to the execution target is refused by name; and a delivery or a refusal row that fails settles at a savepoint of its own, so neither a host's own transaction around `StatifierRouter.route/3` nor a sender's step is lost to it.
