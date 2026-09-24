@@ -274,9 +274,10 @@ defmodule StatifierRouter.SendHandler do
   @execution_target "execution"
   @envelope_params ["document", "key", "create"]
 
-  # RF062-R1: the one reason word added under `send_refused` for a target
-  # that names no registered route (ADR-0005, section 7), in the shape
-  # ADR-0006, section 6's four reasons already have.
+  # The one reason word added under `send_refused` for a target that names
+  # no registered route (ADR-0005, section 7, and its Note on the
+  # routing-ledger row), in the shape ADR-0006, section 6's four reasons
+  # already have.
   @unregistered_route_reason "route"
 
   # The reason word under `send_refused` for a delayed send to the
