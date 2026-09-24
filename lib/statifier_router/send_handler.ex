@@ -89,12 +89,20 @@ defmodule StatifierRouter.SendHandler do
 
   ## Delayed sends
 
-  On both shapes a `%Statifier.Effect.SendDelayed{}` is recorded on the
-  configuration's `:timer_queue`, and a `%Statifier.Effect.Cancel{}`
-  deletes that scope's rows for its send id (ADR-0005, decision 5, as its
-  Amendment of 2026-09-22 has it). Nothing is scheduled in memory: this
-  package resumes on every delivery, and a live session's holds are not
-  part of `Statifier.Position`.
+  On both shapes a `%Statifier.Effect.SendDelayed{}` whose target
+  resolves to a route is recorded on the configuration's `:timer_queue`,
+  and a `%Statifier.Effect.Cancel{}` deletes that scope's rows for its
+  send id (ADR-0005, decision 5, as its Amendment of 2026-09-22 has it).
+  Nothing is scheduled in memory: this package resumes on every delivery,
+  and a live session's holds are not part of `Statifier.Position`.
+
+  A delayed send whose target resolves to no route is never queued. One
+  to the reserved execution target is refused as
+  `{:send_refused, :delay}` before the route registry is asked ("The
+  execution target" below); one to a name no route is registered under is
+  refused as "The unregistered route" below describes; and at the
+  executor seam, one to a route some scope overrides, with no scope in
+  reach, is refused as `{:no_delivery_scope, name}`, as a send is.
 
   At the executor seam `handle_effect/3` does both, with the execution id
   as the scope. On the send-processor shape the session schedules nothing
@@ -110,9 +118,11 @@ defmodule StatifierRouter.SendHandler do
   time it carries the same key. What keeps a repeat from becoming a second
   row is the queue's, not this handler's:
   `c:StatifierRouter.TimerQueue.schedule/2` adds no row for a key it
-  already holds. A host that registered no queue is refused on either
-  shape, as `{:no_timer_queue, send_id}`, rather than having the send
-  dropped.
+  already holds. On a host that registered no queue, a delayed send whose
+  target resolved to a route is refused on either shape, as
+  `{:no_timer_queue, send_id}`, rather than dropped. The target is
+  resolved first, so a delayed send refused for its target is refused for
+  that whether or not a queue is registered.
 
   ## What a route may not do from the executor seam
 
@@ -153,9 +163,11 @@ defmodule StatifierRouter.SendHandler do
   address row (`StatifierRouter.Addresses.by_execution/2`), so a chart can
   address only inside the scope it runs in. An execution with no address
   row - what `:always_new` produces - has no scope, and its send is
-  refused as `unaddressed_sender`, the one refusal with no ledger row,
-  because the ledger's `scope` is `NOT NULL` (ADR-0006, section 6).
-  Every other refusal's row is written under the savepoint bracket "The
+  refused as `unaddressed_sender`, the one `send_refused` reason that
+  never writes a ledger row, because the ledger's `scope` is `NOT NULL`
+  (ADR-0006, section 6). For that same reason a delayed send refused as
+  `delay` below writes one only when its sender has an address row. Every
+  row a refusal does write is written under the savepoint bracket "The
   unregistered route" below describes, so a row this package could not
   write does not take the sender's step down.
 
