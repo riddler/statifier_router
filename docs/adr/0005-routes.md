@@ -964,7 +964,7 @@ string, so writing any two components in each other's place fails it.
 
 ## Amendment (2026-09-23, sr-ha3): the three values the handler keeps in the calling process
 
-Status: proposed
+Status: accepted
 
 `StatifierRouter.SendHandler` keeps three values in the calling process:
 the configuration the send-processor callbacks serve (`put_config/1`),
@@ -1054,3 +1054,50 @@ code that implements it lands in the same change.
   the configuration where `perform/2` runs. The return is unchanged, and
   every other `{:error, reason}` from `perform/2` is still a miss the host
   reports.
+
+## Note (2026-09-23, sr-n7c): the Amendment of 2026-09-23 accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The `Status:` line of the `## Amendment (2026-09-23,
+sr-ha3)` moved from `proposed` to `accepted` on the operator's word of
+2026-09-23, in session, after its code shipped in statifier_router
+0.4.0 (tag `v0.4.0`, at `fdf4071`). The record's own status on line 3
+was already `accepted` and was not touched, and the record's row in
+`docs/adr/README.md` carries that status rather than the Amendment's,
+so it does not move. The two other Notes of 2026-09-23 above are not
+part of this flip, and the Amendment rests on neither.
+
+Every claim the Amendment makes was re-verified by anchor at `fdf4071`,
+against `StatifierRouter.SendHandler` as it stands after the cure that
+followed the Amendment's first draft, and each holds:
+
+- At the executor seam, `handle_effect/3` and the completion hook's
+  `deliver_to_route/5` resolve a route through the seam arm of the
+  handler's private `resolve/3`, which answers
+  `{:error, {:no_delivery_scope, name}}` when no scope is in reach and
+  some scope overrides the route, for a send and a delayed send, and
+  writes no ledger row; a route no scope overrides still resolves.
+- `StatifierRouter.Config.route/3` still documents that a `nil` scope
+  resolves the registered configuration unchanged, and
+  `StatifierRouter.TimerQueue`'s "Firing a row" section is where it
+  says a queued row carries its resolved configuration.
+- On the send-processor shape `perform/2` resolves through the
+  processor arm, which calls `StatifierRouter.Config.route/3` with no
+  refusal; `put_delivery_scope/1` is `@doc false`; and
+  `Statifier.Session`'s `perform_instruction/3` clause for a handler
+  instruction, at statifier 2.7.0 (the version `mix.lock` resolves),
+  calls `perform/2` and discards its return.
+- The decision 5 sentence and the Consequences paragraph the Amendment
+  names are quoted as they stand above.
+- `handle_effect/3` wraps its delayed-send and cancel arms, which reach
+  `c:StatifierRouter.TimerQueue.schedule/2` and
+  `c:StatifierRouter.TimerQueue.cancel/3`, in the same mark as a route,
+  so `sending_execution/0` names the execution while they run and
+  `StatifierRouter.Delivery.deliver/4` answers
+  `{:error, {:reentrant_route, execution_id}}`; `perform/2` marks
+  nothing.
+- `fetch_config/0` answers `{:error, {:no_config,
+  StatifierRouter.SendHandler}}` when no configuration is installed,
+  and the handler's moduledoc says that answer is not reported to the
+  chart and that reporting a miss through
+  `Statifier.Session.failed_send/3` is the host's.

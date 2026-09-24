@@ -554,7 +554,7 @@ separate bead, so it lags this file by design until then.
 
 ## Amendment (2026-09-23, sr-73n): a delayed send to the execution target is refused by name, and `delay` is its reason
 
-Status: proposed
+Status: accepted
 
 Sections 1 to 6 describe a send the handler delivers at once. None of
 them says what a **delayed** send to the reserved name means - a
@@ -603,3 +603,30 @@ the engine's delayed-send effect rather than as a send.
   refusal, and it leaves line 3 as it is. The code half is the first
   clause of `StatifierRouter.SendHandler`'s `enqueue/4`, in the same
   change as this Amendment.
+
+## Note (2026-09-23, sr-n7c): the delay Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The `Status:` line of the `## Amendment (2026-09-23,
+sr-73n)` moved from `proposed` to `accepted` on the operator's word of
+2026-09-23, in session, after its code shipped in statifier_router
+0.4.0 (tag `v0.4.0`, at `fdf4071`). The record's own status on line 3
+was already `accepted` and was not touched, and the record's row in
+`docs/adr/README.md` carries that status rather than the Amendment's,
+so it does not move.
+
+Every claim the Amendment makes was re-verified by anchor at `fdf4071`,
+and each holds:
+
+- `StatifierRouter.Config.new/1` refuses a route registered under the
+  reserved name with `{:reserved_route, name}`, in its private
+  `route_adapters/1`.
+- The first clause of `StatifierRouter.SendHandler`'s `enqueue/4`
+  matches a delayed send whose target is the reserved name on either
+  shape, before the route registry is asked and without reaching the
+  timer queue, and answers `{:error, {:send_refused, :delay}}`.
+- Its ledger row is written by the handler's private refusal writer
+  under the reason `delay`, with `key` and `execution_id` empty and
+  `scope` read through `StatifierRouter.Addresses.by_execution/2` on
+  the composed key's scope half; a sender with no address row gets no
+  row.
