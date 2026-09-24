@@ -277,6 +277,32 @@ defmodule StatifierRouter.ContractsTest do
       assert %{undeclared: [], unchecked: [%{reason: :no_document}]} =
                Contracts.undeclared_events(config(), compile!(courier_round(send)), unpublished())
     end
+
+    # Sabotage: swapping the two `with` clauses in judge_send/3 (the
+    # document read before the event) reports the document's reason and
+    # this goes red.
+    test "when both the event and the document are uncheckable, the event's reason is reported" do
+      variants = [
+        {~s(eventexpr="outcome"), ~s(<param name="key" expr="parcel_id"/>), :eventexpr},
+        {~s(eventexpr="outcome"), ~s(<param name="document" expr="receiver"/>), :eventexpr},
+        {"", ~s(<param name="key" expr="parcel_id"/>), :no_event},
+        {"", ~s(<param name="document" expr="receiver"/>), :no_event}
+      ]
+
+      for {event_attr, params, reason} <- variants do
+        send = """
+        <send type="#{@type_string}" target="execution" #{event_attr}>#{params}</send>
+        """
+
+        assert %{undeclared: [], unchecked: [%{reason: ^reason}]} =
+                 Contracts.undeclared_events(
+                   config(),
+                   compile!(courier_round(send)),
+                   never_asked()
+                 ),
+               send
+      end
+    end
   end
 
   describe "undeclared_events/3 for a delayed send (ADR-0008, the 2026-09-23 Amendment)" do
@@ -435,6 +461,25 @@ defmodule StatifierRouter.ContractsTest do
 
       assert [%{binding_id: "first"}, %{binding_id: "second"}] =
                Contracts.undeclared_binding_events(bindings, declares_both())
+    end
+
+    # ADR-0008, decision 1: every binding is judged, a disabled one too.
+    # Sabotage: filtering `bindings` to `enabled: true` in
+    # undeclared_binding_events/2 drops `paused_lost` and this goes red.
+    test "judges a disabled binding like any other" do
+      {:ok, paused} =
+        Binding.new(
+          id: "paused_lost",
+          source: "depot_feed",
+          match: "event.kind == 'paused_lost'",
+          key: "event.parcel_id",
+          document: "parcel",
+          event: "parcel.lost",
+          enabled: false
+        )
+
+      assert [%{binding_id: "paused_lost", event: "parcel.lost", reason: :undeclared}] =
+               Contracts.undeclared_binding_events([paused], declares_both())
     end
   end
 
