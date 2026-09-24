@@ -505,7 +505,7 @@ separate from the record's flip, so it lags this file until then.
 
 ## Amendment (2026-09-23, sr-77m): a delayed send to the execution target with a literal event and receiver is a finding under `undeclared_events`, with reason `:delay`
 
-Status: proposed
+Status: accepted
 
 Decision 1 selects an execution-target send by its literal `type` and
 its literal `target`, and nothing in this record says what a **delayed**
@@ -616,3 +616,60 @@ moduledoc's reasons, and the `@doc`s of `undeclared_events/3` and
 the lookup is not called for a delayed send, and that a delayed send
 whose event is an expression keeps its `:eventexpr` entry. This
 Amendment changes no line above it, and it leaves line 3 as it is.
+
+## Note (2026-09-24, sr-95v): the delay Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The `Status:` line of the `## Amendment (2026-09-23,
+sr-77m)` moved from `proposed` to `accepted`, on the operator's grant to
+flip records whose code has shipped, after that code shipped in
+statifier_router 0.4.1 (tag `v0.4.1`, at `3711d85`). The record's own
+status on line 3 was already `accepted` and was not touched, and the
+record's row in `docs/adr/README.md` carries that status rather than the
+Amendment's, so it does not move.
+
+Every claim the Amendment makes was re-verified by anchor at
+`3711d85f61e221120f7d63f5e45424b548b91440`, which is both the published
+tag and `main` at the time of the flip, with statifier 2.7.0 as
+`mix.lock` resolves it there:
+
+- Decisions 1, 2 and 5: `StatifierRouter.Contracts`'s private
+  `judge_send/3` reads the literal event and the literal `document`
+  first, and its private `delivery_reason/4` answers `:delay` for a send
+  whose `delay` is not `nil`, a `delayexpr` included, without calling
+  the lookup.
+- Decision 3: `check/3` keeps its five keys, the `reason` type carries
+  `:delay`, and the `binding_finding` type's reasons stay the three.
+- Decision 4: the finding is the same `finding` type, `event` and
+  `document` strings.
+- Decision 6: a delayed send whose event or `document` is not literal
+  falls to the `{:unchecked, reason}` arm of `judge_send/3` and gets no
+  `:delay` finding.
+- The run-time account: `Statifier.Machine.Content.Send`'s `t/0` types
+  `delay` as `Machine.expr() | nil`; the private `build_effect/6` of its
+  `Statifier.ExecutableContent` implementation emits a delayed-send
+  effect for any integer delay, zero included; `Statifier.Duration.to_ms/1`
+  answers `{:error, {:invalid_delay, value}}`; st-ADR-0036 is on
+  statifier-ex's main; and the first clause of
+  `StatifierRouter.SendHandler`'s `enqueue` answers
+  `{:error, {:send_refused, :delay}}` before its second clause asks the
+  route registry or the timer queue.
+- The tests the Amendment's closing paragraph names are in
+  `test/statifier_router/contracts_test.exs`, in the describe block
+  `undeclared_events/3 for a delayed send (ADR-0008, the 2026-09-23
+  Amendment)`: a literal `delay`, a `delayexpr`, a lookup that fails the
+  test if it is asked, and a delayed send with an `eventexpr` that keeps
+  its `:eventexpr` entry.
+
+**Sentences that name the Amendment's own state.** "What the check does
+today" describes the code as it was read at `57b9610`, before the code
+half; it holds there, where `StatifierRouter.Contracts` does not read a
+`delay` at all. The closing paragraph says the code half is a later
+change on the same bead; that change is `2653d8c`, an ancestor of
+`v0.4.1`.
+
+**One anchor that is inexact.** The Amendment names the refusing clause
+as the first clause of `StatifierRouter.SendHandler`'s `enqueue/4`. At
+`57b9610`, as at `3711d85`, that private function takes five arguments;
+the clause and what it answers are as the Amendment says, so the anchor
+is `enqueue/5`.
