@@ -888,7 +888,8 @@ defmodule StatifierRouter.SendHandlerTest do
       assert {:ok, [%{event: %{name: "impression"}}]} =
                StatifierPersistence.Executions.inputs(config.store, execution_id)
 
-      # RF062-R1's row, committed with the step that sent it. The ledger
+      # The refusal's routing-ledger row (ADR-0005, section 7, and its Note
+      # on that row), committed with the step that sent it. The ledger
       # holds it and the delivery that created the sender, one each: the
       # reserved binding id is what tells the two apart.
       {refusals, deliveries} =
