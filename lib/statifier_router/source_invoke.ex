@@ -23,10 +23,11 @@ defmodule StatifierRouter.SourceInvoke do
 
   It does **not** implement `Statifier.Invoke.Handler` (statifier 2.6.0,
   the version `mix.lock` resolves), and it cannot. That behaviour's
-  `c:start/2` and `c:cancel/2` are **pure planning callbacks**, called
-  from `Statifier.Session.Effects.plan/2`'s own fold with "no process, no
-  clock, and no I/O"; they return instructions for an executor to perform.
-  Subscribing writes a row, so it belongs in the impure half. The
+  `c:Statifier.Invoke.Handler.start/2` and
+  `c:Statifier.Invoke.Handler.cancel/2` are **pure planning callbacks**,
+  called from `Statifier.Session.Effects.plan/2`'s own fold with "no
+  process, no clock, and no I/O"; they return instructions for an executor
+  to perform. Subscribing writes a row, so it belongs in the impure half. The
   callbacks also carry no slot for it: the plan context is
   `%{session_id: _, invoke_types: _, invoke_handlers: _}` and carries "no
   pid, no `%MachineState{}`, and no session struct", so neither a
@@ -34,23 +35,25 @@ defmodule StatifierRouter.SourceInvoke do
   callback at all.
 
   So a host that runs a live `Statifier.Session` writes a handler whose
-  `c:start/2` returns `{:ok, [{:handler, __MODULE__, payload}]}` and whose
-  `c:perform/2` calls `start/3` here. A durable host - the mode ADR-0007,
-  section 5 specifies, and the only one - has an executor rather than a
-  session: both effects arrive at the executor seam this package already
-  hands `StatifierPersistence.Executions.create/4` and `step/5`, where
-  the execution id is in the context and the configuration is in hand, and
-  that handler calls straight into these two functions.
+  `c:Statifier.Invoke.Handler.start/2` returns
+  `{:ok, [{:handler, __MODULE__, payload}]}` and whose
+  `c:Statifier.Invoke.Handler.perform/2` calls `start/3` here. A durable
+  host - the mode ADR-0007, section 5 specifies, and the only one - has an
+  executor rather than a session: both effects arrive at the executor seam
+  this package already hands `StatifierPersistence.Executions.create/4`
+  and `step/5`, where the execution id is in the context and the
+  configuration is in hand, and that handler calls straight into these two
+  functions.
 
   ## Idempotency
 
   Both calls are idempotent, which is the contract either door needs.
-  `Statifier.Invoke.Handler` says a `c:perform/2` "MUST be idempotent on
-  `invoke_id`", because a host that crashes between performing an
-  instruction and recording that it ran replays the same drive; and it
-  says a cancel "MAY be planned for an invocation a host has already
-  reported complete", so a handler "MUST tolerate cancelling an
-  `invoke_id` it no longer knows". `start/3` answers
+  `Statifier.Invoke.Handler` says a `c:Statifier.Invoke.Handler.perform/2`
+  "MUST be idempotent on `invoke_id`", because a host that crashes
+  between performing an instruction and recording that it ran replays the
+  same drive; and it says a cancel "MAY be planned for an invocation a
+  host has already reported complete", so a handler "MUST tolerate
+  cancelling an `invoke_id` it no longer knows". `start/3` answers
   `{:ok, :already_subscribed}` for the second call and `cancel/3`
   `{:ok, :not_subscribed}`; neither is an error.
 

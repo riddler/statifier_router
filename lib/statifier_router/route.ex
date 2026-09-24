@@ -12,9 +12,9 @@ defmodule StatifierRouter.Route do
 
   ## A route is one-way
 
-  `c:deliver/3` answers `:ok` or `{:error, term()}` - handed off, or not
-  handed off - and returns no data (ADR-0005, decision 3). A sink's
-  result comes back as a new inbound event through a binding
+  `c:StatifierRouter.Route.deliver/3` answers `:ok` or `{:error, term()}` -
+  handed off, or not handed off - and returns no data (ADR-0005, decision
+  3). A sink's result comes back as a new inbound event through a binding
   (ADR-0001), never as this callback's return. The one thing an
   `{:error, _}` causes in the sending execution is `error.communication`
   carrying the send's `sendid`, which is transport failure rather than an
@@ -23,7 +23,7 @@ defmodule StatifierRouter.Route do
 
   ## What a route may do where it is called
 
-  At `StatifierPersistence.Executor.execute/2` a route runs inside the
+  At `c:StatifierPersistence.Executor.execute/2` a route runs inside the
   delivery's transaction, under the execution's lock, so it may **only
   hand off durably**: a job inserted on the host's own repo from the
   calling process joins that transaction, which is a transactional
@@ -99,7 +99,8 @@ defmodule StatifierRouter.Route do
   @doc """
   Whether `module` can serve as a route: loadable and exporting
   `deliver/3`. `StatifierRouter.Config` holds every registered adapter to
-  this, as it holds a resolver to `StatifierRouter.Resolver.valid?/1`.
+  this, as it holds a resolver to `StatifierRouter.Resolver`'s internal
+  validity check.
 
       iex> StatifierRouter.Route.valid?(StatifierRouter.Route)
       false
