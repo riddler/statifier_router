@@ -502,3 +502,112 @@ a test or recorded in a later Note.
 The status column for this record in `docs/adr/README.md` still reads
 `proposed`. This repository flips that index in a change of its own,
 separate from the record's flip, so it lags this file until then.
+
+## Amendment (2026-09-23, sr-77m): a delayed send to the execution target is a finding under `undeclared_events`, with reason `:delay`
+
+Status: proposed
+
+Decision 1 selects an execution-target send by its literal `type` and
+its literal `target`, and nothing in this record says what a **delayed**
+one means: a `<send>` that writes `delay` or `delayexpr`. Since
+ADR-0006's delay Amendment (2026-09-23) no such send is ever delivered,
+and this check says nothing about it.
+
+- **What the check does today.** `StatifierRouter.Contracts`'s private
+  `classify/4` selects a send on its `type` and `target` alone and never
+  reads its `delay` (read at `57b9610`). A delayed send with a literal
+  event and a literal `document` is judged against the lookup like any
+  other, and one whose event the receiver declares passes with no
+  finding.
+- **What happens to it at run time.** On the compiled machine a
+  `<send>`'s `delay` is `{:static, value}` for `delay`,
+  `{:compiled, _, _}` for `delayexpr`, and `nil` when neither is written
+  (`Statifier.Machine.Content.Send`'s `t/0`, statifier 2.7.0 as
+  `mix.lock` resolves it at `57b9610`). Only `nil` gives an immediate
+  send. Any other `delay` either resolves to whole milliseconds, and the
+  engine emits a delayed-send effect even for a zero delay (the private
+  `build_effect/6` of `Statifier.Machine.Content.Send`'s
+  `Statifier.ExecutableContent` implementation), or fails to
+  resolve, and the engine discards the send with `error.execution`
+  (st-ADR-0036, `docs/adr/0036-send-argument-failure-discards-the-message.md`
+  in statifier-ex); a literal `delay` that is not a duration fails there
+  with `{:invalid_delay, value}` (`Statifier.Duration.to_ms/1`). A
+  delayed effect that names the reserved target is refused with
+  `{:error, {:send_refused, :delay}}` before the route registry or the
+  timer queue is asked (the first clause of
+  `StatifierRouter.SendHandler`'s `enqueue/4`, read at `57b9610`). So a
+  selected send with a `delay` or a `delayexpr` never reaches its
+  receiver, whatever its value.
+
+### The decision
+
+1. **Which send.** A send decision 1 selects whose `delay` is not `nil`:
+   a literal `delay` or a `delayexpr`.
+2. **A finding, not an unchecked entry, and a `delayexpr` too.** Its
+   run-time result is already known, which is decision 4's reason for
+   making an unpublished receiver a finding rather than a gap: the
+   handler refuses it, or the engine discards it first. A `delayexpr`
+   is reported exactly as a literal `delay` is and is never listed
+   unchecked, because every value it can take lands on one of those two
+   paths.
+3. **Under `undeclared_events`, with reason `:delay`.** `check/3` keeps
+   its five keys (decision 6); no sixth is added. Not `unchecked`,
+   whose entries are sends whose result cannot be known (decision 3).
+   Not `unregistered_routes`, which is `Routes.unregistered/2`'s list
+   composed unchanged, never reports the reserved target, and names a
+   route a host forgot to register, when here no route is involved.
+   `undeclared_events` is the list of execution-target sends whose
+   event will not be taken by their receiver, and a delayed one is such
+   a send. Its reasons become four: `:undeclared`,
+   `:undeclared_by_computed_set`, `:not_published` and `:delay`.
+   `undeclared_binding_events` keeps three, because a binding has no
+   delay.
+4. **The finding's shape.** `%{event, document, location, reason:
+   :delay}`, with `location` the `<send>` element's. `event` is the
+   literal event when the send writes one and `nil` otherwise; `document`
+   is the receiving document when the `document` param is literal by
+   decision 1 and `nil` otherwise. Only a `:delay` finding carries
+   `nil` in either field, which is the shape `Routes.unregistered/2`'s
+   findings already have for a route name it cannot read (`route:
+   String.t() | nil` in `StatifierRouter.Routes`'s `t:finding/0`, read at
+   `57b9610`).
+5. **One entry per send, and the delay first.** A selected send with a
+   `delay` gets the `:delay` finding and nothing else: the lookup is not
+   called for it, and no `:eventexpr`, `:no_event`, `:document_expr` or
+   `:no_document` entry is added for it, because nothing it names is
+   delivered.
+
+### The example
+
+The `delivery_round` document of this record's example writes its send
+with a two-hour delay:
+
+    <send type="myapp:router" target="execution" event="parcel.delivered" delay="2h">
+      <param name="document" expr="'parcel'"/>
+      <param name="key" expr="parcel_id"/>
+    </send>
+
+`parcel` declares `parcel.delivered`, so decision 2 alone passes it. By
+this Amendment `undeclared_events` holds
+`%{event: "parcel.delivered", document: "parcel", location: location,
+reason: :delay}` for it. Written as `delayexpr="reminder_after"`, it
+gives the same finding.
+
+### What this Amendment does not decide
+
+- **Support for a delayed execution-target send.** ADR-0006's delay
+  Amendment leaves it to a later record; if that record lands, it
+  retires this finding in the same change.
+- **A delayed send this check does not select.** One written with
+  `typeexpr` or `targetexpr` stays on `Routes.unregistered/2`'s
+  unchecked list; a delayed send to a registered route is unchanged.
+- **The rest of ADR-0006's envelope.** "What this record does not
+  decide" still leaves `key` and `create` to a later record.
+
+The code half is a later change on the same bead, citing this
+Amendment: `classify/4` and `judge_send/3`, the `reason` and `finding`
+typedocs, the moduledoc's reasons, and the `@doc`s of
+`undeclared_events/3` and `check/3`, with tests that pin a literal
+`delay`, a `delayexpr`, a delayed send whose event is an expression, and
+that the lookup is not called for a delayed send. This Amendment changes
+no line above it, and it leaves line 3 as it is.
