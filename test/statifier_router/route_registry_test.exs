@@ -125,6 +125,21 @@ defmodule StatifierRouter.RouteRegistryTest do
                  {:error, {:invalid_value, :timer_queue, refused}}
       end
     end
+
+    # sabotage: processor_scope/1 answered {:ok, value} unconditionally ->
+    # an empty string and a one-arity fun were accepted, red; restored,
+    # green.
+    test "takes the send-processor shape's scope as a string or a zero-arity fun" do
+      scope = fn -> "staging" end
+      assert %Config{processor_scope: "staging"} = config(processor_scope: "staging")
+      assert %Config{processor_scope: ^scope} = config(processor_scope: scope)
+      assert %Config{processor_scope: nil} = config()
+
+      for refused <- ["", :staging, fn _send -> "staging" end, %{}] do
+        assert Config.new(repo: TestRepo, delivery: @delivery, processor_scope: refused) ==
+                 {:error, {:invalid_value, :processor_scope, refused}}
+      end
+    end
   end
 
   describe "the send-types snapshot ADR-0005 decision 6 hands over" do

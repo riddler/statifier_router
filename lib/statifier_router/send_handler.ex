@@ -67,12 +67,21 @@ defmodule StatifierRouter.SendHandler do
   that overrides it (ADR-0005, as its Amendment of 2026-09-23 has it). A
   route no scope overrides resolves the same everywhere and needs none.
 
-  The send-processor shape is reached by no delivery, so it has no scope,
-  and there a send to an overridden route still resolves to the
+  The send-processor shape is reached by no delivery, so there the host
+  names the scope, with the configuration's `:processor_scope`
+  (ADR-0006, as its Amendment of 2026-09-24 has it): a string is the
+  scope of every send `perform/2` resolves, and a zero-arity fun is called
+  by `perform/2`, once for each send and delayed send whose target names a
+  registered route, and answers the scope or `nil`. A fun that answers
+  anything else is a miss, `{:error, {:invalid_value, :processor_scope,
+  value}}`, with no route called and nothing queued. The scope is never a
+  send param: a chart cannot choose the scope its sends resolve in.
+
+  A configuration that names no scope there, or a fun that answers `nil`,
+  resolves as before: a send to an overridden route resolves to the
   registered configuration, with no override applied and no error. The
   engine discards `perform/2`'s return, so a refusal on that shape would
-  tell neither the chart nor the host anything; a host that needs a
-  scope's override for a live session's send does not get it today.
+  tell neither the chart nor the host anything.
 
   ## The idempotency key, and the cancellation key
 
@@ -307,6 +316,7 @@ defmodule StatifierRouter.SendHandler do
           | {:no_timer_queue, String.t() | nil}
           | {:no_config, module()}
           | {:no_delivery_scope, String.t()}
+          | {:invalid_value, :processor_scope, term()}
           | {:send_refused, refusal()}
           | {:send_undelivered, :no_execution | :finished}
           | term()
@@ -537,13 +547,20 @@ defmodule StatifierRouter.SendHandler do
   # overrides is refused rather than resolved to its registered
   # configuration, which would be the wrong one for every scope that
   # overrides it; a route no scope overrides resolves the same in every
-  # scope and needs none. On the send-processor shape the lookup is
-  # unchanged: the engine discards `perform/2`'s return, so a refusal there
-  # would reach no one (ADR-0005, as its Amendment of 2026-09-23 has it).
-  # An unregistered name misses first, as `:error`.
+  # scope and needs none. On the send-processor shape the scope is the one
+  # the host names in `:processor_scope` (ADR-0006, as its Amendment of
+  # 2026-09-24 has it), and with none named there the lookup is unchanged:
+  # the engine discards `perform/2`'s return, so a refusal there would
+  # reach no one (ADR-0005, as its Amendment of 2026-09-23 has it). An
+  # unregistered name misses first, as `:error`, before a fun is called.
   @spec resolve(Config.t(), String.t() | nil, shape()) ::
           {:ok, Route.t()} | :error | {:error, reason()}
-  defp resolve(config, name, :processor), do: Config.route(config, override_scope(), name)
+  defp resolve(config, name, :processor) do
+    with {:ok, _registered} <- Config.route(config, nil, name),
+         {:ok, scope} <- processor_scope(config) do
+      Config.route(config, scope, name)
+    end
+  end
 
   defp resolve(config, name, :seam) do
     scope = override_scope()
@@ -961,6 +978,22 @@ defmodule StatifierRouter.SendHandler do
        c_index: effect.c_index,
        owner: effect.owner
      }, effect.ordinal}
+  end
+
+  # The scope a send resolves in on the send-processor shape: the host's
+  # `:processor_scope`, a fun of it called now, once for this send, or,
+  # when the host named none, whatever scope the calling process holds.
+  @spec processor_scope(Config.t()) ::
+          {:ok, String.t() | nil} | {:error, {:invalid_value, :processor_scope, term()}}
+  defp processor_scope(%Config{processor_scope: nil}), do: {:ok, override_scope()}
+  defp processor_scope(%Config{processor_scope: scope}) when is_binary(scope), do: {:ok, scope}
+
+  defp processor_scope(%Config{processor_scope: fun}) when is_function(fun, 0) do
+    case fun.() do
+      nil -> {:ok, override_scope()}
+      scope when is_binary(scope) and scope != "" -> {:ok, scope}
+      other -> {:error, {:invalid_value, :processor_scope, other}}
+    end
   end
 
   @spec override_scope() :: String.t() | nil

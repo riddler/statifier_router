@@ -161,6 +161,12 @@ a staging scope may point `joined_records` at another queue, and cannot
 make a third route appear or take one away. A chart that names a route
 fails the same way in every scope.
 
+A delivery names the scope its sends resolve in. A live
+`Statifier.Session` is reached by no delivery, so the host names it in the
+configuration instead: `processor_scope: "staging"`, or a zero-arity fun
+the handler calls once for each send and that answers the scope or `nil`.
+The chart never names a scope.
+
 A route adapter implements `StatifierRouter.Route`. It is handed its own
 configuration, the built event and an idempotency key, and it answers `:ok`
 or `{:error, reason}`:

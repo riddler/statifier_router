@@ -21,6 +21,7 @@ defmodule StatifierRouter.Config do
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
+  | `:processor_scope` | the scope a live session's sends resolve their routes in on the send-processor shape: a non-empty string, or a zero-arity fun answering one or `nil` (see below) | `nil` |
   | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it; an `{:error, _}` from that route rolls the delivery back, finishing step included, so a route that never succeeds keeps the execution from finishing (see below) | `nil` |
   | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
   | `:table_prefix` | a string prefixed to every table name | `"statifier_router_"` |
@@ -52,6 +53,17 @@ defmodule StatifierRouter.Config do
   adapter and holds no type string. A configuration that gives both
   `:send_type` and a `:send_types` of its own is refused with
   `{:declared_send_types, send_type}` rather than one silently winning.
+
+  `:processor_scope` names the scope `:route_overrides` is read in on the
+  send-processor shape, where a live `Statifier.Session` registers
+  `StatifierRouter.SendHandler` itself and no delivery is in reach to name
+  one (ADR-0006, as its Amendment of 2026-09-24 has it). A string is that
+  scope for every send; a zero-arity fun is called by
+  `c:Statifier.Send.Processor.perform/2`, in the process that performs the
+  send, once for each send and delayed send whose target names a registered
+  route, and answers the scope or `nil` for none. It is the host's to name,
+  never the chart's: no send param reaches it. `handle_effect/3` does not
+  read it, because a delivery names its own scope at the executor seam.
 
   `:on_complete` names one route in that same registry, and a name absent
   from `:route_adapters` is refused with `{:unregistered_on_complete,
@@ -164,6 +176,7 @@ defmodule StatifierRouter.Config do
     :chart_resolver,
     :prefix,
     :send_type,
+    :processor_scope,
     :on_complete,
     :timer_queue,
     bindings: [],
@@ -188,6 +201,13 @@ defmodule StatifierRouter.Config do
   """
   @type chart_resolver :: (content_hash :: String.t() -> {:ok, Statifier.Machine.t()} | :error)
 
+  @typedoc """
+  The scope the send-processor shape resolves a route in: a non-empty
+  string, or a zero-arity fun `StatifierRouter.SendHandler` calls per send,
+  answering a non-empty string or `nil` for no scope.
+  """
+  @type processor_scope :: String.t() | (-> String.t() | nil)
+
   @type t :: %__MODULE__{
           repo: module(),
           delivery: module(),
@@ -200,6 +220,7 @@ defmodule StatifierRouter.Config do
           route_adapters: %{optional(String.t()) => Route.t()},
           route_overrides: %{optional(String.t()) => %{optional(String.t()) => map()}},
           send_type: String.t() | nil,
+          processor_scope: processor_scope() | nil,
           on_complete: String.t() | nil,
           timer_queue: TimerQueue.t() | nil,
           table_prefix: String.t(),
@@ -227,7 +248,14 @@ defmodule StatifierRouter.Config do
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
   @persistence_option_keys [:routes, :invoke_types, :send_types]
-  @route_keys [:route_adapters, :route_overrides, :send_type, :on_complete, :timer_queue]
+  @route_keys [
+    :route_adapters,
+    :route_overrides,
+    :send_type,
+    :processor_scope,
+    :on_complete,
+    :timer_queue
+  ]
   @known [
     :repo,
     :delivery,
@@ -489,6 +517,7 @@ defmodule StatifierRouter.Config do
     with {:ok, adapters} <- route_adapters(opts),
          {:ok, overrides} <- route_overrides(opts, adapters),
          {:ok, send_type} <- send_type(opts),
+         {:ok, processor_scope} <- processor_scope(opts),
          {:ok, on_complete} <- on_complete(opts, adapters),
          {:ok, timer_queue} <- timer_queue(opts) do
       {:ok,
@@ -496,6 +525,7 @@ defmodule StatifierRouter.Config do
          route_adapters: adapters,
          route_overrides: overrides,
          send_type: send_type,
+         processor_scope: processor_scope,
          on_complete: on_complete,
          timer_queue: timer_queue
        ]}
@@ -562,6 +592,18 @@ defmodule StatifierRouter.Config do
       nil -> {:ok, nil}
       value when is_binary(value) and value != "" -> {:ok, value}
       value -> {:error, {:invalid_value, :send_type, value}}
+    end
+  end
+
+  # ADR-0006's Amendment of 2026-09-24: the scope a live session's sends
+  # resolve in, named by the host. A fun is kept as given and called per
+  # send by the handler; only its arity can be checked here.
+  defp processor_scope(opts) do
+    case Keyword.get(opts, :processor_scope) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and value != "" -> {:ok, value}
+      value when is_function(value, 0) -> {:ok, value}
+      value -> {:error, {:invalid_value, :processor_scope, value}}
     end
   end
 
