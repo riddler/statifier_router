@@ -145,6 +145,14 @@ defmodule StatifierRouter.DeliveryFixtures do
     }
   end
 
+  # A `:bindings_resolver` in `opts` stands in for the default `:bindings`,
+  # which Config.new/1 would otherwise refuse beside it.
+  defp drop_bindings_beside_resolver(opts) do
+    if Keyword.has_key?(opts, :bindings_resolver),
+      do: Keyword.delete(opts, :bindings),
+      else: opts
+  end
+
   @doc "The compiled charts, by document."
   @spec machines() :: %{String.t() => Machine.t()}
   def machines do
@@ -164,7 +172,8 @@ defmodule StatifierRouter.DeliveryFixtures do
   @doc """
   A configuration over the default delivery. `opts` override any option;
   the resolver is a `StatifierRouter.Resolver.Static` over `machines/0`
-  under the scope `7c1e`, and reports each call to `pid`.
+  under the scope `7c1e`, and reports each call to `pid`. A
+  `:bindings_resolver` in `opts` replaces the default `:bindings`.
   """
   @spec config(pid(), keyword()) :: Config.t()
   def config(pid, opts \\ []) do
@@ -196,6 +205,7 @@ defmodule StatifierRouter.DeliveryFixtures do
         bindings: bindings()
       ]
       |> Keyword.merge(opts)
+      |> drop_bindings_beside_resolver()
       |> Config.new()
 
     config

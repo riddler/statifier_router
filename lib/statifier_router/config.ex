@@ -20,6 +20,7 @@ defmodule StatifierRouter.Config do
   | `:on_create` | what `StatifierRouter.Delivery` calls in place of `StatifierPersistence.Executions.create/4`, with its arguments and its return contract: a module exporting `create/4` or an arity-4 fun (see below) | `nil` (the delivery calls `create/4` itself) |
   | `:on_step` | what `StatifierRouter.Delivery` calls in place of `StatifierPersistence.Executions.step/5`, with its arguments and its return contract: a module exporting `step/5` or an arity-5 fun (see below) | `nil` (the delivery calls `step/5` itself) |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
+  | `:bindings_resolver` | the `StatifierRouter.BindingsResolver` answering the bindings of one scope, in place of `:bindings`: a module implementing it or an arity-1 fun (see below) | `nil` (the bindings are `:bindings`) |
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
@@ -122,6 +123,33 @@ defmodule StatifierRouter.Config do
   and exports the function, or a fun of the right arity. Anything else is
   refused with `{:error, {:invalid_value, name, value}}`.
 
+  ## Bindings answered per scope
+
+  `:bindings` is one list for every scope. `:bindings_resolver` is for a
+  host whose bindings differ by scope: a `StatifierRouter.BindingsResolver`
+  called with a scope, answering the `%StatifierRouter.Binding{}` structs
+  that scope routes by (ADR-0001, the Amendment of 2026-09-25). The two
+  keys are exclusive, and a configuration that gives both - `:bindings`
+  given at all, whatever its value - is refused with
+  `{:error, {:exclusive_keys, :bindings, :bindings_resolver}}` rather than
+  one silently winning. A resolver that is not one of the behaviour's
+  shapes is refused with `{:error, {:invalid_value, :bindings_resolver,
+  value}}`. A configuration with a resolver keeps `bindings: []`.
+
+  The resolver is called where a scope is in hand: `StatifierRouter.route/3`
+  calls it once with the event's scope, before any binding is evaluated;
+  `StatifierRouter.Broadway`'s partitioner once per message; and
+  `StatifierRouter.subscribe/3` once, with the scope of the subscribing
+  execution's address row. Each answer is checked as `:bindings` is here:
+  the reserved `id` and the duplicated `id` are refused as
+  `{:reserved_binding_id, name}` and `{:duplicate_binding_id, id}`, and an
+  answer that is not a list of built bindings raises `ArgumentError`.
+  `StatifierRouter.BindingsResolver` says what each caller does with a
+  refusal. The publish-time checks of `StatifierRouter.Contracts.check/3`
+  and the reaper `StatifierRouter.Addresses.reap/3` read no scope, so they
+  do not call it: the first reads the configuration's `bindings: []`, and
+  the second has always taken the host's bindings as its own argument.
+
   ## What the checks here do and do not catch
 
   `:store` must be built over this configuration's own `:repo`, so that
@@ -189,6 +217,7 @@ defmodule StatifierRouter.Config do
   alias Statifier.Send.Types
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
+  alias StatifierRouter.BindingsResolver
   alias StatifierRouter.Route
   alias StatifierRouter.Schema
   alias StatifierRouter.SendHandler
@@ -209,6 +238,7 @@ defmodule StatifierRouter.Config do
     :timer_queue,
     :on_create,
     :on_step,
+    :bindings_resolver,
     bindings: [],
     persistence_options: [],
     route_adapters: %{},
@@ -269,6 +299,7 @@ defmodule StatifierRouter.Config do
           resolver: resolver() | nil,
           chart_resolver: chart_resolver() | nil,
           bindings: [Binding.t()],
+          bindings_resolver: StatifierRouter.BindingsResolver.t() | nil,
           persistence_options: keyword(),
           route_adapters: %{optional(String.t()) => Route.t()},
           route_overrides: %{optional(String.t()) => %{optional(String.t()) => map()}},
@@ -298,6 +329,7 @@ defmodule StatifierRouter.Config do
           | {:unregistered_on_complete, String.t()}
           | {:reserved_route, String.t()}
           | {:reserved_binding_id, String.t()}
+          | {:exclusive_keys, :bindings, :bindings_resolver}
 
   @tables [:addresses, :dedupe, :routing_ledger, :subscriptions]
   @storage_keys [:table_prefix, :prefix]
@@ -318,6 +350,7 @@ defmodule StatifierRouter.Config do
     :repo,
     :delivery,
     :bindings,
+    :bindings_resolver,
     :persistence_options | @delivery_keys ++ @storage_keys ++ @route_keys ++ Keyword.keys(@hooks)
   ]
 
@@ -339,7 +372,8 @@ defmodule StatifierRouter.Config do
   adapter options name another repo, then a malformed
   `:persistence_options`, then a malformed `:on_create` or `:on_step`,
   then a storage value the
-  table does not allow, then the first binding
+  table does not allow, then `:bindings` and `:bindings_resolver` both
+  given, then a malformed `:bindings_resolver`, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
   with `index` counted from zero, then a binding whose `id` is the
   reserved name, then the first duplicated binding `id`.
@@ -371,21 +405,43 @@ defmodule StatifierRouter.Config do
          {:ok, persistence_options} <- persistence_options(opts, routes[:send_type]),
          {:ok, hooks} <- hooks(opts),
          {:ok, storage} <- storage(opts),
-         {:ok, bindings} <- bindings(opts) do
+         {:ok, bindings} <- binding_source(opts) do
       {:ok,
        struct!(
          __MODULE__,
          [
            {:repo, repo},
            {:delivery, delivery},
-           {:bindings, bindings},
-           {:persistence_options, persistence_options} | needs ++ storage ++ routes ++ hooks
+           {:persistence_options, persistence_options}
+           | bindings ++ needs ++ storage ++ routes ++ hooks
          ]
        )}
     end
   end
 
   def new(other), do: {:error, {:invalid_config, other}}
+
+  # Package-internal: the bindings events under `scope` are routed by. The
+  # configuration's own `:bindings` when it gives no `:bindings_resolver`,
+  # whatever the scope; otherwise the resolver's answer for `scope`, held to
+  # the reserved-id and duplicate-id checks `new/1` holds `:bindings` to
+  # (ADR-0001, the Amendment of 2026-09-25). A malformed answer raises
+  # ArgumentError from StatifierRouter.BindingsResolver.
+  @doc false
+  @spec bindings_for(t(), String.t()) ::
+          {:ok, [Binding.t()]}
+          | {:error, {:reserved_binding_id | :duplicate_binding_id, String.t()}}
+  def bindings_for(%__MODULE__{bindings_resolver: nil, bindings: bindings}, _scope),
+    do: {:ok, bindings}
+
+  def bindings_for(%__MODULE__{bindings_resolver: resolver}, scope) do
+    bindings = BindingsResolver.call(resolver, scope)
+
+    with :ok <- refuse_reserved_id(bindings),
+         :ok <- refuse_duplicate_ids(bindings) do
+      {:ok, bindings}
+    end
+  end
 
   @doc """
   The name of `table` under this configuration: the table prefix followed
@@ -732,6 +788,26 @@ defmodule StatifierRouter.Config do
   end
 
   defp module?(value), do: is_atom(value) and not is_nil(value) and not is_boolean(value)
+
+  # ADR-0001, the Amendment of 2026-09-25: the bindings are the static list
+  # or a resolver's answer per scope, never both. The refusal is on the
+  # `:bindings` key being given at all, so `bindings: []` beside a resolver
+  # is refused too; a `nil` resolver is the key left out, as a `nil` hook is.
+  defp binding_source(opts) do
+    case {Keyword.has_key?(opts, :bindings), Keyword.get(opts, :bindings_resolver)} do
+      {_given, nil} ->
+        with {:ok, bindings} <- bindings(opts),
+             do: {:ok, [bindings: bindings, bindings_resolver: nil]}
+
+      {true, _resolver} ->
+        {:error, {:exclusive_keys, :bindings, :bindings_resolver}}
+
+      {false, resolver} ->
+        if BindingsResolver.valid?(resolver),
+          do: {:ok, [bindings: [], bindings_resolver: resolver]},
+          else: {:error, {:invalid_value, :bindings_resolver, resolver}}
+    end
+  end
 
   defp bindings(opts) do
     case Keyword.get(opts, :bindings, []) do

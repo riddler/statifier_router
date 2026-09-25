@@ -66,7 +66,8 @@ defmodule StatifierRouter do
   event carries the host's `scope` beside its message id, its source and
   the adapter-normalized event (ADR-0003, section 8). `route/3` returns one
   outcome per enabled binding whose `source` is the event's source, in the
-  order the configuration lists them (ADR-0004, section 6). Bindings are
+  order the configuration lists them, or its `:bindings_resolver` answers
+  them for the event's scope (ADR-0004, section 6). Bindings are
   chosen by source alone: a binding's `selector` is the source adapter's to
   read, and the router never reads it (ADR-0001, section 1). For each
   binding, the outcome is the first of these that applies (ADR-0004,
@@ -217,7 +218,13 @@ defmodule StatifierRouter do
 
     * `{:error, {:unknown_binding, binding_id}}` - the configuration has
       no binding under that id, so there is no document to read events
-      for.
+      for. Under a `:bindings_resolver` the binding is looked for in the
+      resolver's answer for the scope of the execution's address row, so
+      that row is read first and `:unaddressed_execution` is the refusal
+      when both apply (ADR-0001, the Amendment of 2026-09-25); an answer
+      carrying the reserved or a duplicated binding `id` raises
+      `ArgumentError`, because this function's return names no such
+      refusal.
     * `{:error, {:unaddressed_execution, execution_id}}` - the execution
       has no address row, which is what an `always_new` create leaves
       (ADR-0002, section 7). It has no key to subscribe under, and
@@ -229,8 +236,7 @@ defmodule StatifierRouter do
           | {:error, {:unknown_binding | :unaddressed_execution, String.t()}}
   def subscribe(%Config{} = config, binding_id, {execution_id, invoke_id})
       when is_binary(binding_id) and is_binary(execution_id) and is_binary(invoke_id) do
-    with :ok <- known_binding(config, binding_id),
-         {:ok, address} <- subscribing_address(config, execution_id) do
+    with {:ok, address} <- binding_and_address(config, binding_id, execution_id) do
       row =
         Config.put_meta(config, %Subscription{
           binding_id: binding_id,
@@ -300,7 +306,37 @@ defmodule StatifierRouter do
     if count == 0, do: {:ok, :not_subscribed}, else: {:ok, :cancelled}
   end
 
-  defp known_binding(%Config{bindings: bindings}, binding_id) do
+  # The static list is one for every scope, so the binding is checked
+  # before the address is read, as it always was. A resolver answers per
+  # scope, so its binding is checked in the scope of the execution's own
+  # address row, read first (ADR-0001, the Amendment of 2026-09-25).
+  defp binding_and_address(%Config{bindings_resolver: nil} = config, binding_id, execution_id) do
+    with :ok <- known_binding(config.bindings, binding_id),
+         do: subscribing_address(config, execution_id)
+  end
+
+  defp binding_and_address(config, binding_id, execution_id) do
+    with {:ok, address} <- subscribing_address(config, execution_id),
+         :ok <- known_binding(resolved_bindings!(config, address.scope), binding_id),
+         do: {:ok, address}
+  end
+
+  # subscribe/3's return names two refusals and no third, so a resolver
+  # answer the reserved-id or duplicate-id check refuses is raised here
+  # rather than returned.
+  defp resolved_bindings!(config, scope) do
+    case Config.bindings_for(config, scope) do
+      {:ok, bindings} ->
+        bindings
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "the bindings resolver answered for the scope #{inspect(scope)} with " <>
+                "bindings Config.new/1 would refuse: #{inspect(reason)}"
+    end
+  end
+
+  defp known_binding(bindings, binding_id) do
     if Enum.any?(bindings, &(&1.id == binding_id)),
       do: :ok,
       else: {:error, {:unknown_binding, binding_id}}
@@ -327,6 +363,15 @@ defmodule StatifierRouter do
   module answers with. The module documentation says what each outcome
   writes.
 
+  The bindings are the configuration's `:bindings`, or, when it gives a
+  `:bindings_resolver`, that resolver's answer for the event's `scope`,
+  asked once per call after the event and the options are checked
+  (ADR-0001, the Amendment of 2026-09-25). An answer carrying a binding
+  under the reserved `id` returns `{:error, {:reserved_binding_id, name}}`,
+  and one carrying a duplicated `id` returns
+  `{:error, {:duplicate_binding_id, id}}`, before any binding is
+  evaluated.
+
   `opts`:
 
     * `:now` - a `DateTime` in UTC, the time the attempt uses for the rows
@@ -336,8 +381,9 @@ defmodule StatifierRouter do
           {:ok, [outcome()]} | {:error, term()}
   def route(%Config{} = config, source_event, opts \\ []) do
     with {:ok, event} <- validate_event(source_event),
-         {:ok, now} <- fetch_now(opts) do
-      config.bindings
+         {:ok, now} <- fetch_now(opts),
+         {:ok, bindings} <- Config.bindings_for(config, event.scope) do
+      bindings
       |> Enum.filter(&(&1.enabled and &1.source == event.source))
       |> Enum.reduce_while({:ok, []}, &route_next(config, &1, event, now, &2))
       |> case do

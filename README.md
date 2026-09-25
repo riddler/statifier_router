@@ -122,6 +122,51 @@ document, one key:
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
 
+### Bindings that differ by scope
+
+`:bindings` is one list for every scope. A host whose scopes each route their
+own sources to their own documents gives the configuration a
+`:bindings_resolver` instead: a module implementing the
+`StatifierRouter.BindingsResolver` behaviour, whose one callback takes the
+event's scope and answers the `%StatifierRouter.Binding{}` structs that scope
+routes by, or an arity-1 fun with that signature.
+
+```elixir
+defmodule MyApp.DepotBindings do
+  @behaviour StatifierRouter.BindingsResolver
+
+  @impl StatifierRouter.BindingsResolver
+  def resolve(scope) do
+    # The host's own rows, each built once with StatifierRouter.Binding.new/1
+    # and cached; the router keeps no answer between calls.
+    MyApp.Routing.cached_bindings(scope)
+  end
+end
+
+{:ok, config} =
+  StatifierRouter.Config.new(
+    repo: MyApp.Repo,
+    store: store,
+    executor: MyApp.Executor,
+    resolver: MyApp.PublishedCharts,
+    chart_resolver: &MyApp.PublishedCharts.chart/1,
+    bindings_resolver: MyApp.DepotBindings
+  )
+```
+
+The two keys are exclusive: a configuration that gives both is refused with
+`{:error, {:exclusive_keys, :bindings, :bindings_resolver}}`. The router asks
+the resolver once per `StatifierRouter.route/3` call, with the event's scope,
+and checks each answer as it checks the static list: a duplicated binding `id`
+or the reserved one makes `route/3` return `{:error, reason}` before any
+binding is evaluated. The Broadway partitioner asks it too, and
+`StatifierRouter.subscribe/3` asks it for the scope of the subscribing
+execution's address row. The publish-time checks take no scope, so a host
+checks each scope's bindings with
+`StatifierRouter.Contracts.undeclared_binding_events/2`, and hands
+`StatifierRouter.Addresses.reap/3` the bindings of every scope it routes.
+Without a `:bindings_resolver`, `:bindings` is read exactly as before.
+
 ## Routes and sinks
 
 A chart reaches the outside world with `<send>`. The `type` names the
