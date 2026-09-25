@@ -440,7 +440,7 @@ the code half adds, not claimed here over a live codebase.
 
 A Note, not an amendment: it decides nothing this record had not already
 decided, and it changes no decision. What it records is a ruling taken on
-2026-09-21 (RF062-R1) about a case section 6 had put outside itself.
+2026-09-21 about a case section 6 had put outside itself.
 
 **The case.** ADR-0005, section 7 has the handler record a run-time route
 miss on the routing ledger. That row was not built when the route

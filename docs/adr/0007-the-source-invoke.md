@@ -293,7 +293,7 @@ Two things about the record as written, neither a correction:
   ("an event routes through its binding whether or not the invocation is
   subscribed"). Whether a bounded subscription should also gate what
   reaches the execution - which this record's Context motivates but its
-  Decision does not build - is the open question RF062-R3, for a later
+  Decision does not build - is the open question left for a later
   record to answer. Accepting this record does not answer it.
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
@@ -301,7 +301,7 @@ separate bead after all seven flips, so the index lags this file until then.
 
 ## Note (2026-09-22, sr-6jl): the subscription table is not a delivery gate
 
-The open question the Note above names, RF062-R3, is answered **no gate**,
+The open question the Note above names is answered **no gate**,
 on the operator's word in session on 2026-09-22, after statifier_router
 0.2.0 was published. This Note records that ruling. It decides nothing
 beyond what the record's closing section already decides, and no line

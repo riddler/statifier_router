@@ -80,7 +80,7 @@ forbid outright: closing a mirrored bead and a release stay
 forbidden however the consent arrives. A version bump is the recorded
 exception: on a release bead the operator has named (in the campaign plan or
 their own words), the bump commit is release prep, not a release. (Recorded
-2026-08-27 by the operator, campaign 008.)
+2026-08-27 by the operator.)
 
 Merging a campaign PR is a recorded exception: under a campaign consent the
 operator has adopted verbatim that names automatic merges, with every

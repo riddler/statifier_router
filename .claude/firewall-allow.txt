@@ -1,0 +1,3 @@
+# Exact strings the planning-id scan allows in this repo (one per line).
+# A benign heading used as a negative example in test/statifier_router/private_id_test.exs.
+### R1. What `src` is
