@@ -68,7 +68,16 @@ defmodule StatifierRouter.MixProject do
       source_url: @source_url,
       main: "readme",
       extras: ["README.md", "CHANGELOG.md"],
-      skip_undefined_reference_warnings_on: ["CHANGELOG.md"]
+      skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
+      # Names the docs print as code on purpose but that have no page to
+      # link to, so ExDoc renders them as plain code rather than warning.
+      # `StatifierRouter.SendHandler.perform/2` is the send processor's
+      # callback, hidden by its `@impl`; `StatifierRouter.TimerQueue`'s
+      # moduledoc names it as the writer of a session-scoped row. Each term
+      # is exact: any other reference that resolves nowhere still warns.
+      skip_code_autolink_to: [
+        "StatifierRouter.SendHandler.perform/2"
+      ]
     ]
   end
 
