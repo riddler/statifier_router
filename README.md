@@ -619,6 +619,217 @@ nothing again:
 database, so the new body only ever runs on a fresh one, where it
 builds what the comparison proved identical.
 
+## A host that wraps the engine
+
+Some hosts already run statifier_persistence under an engine of their own:
+a stepper that stamps its own snapshot options on every create and every
+step, keeps rows of its own beside each execution, and runs Oban. This
+section puts the router's options for such a host into one configuration.
+Each option has its own section above ("Bindings that differ by scope",
+"Wrapping the create and step calls", "Minting the execution id" and
+"Placing a host column at a fixed position"); this one shows how they fit
+and answers what such a host meets first. The example routes a parcel's
+scans from depot to doorstep:
+
+```elixir
+{:ok, config} =
+  StatifierRouter.Config.new(
+    repo: MyApp.Repo,
+    store: store,
+    executor: &MyApp.ParcelStepper.execute/2,
+    resolver: MyApp.PublishedCharts,
+    chart_resolver: &MyApp.PublishedCharts.chart/1,
+    bindings_resolver: MyApp.DepotBindings,
+    on_create: MyApp.ParcelStepper,
+    on_step: MyApp.ParcelStepper,
+    execution_id: MyApp.ParcelRouteIds,
+    send_type: "myapp:router",
+    route_adapters: %{"doorstep_photos" => {MyApp.OutboxRoute, %{queue: "photos"}}},
+    timer_queue: {MyApp.ObanTimerQueue, %{}}
+  )
+```
+
+and the migration places the host's own column first on every table:
+
+```elixir
+def up, do: StatifierRouter.Migrations.up(leading_columns: [depot_id: {:text, null: true}])
+```
+
+`MyApp.Router.config/0` below is the host's own: it returns this
+configuration.
+
+### Where the send types come from
+
+`:send_type` is the one type string the router's handler answers to.
+`StatifierRouter.Config.new/1` builds the `send_types:` snapshot from it,
+as `Statifier.Send.Types.from_send_types(%{"myapp:router" =>
+StatifierRouter.SendHandler})`, and puts it into `:persistence_options`.
+The delivery hands those options to `:on_create` inside `initialize:` and
+to `:on_step` beside the event. A configuration that also gives
+`:persistence_options` a `:send_types` of its own is refused with
+`{:error, {:declared_send_types, "myapp:router"}}`.
+
+A stepper that registers send types of its own - here a courier
+processor beside the router's handler - stamps its own snapshot in the
+hooks, built from a map that keeps the router's type on
+`StatifierRouter.SendHandler`:
+
+```elixir
+defmodule MyApp.ParcelStepper do
+  alias StatifierPersistence.Executions
+
+  def create(store, execution_id, machine, opts) do
+    types = send_types()
+    opts = Keyword.update(opts, :initialize, [send_types: types], &Keyword.put(&1, :send_types, types))
+    Executions.create(store, execution_id, machine, opts)
+  end
+
+  def step(store, execution_id, machine, event, opts) do
+    opts = Keyword.put(opts, :send_types, send_types())
+
+    with {:ok, execution, state} <- Executions.step(store, execution_id, machine, event, opts) do
+      # The host's own row, inside the delivery's transaction.
+      MyApp.ParcelLog.record!(execution, event)
+      {:ok, execution, state}
+    end
+  end
+
+  # Each handler ignores the effects that are not its own.
+  def execute(effect, context) do
+    with :ok <- StatifierRouter.SendHandler.handle_effect(MyApp.Router.config(), effect, context) do
+      MyApp.Courier.handle_effect(effect, context)
+    end
+  end
+
+  defp send_types do
+    Statifier.Send.Types.from_send_types(%{
+      "myapp:router" => StatifierRouter.SendHandler,
+      "myapp:courier" => MyApp.Courier
+    })
+  end
+end
+```
+
+The publish-time checks read the configuration, not the hooks:
+`StatifierRouter.Routes.unsupported_types/2`, and so the `:unsupported_types`
+of `StatifierRouter.Contracts.check/3`, judges a chart against the snapshot on
+`:persistence_options`, so a `<send type="myapp:courier">` is reported
+there. The host judges its charts against its own snapshot with
+`Statifier.Send.Types.unsupported_sends/2`.
+
+### Where `put_config/1` is called
+
+At the executor seam it is not: `StatifierRouter.SendHandler.handle_effect/3`
+is handed the configuration by the host's executor, as `execute/2` above
+does, and a host whose executions are all stepped behind the executor
+seam never calls `put_config/1`.
+
+`StatifierRouter.SendHandler.put_config/1` is for a live
+`Statifier.Session` that registers `StatifierRouter.SendHandler` under the
+router's type. The session's `perform/2` is handed no configuration and
+reads it from the process it runs in, which is the session's own, so the
+host calls `put_config/1` in that process before a send is performed
+there. In a process that holds none, `perform/2` answers
+`{:error, {:no_config, StatifierRouter.SendHandler}}`, which says nothing
+about the send and is not reported to the chart; any other
+`{:error, reason}` from `perform/2` the host reports with
+`Statifier.Session.failed_send/3`. The session's sends resolve their
+routes in the scope the configuration's `:processor_scope` names.
+
+### A timer queue over the host's Oban
+
+A `<send>` of the router's type with a `delay` is recorded on the
+`:timer_queue`, a module implementing `StatifierRouter.TimerQueue`. Over
+an Oban the host already runs, the queue needs:
+
+- **The router's repo.** At the executor seam `schedule/2` and `cancel/3`
+  are called inside the sending step's transaction, under the execution's
+  lock, so an Oban that inserts through the repo `:repo` names commits or
+  rolls back with the step.
+- **One held row per dedup key.** `schedule/2` adds no second row for an
+  `entry.key` the queue already holds, and answers `:ok`.
+- **Cancel by `{scope, send_id}`.** `cancel/3` deletes that scope's rows
+  for the send id and no other scope's, and answers `{:ok, count}`.
+- **The row as the one decision point.** A fire deletes the row in the
+  write that decides it fires, so a cancel and a fire of one row cannot
+  both succeed. Below, the rows live in a table of the host's and an Oban
+  job only wakes one.
+- **The fire-time check, then the delivery.** A row whose owner has ended
+  is deleted and not delivered; otherwise the route is found with
+  `StatifierRouter.Config.route/3` and handed the row's own `config`,
+  `event` and `key`. `StatifierRouter.TimerQueue`'s "Firing a row" says
+  how each owner is checked.
+
+```elixir
+defmodule MyApp.ObanTimerQueue do
+  @behaviour StatifierRouter.TimerQueue
+
+  @impl StatifierRouter.TimerQueue
+  def schedule(_queue_config, entry) do
+    # MyApp.Timers.hold/1 inserts the entry unless a row with its key is
+    # held, answering {:ok, row} or {:ok, nil} when one already is.
+    case MyApp.Timers.hold(entry) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, row} ->
+        at = DateTime.add(DateTime.utc_now(), entry.delay_ms, :millisecond)
+
+        case Oban.insert(MyApp.TimerFire.new(%{"row_id" => row.id}, scheduled_at: at)) do
+          {:ok, _job} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  @impl StatifierRouter.TimerQueue
+  def cancel(_queue_config, scope, send_id),
+    do: {:ok, MyApp.Timers.delete_all(scope, send_id)}
+end
+
+defmodule MyApp.TimerFire do
+  use Oban.Worker, queue: :timers
+
+  @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"row_id" => row_id}}) do
+    MyApp.Repo.transaction(fn ->
+      # MyApp.Timers.take/1 deletes the row and answers its entry, or nil
+      # when a cancel deleted it first.
+      with %{} = entry <- MyApp.Timers.take(row_id),
+           true <- MyApp.Timers.owner_live?(entry.scope),
+           {:ok, {module, _registered}} <-
+             StatifierRouter.Config.route(MyApp.Router.config(), nil, entry.route),
+           {:error, reason} <- module.deliver(entry.config, entry.event, entry.key) do
+        # Undoes the take, so Oban's retry finds the row again.
+        MyApp.Repo.rollback(reason)
+      end
+    end)
+  end
+end
+```
+
+### What `:no_timer_queue` at publish means
+
+`StatifierRouter.Contracts.check/3` lists, under `:unregistered_routes`,
+every `<send>` of the router's type that is never handed to the route its
+literal `target` names. An entry with `reason: :no_timer_queue` is a send
+that writes a literal `delay` to a registered route, on a configuration
+with no `:timer_queue`:
+
+```elixir
+%{route: "doorstep_photos", location: location, reason: :no_timer_queue}
+```
+
+At run time that send is refused as `{:no_timer_queue, send_id}` and
+nothing is queued. At the executor seam the sender hears
+`error.communication` carrying the send's `sendid`, and the step it sent
+from stands; on a live session `perform/2` answers the refusal for the
+host to report. `:timer_queue` is one value for every scope, so the
+finding holds in every scope, and the remedy is a queue on the
+configuration rather than a change to the chart. A `delayexpr` is not
+judged, so a chart with no entry may still send a delay the queue is
+needed for. Whether the finding blocks a publish is the host's decision.
+
 ## Versioning
 
 statifier_persistence retires a chart it can prove nothing still needs, and
