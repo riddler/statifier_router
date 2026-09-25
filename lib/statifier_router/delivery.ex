@@ -176,9 +176,19 @@ defmodule StatifierRouter.Delivery do
   enclosing transaction with it. Effects the executor was handed before a
   rollback stay fired (ADR-0003, section 2).
 
-  The execution id is a UXID with the prefix `ex`, minted by
+  ## The execution id
+
+  By default the execution id is a UXID with the prefix `ex`, minted by
   `UXID.generate!/1`; nothing is derived from the address (ADR-0002,
-  section 3).
+  section 3). When `StatifierRouter.Config`'s `:execution_id` is set, the
+  delivery mints through it instead, at the same two places - the
+  address row `:if_absent` inserts and the create `:always_new` makes -
+  handing it the delivery's scope, the document and the key, and the
+  answer is the id the address row, `create/4` and the ledger row carry
+  (ADR-0002, the Amendment of 2026-09-25). An answer that is not a
+  non-empty string raises `ArgumentError`; a raise from the callback
+  propagates. A duplicate, a read address row and a `:never` drop mint
+  nothing, so they never call it.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -369,7 +379,7 @@ defmodule StatifierRouter.Delivery do
   end
 
   defp by_mode(config, %{create: :always_new} = plan, key, delivery),
-    do: create(config, plan, key, delivery, mint_execution_id(), nil)
+    do: create(config, plan, key, delivery, mint_execution_id(config, delivery, plan, key), nil)
 
   defp by_mode(config, plan, key, delivery) do
     case lookup(config, delivery.scope, plan.document, key) do
@@ -396,7 +406,7 @@ defmodule StatifierRouter.Delivery do
       scope: delivery.scope,
       document: plan.document,
       key: key,
-      execution_id: mint_execution_id(),
+      execution_id: mint_execution_id(config, delivery, plan, key),
       inserted_at: delivery.now
     }
 
@@ -665,5 +675,24 @@ defmodule StatifierRouter.Delivery do
     config.repo.insert!(Config.put_meta(config, row))
   end
 
-  defp mint_execution_id, do: UXID.generate!(prefix: "ex")
+  # ADR-0002, section 3, and its Amendment of 2026-09-25: the router mints
+  # the id, through the host's `:execution_id` when the configuration names
+  # one. An answer that is not a non-empty string raises, as a malformed
+  # hook answer does: an execution cannot be created under it.
+  defp mint_execution_id(%Config{execution_id: nil}, _delivery, _plan, _key),
+    do: UXID.generate!(prefix: "ex")
+
+  defp mint_execution_id(%Config{execution_id: minter}, delivery, plan, key) do
+    address = [delivery.scope, plan.document, key]
+
+    case call_hook(minter, :execution_id, address) do
+      id when is_binary(id) and id != "" ->
+        id
+
+      other ->
+        raise ArgumentError,
+              ":execution_id answered #{inspect(other)} for #{inspect(List.to_tuple(address))}; " <>
+                "expected a non-empty string"
+    end
+  end
 end

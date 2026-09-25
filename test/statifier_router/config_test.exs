@@ -16,6 +16,11 @@ defmodule StatifierRouter.ConfigTest do
 
   @delivery RecordingDelivery
 
+  defmodule TripIds do
+    @moduledoc false
+    def execution_id(_scope, _document, key), do: "trip_" <> key
+  end
+
   @impressions %{
     id: "impressions_to_join",
     source: "ad_events",
@@ -162,6 +167,31 @@ defmodule StatifierRouter.ConfigTest do
             on_step: NotAModule
           ] do
         assert Config.new(base ++ [{name, value}]) == {:error, {:invalid_value, name, value}}
+      end
+    end
+
+    # sabotage: @minter named execution_id/2 -> the arity-3 fun was
+    # refused and the arity-2 one accepted, red; restored, green.
+    test "takes :execution_id as a module exporting execution_id/3 or an arity-3 fun" do
+      mint = fn _scope, _document, _key -> "trip_1" end
+      base = [repo: TestRepo, delivery: @delivery]
+
+      assert {:ok, %Config{execution_id: nil}} = Config.new(base)
+      assert {:ok, %Config{execution_id: ^mint}} = Config.new(base ++ [execution_id: mint])
+
+      assert {:ok, %Config{execution_id: TripIds}} =
+               Config.new(base ++ [execution_id: TripIds])
+
+      for value <- [
+            fn _scope, _document -> "trip_1" end,
+            fn _scope, _document, _key, _extra -> "trip_1" end,
+            StatifierRouter.Binding,
+            NotAModule,
+            "trip_",
+            true
+          ] do
+        assert Config.new(base ++ [execution_id: value]) ==
+                 {:error, {:invalid_value, :execution_id, value}}
       end
     end
 
