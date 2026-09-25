@@ -440,6 +440,39 @@ With neither set, the delivery calls statifier_persistence itself.
 `StatifierRouter.Config`'s documentation says what each receives and what an
 error from it rolls back.
 
+### Minting the execution id
+
+By default every execution the router creates gets a UXID with the prefix
+`ex`. A host that names its executions itself hands the configuration an
+`:execution_id`: a module exporting `execution_id/3`, or an arity-3 fun,
+taking `(scope, document, key)` and answering a non-empty string:
+
+```elixir
+defmodule MyApp.ParcelRouteIds do
+  def execution_id(_scope, _document, _key) do
+    "route_" <> MyApp.Ids.generate()
+  end
+end
+
+{:ok, config} =
+  StatifierRouter.Config.new(
+    repo: MyApp.Repo,
+    # ...the store, executor, resolver and chart resolver as before
+    execution_id: MyApp.ParcelRouteIds
+  )
+```
+
+The delivery calls it each time it is about to create an execution, and its
+answer is the id on the address row, the id statifier_persistence creates the
+execution under, and the id on the ledger. A duplicate delivery, and a
+delivery to an address that already has an execution, never call it. Any
+answer that is not a non-empty string raises `ArgumentError`. The id must be
+new: an id statifier_persistence already holds is refused with
+`{:error, :execution_exists}` and the delivery rolls back, so a callback that
+derives the id from the address alone fails the second time that address is
+filled. Under `:if_absent` a delivery that loses the race for an address row
+discards the id it minted, so not every answer ends up naming an execution.
+
 ## The host schedules the reapers
 
 This package runs no process, supervisor or scheduler. Rows that have

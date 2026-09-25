@@ -384,3 +384,64 @@ two speak of a status, the last two of what this release holds:
 The status cell for this record in `docs/adr/README.md` is flipped by a
 later bead, after all seven records, so the index lags this file until
 then.
+
+## Amendment (2026-09-25, sr-1b2): a host may mint the execution id
+
+Status: proposed
+
+Section 3 has the router mint every execution id, as a UXID with the
+prefix `ex`, and leaves the format to the code half. A host that already
+names its executions - its own prefix, its own id shape, an id its other
+tables carry - has had no way to make the router's id its own. This
+Amendment lets the host supply the mint while the router keeps the place
+it is called from.
+
+- **The key.** `StatifierRouter.Config` takes one optional key,
+  `:execution_id`: a module exporting `execution_id/3`, called as
+  `module.execution_id/3`, or a fun of arity 3. `Config.new/1` checks
+  that shape and nothing more, as it checks `:on_create` and `:on_step`
+  (ADR-0003, the Amendment of 2026-09-25), and refuses any other value
+  with `{:error, {:invalid_value, :execution_id, value}}`.
+- **What it is handed.** `(scope, document, key)`: the delivery's scope,
+  the document the binding or the send names, and the key. It is called
+  at the two places section 3's mint was: the address row an `:if_absent`
+  miss inserts, and every create an `:always_new` delivery makes
+  (section 7).
+- **Where its answer goes.** The answer is the execution id the address
+  row carries, the id `StatifierPersistence.Executions.create/4` (or the
+  host's `:on_create`) is handed, and the id every ledger row naming the
+  execution carries. The dedupe table has no execution id column and
+  gains none: a duplicate the dedupe claim catches never reaches the
+  mint, so it calls nothing and the id already on the address row
+  stands. A read address row and a `:never` miss mint nothing either.
+- **What it must answer.** A non-empty string. Any other answer raises
+  `ArgumentError` from the delivery, as a malformed hook answer does
+  (ADR-0003, the Amendment of 2026-09-25); a raise from the callback
+  itself propagates unrescued, as ADR-0003, section 1 leaves a raise. The id
+  must also be new: statifier_persistence refuses a create under an id
+  it already holds with `{:error, :execution_exists}` (its `create/4`
+  documentation, statifier_persistence 0.18.0), which rolls the
+  delivery back to its savepoint, the address row it inserted with it,
+  and is returned.
+- **What section 3 still says.** The router reads no meaning into an id,
+  whoever minted it. Section 3's "never derived from the address" and
+  "unrelated ids" describe the default mint and hold for it unchanged.
+  A host's callback is handed the address and may derive from it; a
+  host that derives the id from the address alone answers the same id
+  the second time that address is filled - after a reap, or on every
+  `:always_new` delivery - and meets the refusal above. Keeping ids new
+  is the host's.
+- **A mint that is not used.** Under `:if_absent` the mint runs before
+  the insert that races for the address row. A delivery that loses the
+  race reads the winner's row and steps the winner's execution, so the
+  id its callback answered is never written anywhere. A callback that
+  records the ids it hands out will hold some that name no execution.
+- **Absent is today.** With the key left out, the id is a UXID with the
+  prefix `ex`, exactly as before this Amendment.
+
+**Where the code is.** `StatifierRouter.Config`, whose `hooks/2` checks
+the key, and `StatifierRouter.Delivery`, whose `mint_execution_id/4`
+calls the callback or mints the default and checks the answer, in the
+pull request that carries this Amendment. The execution id tests pin the
+host's id on the address row, the created execution and the ledger, the
+duplicate that mints nothing, each refused answer, and the default.
