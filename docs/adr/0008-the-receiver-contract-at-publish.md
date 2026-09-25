@@ -673,3 +673,123 @@ as the first clause of `StatifierRouter.SendHandler`'s `enqueue/4`. At
 `57b9610`, as at `3711d85`, that private function takes five arguments;
 the clause and what it answers are as the Amendment says, so the anchor
 is `enqueue/5`.
+
+## Amendment (2026-09-24, sr-mne): every `unregistered_routes` entry carries a reason, and a literal delay to a registered route on a configuration with no timer queue is one, with reason `:no_timer_queue`
+
+Status: proposed
+
+Decision 6 has `check/3` compose `Routes.unregistered/2` unchanged, so
+an entry under `unregistered_routes` is `%{route, location}` and names
+one thing: a send of the configuration's type whose literal `target` is
+no registered route. A second send of that type is refused at run time
+and found by nothing at publish: a **delayed** send to a route the host
+did register, on a configuration with no timer queue.
+
+- **What the check does today.** `Routes.unregistered/2` never reads a
+  send's `delay`, and a send whose literal `target` is a registered route
+  passes it (its private `check_target/3`, read at `8b6bb8b`). No other
+  function of `StatifierRouter.Contracts` selects a send to a route
+  (decision 1).
+- **What happens to it at run time.** A delayed send whose `target`
+  resolves to a registered route is answered
+  `{:error, {:no_timer_queue, send_id}}` when the configuration's
+  `:timer_queue` is `nil`: the first clause of
+  `StatifierRouter.SendHandler`'s private `schedule/5` (read at
+  `8b6bb8b`). At the executor seam, a route some scope overrides with no
+  scope in reach is refused before that, as `{:no_delivery_scope, name}`
+  ("Delayed sends" in `StatifierRouter.SendHandler`'s moduledoc). Either
+  way nothing is queued, and the route is never handed the send.
+  The configuration has no per-scope timer queue: `:timer_queue` is one
+  value on `StatifierRouter.Config` (its moduledoc table), so the answer
+  is the same in every scope.
+
+### The decision
+
+1. **Every entry gains a reason.** An entry under `check/3`'s
+   `unregistered_routes` is `%{route, location, reason}`. Each entry of
+   `Routes.unregistered/2`'s `unregistered` list is carried with
+   `reason: :unregistered` and is otherwise unchanged. `check/3` keeps
+   its five keys; no sixth is added.
+2. **Existing patterns keep matching.** `route` and `location` keep their
+   meaning and their types, and `reason` is a key added beside them, so a
+   host's `%{route: _, location: _}` pattern matches every entry, of
+   either reason. `route` is a string for every `:no_timer_queue` entry;
+   it is `nil` only where it is today, an `:unregistered` send that
+   writes no `target`.
+3. **Which send is a `:no_timer_queue` entry.** A `<send>` whose `type`
+   is the literal configuration `:send_type`, whose `target` is a literal
+   name registered in `:route_adapters`, and which writes a literal
+   `delay`, on a configuration whose `:timer_queue` is `nil`. Its entry is
+   `%{route: name, location: location, reason: :no_timer_queue}`, with
+   `location` the `<send>` element's.
+   - **A literal `delay` only.** A `delayexpr` is not selected. A literal
+     `delay` that is not a duration never reaches the handler either (the
+     engine discards the send, as this record's 2026-09-23 Amendment
+     describes), and it is an entry all the same: either way the route is
+     never handed the send.
+   - **Never the reserved execution target.** A delayed send to it is the
+     `:delay` finding under `undeclared_events` (the 2026-09-23
+     Amendment) and nothing else. `StatifierRouter.Config.new/1` refuses a
+     registry entry under the reserved name, so a send to it never names a
+     registered route and is never selected here.
+   - **An unregistered target stays `:unregistered`.** The handler resolves
+     the target before it asks for a queue ("Delayed sends" in
+     `StatifierRouter.SendHandler`'s moduledoc), so a delayed send to a
+     name no route is registered under is one entry, with reason
+     `:unregistered`.
+   - **A `targetexpr` or a `typeexpr` send stays unchecked**, under the
+     reason `Routes.unregistered/2` gives it today.
+4. **Order.** The entries of both reasons are in document order, by each
+   `<send>` element's source offset, as `check/3` already orders
+   `unchecked`.
+5. **`Routes.unregistered/2` is unchanged.** Its answer, its `finding`
+   type and its `@doc` stay as they are; the reason is `check/3`'s. The
+   sentence of decision 6 that both route functions are composed
+   unchanged now holds for `Routes.unsupported_types/2` and for the
+   `unchecked` entries of `Routes.unregistered/2`, and not for its
+   `unregistered` list, whose entries each gain `reason`.
+6. **The finding reasons are closed sets.** `t:StatifierRouter.Contracts.reason/0`,
+   and with it the three reasons a binding finding carries, and the new
+   `unregistered_routes` reason type are closed: a host may match on them
+   exhaustively, and a reason is added only by a record that decides it,
+   in a minor release whose changelog names the addition as breaking.
+   `:delay`, added to `reason/0` in a patch release, is accepted as it
+   shipped; from this Amendment on, a new reason waits for a minor.
+
+### The code
+
+In the same change as this Amendment, citing it: `StatifierRouter.Contracts`'s
+`check/3` builds `unregistered_routes` in its private `route_findings/3`,
+which tags `Routes.unregistered/2`'s entries and merges them, in document
+order, with the entries its private `unqueued/2` selects by decision 3.
+The types are `t:StatifierRouter.Contracts.route_reason/0` and
+`t:StatifierRouter.Contracts.route_finding/0`, and the moduledoc states
+the closed sets. The tests are in `test/statifier_router/contracts_test.exs`,
+in the describe block `check/3's unregistered_routes (ADR-0008, the
+2026-09-24 Amendment)`, each with its sabotage note.
+
+### The example
+
+A courier's round sends each doorstep photo to a registered route, two
+minutes after the drop:
+
+    <send type="myapp:router" target="doorstep_photos" event="parcel.photo" delay="2m"/>
+
+On a configuration that registers `doorstep_photos` and names no
+`:timer_queue`, `check/3`'s `unregistered_routes` holds
+`%{route: "doorstep_photos", location: location, reason: :no_timer_queue}`
+for it. With a `:timer_queue`, it holds nothing for it. Written with
+`target="returns_desk"`, a name the host never registered, it holds
+`%{route: "returns_desk", location: location, reason: :unregistered}`,
+delay or not.
+
+### What this Amendment does not decide
+
+- **A `delayexpr` to a registered route on a configuration with no timer
+  queue.** It is refused at run time too, and this check does not report
+  it; whether it becomes an entry, or an `unchecked` one, is left to a
+  later record.
+- **A publish-time check of anything else the handler refuses at run
+  time for a registered route**, such as `{:no_delivery_scope, name}`.
+- **Whether the `unchecked` reasons are a closed set.** Decision 6 closes
+  the finding reasons only.

@@ -180,6 +180,10 @@ object of strings: `event`, `document`, `reason` (`undeclared`,
 that writes `delay` or `delayexpr`), and either `binding_id`
 for a binding or `location` for a `<send>`, the element's start as
 `line` and `column`.
+An `unregistered_routes` entry is an object of `route`, `location` and
+`reason`: `unregistered` when the `<send>` names no registered route, or
+`no_timer_queue` for a literal `delay` to a registered route on a
+configuration with no timer queue (ADR-0008, the 2026-09-24 Amendment).
 
 The publish cases prove one refusal: an event a sender or a binding
 names that the receiving document does not accept is refused at publish,
