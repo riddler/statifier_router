@@ -630,3 +630,61 @@ and each holds:
   `scope` read through `StatifierRouter.Addresses.by_execution/2` on
   the composed key's scope half; a sender with no address row gets no
   row.
+
+## Amendment (2026-09-24, sr-a7e): a live session's sends resolve in the scope the host names in `:processor_scope`
+
+Status: proposed
+
+Section 1 holds that the scope is the sender's and never a param. At the
+executor seam the scope a route override is read in is the delivery's:
+`StatifierRouter.Delivery` names it for the length of its transaction
+(`StatifierRouter.SendHandler.put_delivery_scope/1`, `@doc false`, read
+at `8b6bb8b`). The send-processor shape is reached by no delivery, so a
+live `Statifier.Session`'s send had no scope, and ADR-0005's Amendment of
+2026-09-23 (sr-ha3) left it resolving to an overridden route's registered
+configuration, saying a public way to name a scope on that shape was a
+separate change. This Amendment is that change. Ruled by the operator,
+2026-09-24; the code lands in the same change.
+
+- **The host names the scope in the configuration.**
+  `StatifierRouter.Config.new/1` takes one more option,
+  `:processor_scope`: a non-empty string, or a zero-arity fun, and `nil`
+  by default. Any other value is refused as
+  `{:invalid_value, :processor_scope, value}` (the private
+  `processor_scope/1` in `StatifierRouter.Config`).
+- **A string is the scope of every send; a fun is asked per send.** On
+  the send-processor shape `perform/2` resolves a send and a delayed send
+  whose target names a registered route in that scope, so the scope's
+  `:route_overrides` entry is merged over the registered configuration as
+  `StatifierRouter.Config.route/3` merges it. A fun is called by
+  `perform/2`, in the process that performs the send, once for each such
+  send, and answers the scope or `nil`; it is never called for a target
+  that names no registered route, which misses first as before (the
+  processor arm of `StatifierRouter.SendHandler`'s private `resolve/3`).
+- **A configuration that names no scope resolves as before.** With
+  `:processor_scope` absent, or a fun that answers `nil`, the lookup is
+  ADR-0005's Amendment of 2026-09-23 unchanged: an overridden route
+  resolves to its registered configuration, with no override applied and
+  no error (the handler's private `processor_scope/1`).
+- **A fun that answers anything else is a miss.** `perform/2` answers
+  `{:error, {:invalid_value, :processor_scope, value}}`, no route is
+  called and nothing is queued. It is a miss the host reports, as every
+  other `{:error, reason}` from `perform/2` is except `no_config`: the
+  engine discards `perform/2`'s return (`Statifier.Session`'s
+  `perform_instruction/3` clause for a handler instruction, at statifier
+  2.7.0, the version `mix.lock` resolves).
+- **The scope is still never a send param.** The host names it; a chart
+  cannot. A `scope` param on a `<send>` is data like any other and names
+  nothing. `put_delivery_scope/1` stays `@doc false`: it is the seam a
+  delivery sets, not a door a host calls.
+- **The executor seam does not read it.** `handle_effect/3` and the
+  completion hook resolve in the delivery's scope, and with none in reach
+  they refuse a route some scope overrides as
+  `{:no_delivery_scope, name}`, as ADR-0005's Amendment of 2026-09-23
+  decided; `:processor_scope` changes nothing there.
+- **What this Amendment does not decide.** It changes neither half of the
+  idempotency key (the scope half is still the session id on this shape,
+  ADR-0005, section 4), nor the scope a refusal's ledger row is read in
+  (the sender's address row, as the sr-p6u Note has it), nor the execution
+  target on the send-processor shape, which is a later change. It grows
+  the public configuration, so it ships in a minor.

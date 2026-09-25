@@ -678,6 +678,145 @@ defmodule StatifierRouter.SendHandlerTest do
     end
   end
 
+  # ADR-0006's Amendment of 2026-09-24: on the send-processor shape the
+  # host names the scope a live session's sends resolve in, as
+  # `:processor_scope`, a static value or a zero-arity fun.
+  describe "the scope a live session names" do
+    setup do
+      on_exit(&SendHandler.delete_config/0)
+      :ok
+    end
+
+    defp perform_send(effect) do
+      event = SendEvent.build(effect, "session_1")
+
+      {:ok, [{:handler, SendHandler, payload}]} =
+        SendHandler.deliver(effect, event, %{session_id: "session_1"})
+
+      SendHandler.perform(payload, %{session_id: "session_1"})
+    end
+
+    # sabotage: resolve/3's processor arm asked Config.route/3 with
+    # override_scope/0 alone (the shape before this change) -> the send
+    # reached the registered sink and the delayed row carried the
+    # registered configuration, red; restored, green.
+    test "a static scope applies its override to a send and to a delayed send" do
+      :ok =
+        SendHandler.put_config(
+          handler_config(
+            route_overrides: @staging,
+            processor_scope: "staging",
+            timer_queue: {RecordingTimerQueue, %{}}
+          )
+        )
+
+      assert perform_send(send_effect()) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, {"session_1", _position, 1}}
+
+      assert perform_send(delayed_effect()) == :ok
+
+      assert [%{scope: "session_1", config: %{sink: "staging_sink"}}] =
+               RecordingTimerQueue.entries()
+    end
+
+    # sabotage: processor_scope/1 answered {:ok, nil} for a fun without
+    # calling it -> both sends reached the registered sink and the fun was
+    # never called, red; restored, green. sabotage: the fun was called
+    # once when put_config/1 installed the configuration and its first
+    # answer kept -> the second send resolved in "staging" too, red;
+    # restored, green.
+    test "a zero-arity fun is called once for each send, and its answer is that send's scope" do
+      pid = self()
+      scopes = :counters.new(1, [])
+
+      scope = fn ->
+        :counters.add(scopes, 1, 1)
+        send(pid, :scope_asked)
+        if :counters.get(scopes, 1) == 1, do: "staging", else: nil
+      end
+
+      :ok =
+        SendHandler.put_config(handler_config(route_overrides: @staging, processor_scope: scope))
+
+      assert perform_send(send_effect()) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
+      assert_received :scope_asked
+      refute_received :scope_asked
+
+      # The fun answers nil for the second send: no scope, so the
+      # registered configuration, as a configuration naming none resolves.
+      assert perform_send(send_effect(send_id: "send_2")) == :ok
+      assert_received {:routed, %{sink: "joined_records"}, _event, _key}
+      assert_received :scope_asked
+    end
+
+    # sabotage: processor_scope/1 answered {:ok, other} for any answer ->
+    # an atom reached Config.route/3 as a scope, matched no override and
+    # the send went to the registered sink, red; restored, green.
+    test "a fun that answers no scope and no nil is a miss, and nothing is routed or queued" do
+      :ok =
+        SendHandler.put_config(
+          handler_config(
+            route_overrides: @staging,
+            processor_scope: fn -> :staging end,
+            timer_queue: {RecordingTimerQueue, %{}}
+          )
+        )
+
+      assert perform_send(send_effect()) ==
+               {:error, {:invalid_value, :processor_scope, :staging}}
+
+      assert perform_send(delayed_effect()) ==
+               {:error, {:invalid_value, :processor_scope, :staging}}
+
+      refute_received {:routed, _config, _event, _key}
+      assert RecordingTimerQueue.entries() == []
+    end
+
+    # sabotage: resolve/3's processor arm called processor_scope/1 before
+    # asking whether the name is registered -> the fun was called for a
+    # send that could only miss, red; restored, green.
+    test "an unregistered name misses before the fun is called" do
+      :ok = Sandbox.checkout(TestRepo)
+      pid = self()
+
+      :ok =
+        SendHandler.put_config(
+          handler_config(processor_scope: fn -> send(pid, :scope_asked) && "staging" end)
+        )
+
+      assert perform_send(send_effect(target: "audit_log")) ==
+               {:error, {:unregistered_route, "audit_log"}}
+
+      refute_received :scope_asked
+    end
+
+    # The scope is never a send param (ADR-0006, section 1): a chart that
+    # writes one names nothing.
+    #
+    # sabotage: perform/2's {:send, ...} arm set the configuration's
+    # :processor_scope from the send's "scope" param -> the param chose
+    # the staging override, red; restored, green.
+    test "a scope param on the send is not the scope" do
+      :ok = SendHandler.put_config(handler_config(route_overrides: @staging))
+
+      assert perform_send(send_effect(data: %{"scope" => "staging"})) == :ok
+      assert_received {:routed, %{sink: "joined_records"}, _event, _key}
+    end
+
+    # sabotage: resolve/3's seam arm read :processor_scope when no delivery
+    # scope was in reach -> the seam send reached the staging sink instead
+    # of being refused, red; restored, green.
+    test "the executor seam does not read it" do
+      config = handler_config(route_overrides: @staging, processor_scope: "staging")
+
+      assert SendHandler.handle_effect(config, {:send, send_effect()}, seam("ex_1")) ==
+               {:error, {:no_delivery_scope, "joined_records"}}
+
+      refute_received {:routed, _config, _event, _key}
+    end
+  end
+
   describe "the durable timer queue" do
     # sabotage: schedule/5 wrote the entry without the route name -> a
     # cancel, which carries no target, had nothing to fire against, red;
