@@ -117,7 +117,23 @@ defmodule StatifierRouter.ExecutionTargetTest do
   </scxml>
   """
 
+  # A parcel scanned from depot to doorstep. It takes `loaded` and
+  # `delivered` and no other event, so a send of anything else to it is one
+  # its state has no transition for.
+  @parcel """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="at_depot">
+    <state id="at_depot">
+      <transition event="loaded" target="on_van"/>
+    </state>
+    <state id="on_van">
+      <transition event="delivered" target="doorstep"/>
+    </state>
+    <final id="doorstep"/>
+  </scxml>
+  """
+
   @documents %{
+    "parcel_route" => @parcel,
     "plain_join" => @plain,
     "sending_join" => @sending,
     "malformed_join" => @malformed,
@@ -281,6 +297,34 @@ defmodule StatifierRouter.ExecutionTargetTest do
                |> ledger()
                |> Enum.filter(&(&1.binding_id == "execution"))
                |> Enum.map(& &1.outcome)
+    end
+  end
+
+  describe "a send the receiving execution does not take" do
+    # ADR-0004, the Note of 2026-09-25: dropped: unmatched_event is
+    # route/3's, and this door keeps ADR-0006's outcomes.
+    # sabotage: taken/7's `%Binding{}` match was loosened to any plan ->
+    # the send came back {:error, {:send_undelivered, :unmatched_event}}
+    # and the ledger read "dropped: unmatched_event", red; restored, green.
+    test "is created_and_delivered as before, and the sender is told nothing new" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      # The parcel's depot state has no transition on the send's event.
+      assert SendHandler.handle_effect(
+               config,
+               {:send, send_effect(%{"document" => "parcel_route", "key" => "pcl_4821"})},
+               seam(sender)
+             ) == :ok
+
+      assert [%Address{key: "pcl_4821", execution_id: receiver}] =
+               addresses(config, "parcel_route")
+
+      assert {:ok, [%{event: %{name: "pair.joined"}}]} =
+               Executions.inputs(config.store, receiver)
+
+      assert %Ledger{outcome: "created_and_delivered", key: "pcl_4821"} =
+               List.last(ledger(config))
     end
   end
 

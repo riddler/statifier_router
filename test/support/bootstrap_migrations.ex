@@ -14,7 +14,8 @@ defmodule StatifierRouter.BootstrapMigrations do
   @migrations [
     {20_260_919_000_101, __MODULE__.DefaultTables},
     {20_260_919_000_102, __MODULE__.PersistenceTables},
-    {20_260_919_000_103, __MODULE__.SubscriptionsTable}
+    {20_260_919_000_103, __MODULE__.SubscriptionsTable},
+    {20_260_925_000_104, __MODULE__.PersistenceEndedAt}
   ]
 
   defmodule DefaultTables do
@@ -51,9 +52,25 @@ defmodule StatifierRouter.BootstrapMigrations do
     alias StatifierPersistence.Ecto.Migrations
 
     # statifier_persistence's tables, which the delivery tests create and
-    # step executions in, through StatifierRouter.TestPersistence.
-    def up, do: Migrations.up(for: StatifierRouter.TestPersistence)
-    def down, do: Migrations.down(for: StatifierRouter.TestPersistence)
+    # step executions in, through StatifierRouter.TestPersistence. Capped
+    # at V07, the newest version statifier_persistence 0.13 shipped, so a
+    # database this ran against before stays the one the next migration
+    # upgrades, as a host's would.
+    def up, do: Migrations.up(for: StatifierRouter.TestPersistence, version: 7)
+    def down, do: Migrations.down(for: StatifierRouter.TestPersistence, from: 7)
+  end
+
+  defmodule PersistenceEndedAt do
+    @moduledoc false
+    use Ecto.Migration
+
+    alias StatifierPersistence.Ecto.Migrations
+
+    # What a host already at V07 writes for statifier_persistence 0.17 and
+    # later: `from:` is inclusive, so `from: 8` runs V08 (the executions
+    # table's `ended_at`) and nothing before it.
+    def up, do: Migrations.up(for: StatifierRouter.TestPersistence, from: 8, version: 8)
+    def down, do: Migrations.down(for: StatifierRouter.TestPersistence, from: 8, version: 8)
   end
 
   @doc "Applies every bootstrap migration, tolerating `:already_up`."

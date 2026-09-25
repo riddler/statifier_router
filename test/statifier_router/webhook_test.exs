@@ -104,13 +104,16 @@ defmodule StatifierRouter.WebhookTest do
                Webhook.handle(config, request(), now: @now)
 
       # A different body under the same key is a different message, so it
-      # is delivered to the execution the first one created.
+      # is stepped into the execution the first one created. That execution
+      # already left the state that takes an impression, so the step
+      # selects nothing: dropped: unmatched_event (ADR-0004, the Note of
+      # 2026-09-25).
       other_body = ~s({"kind":"impression","impression_id":"imp_7f3a","placement":"footer"})
 
       other =
         request(%{raw_body: other_body, data: Map.put(@data, "placement", "footer")})
 
-      assert {:ok, [{:delivered, "impressions_to_join", ^execution_id}, _no_match]} =
+      assert {:ok, [{:dropped, "impressions_to_join", :unmatched_event}, _no_match]} =
                Webhook.handle(config, other, now: @now)
 
       assert executions() == 1
@@ -118,7 +121,8 @@ defmodule StatifierRouter.WebhookTest do
       assert Enum.map(ledger(config), &{&1.outcome, &1.message_id}) == [
                {"created_and_delivered", @body_sha},
                {"duplicate", @body_sha},
-               {"delivered", Base.encode16(:crypto.hash(:sha256, other_body), case: :lower)}
+               {"dropped: unmatched_event",
+                Base.encode16(:crypto.hash(:sha256, other_body), case: :lower)}
              ]
     end
 

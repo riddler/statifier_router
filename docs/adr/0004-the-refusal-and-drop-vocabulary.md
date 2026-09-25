@@ -419,3 +419,65 @@ this raise as ADR-0003, section 1 says it treats any other: it does not
 acknowledge the message, and the source hands it over again. The test
 "a raise from the key_refused ledger write propagates out of route/3"
 (`test/statifier_router/route_test.exs`, added with this Note) pins it.
+
+## Note (2026-09-25, sr-020): dropped: unmatched_event is recorded, and what it cannot tell apart
+
+This Note says what the outcome section 8 deferred means now that the
+package records it. It reopens no decision above it, and no line above it
+was edited.
+
+**What changed underneath.** Section 8 deferred the outcome because
+naming it needed the router to ask the chart what its current state
+accepts. It no longer needs that question. statifier 2.9.0 stamps the
+round's selection on the state it answers:
+`Statifier.Interpreter.handle_event/2` sets the state's `last_selection`
+to `:selected` when the delivered event selected at least one transition
+and to `:none` when it selected none, whether or not tracing is on
+(`t:Statifier.MachineState.last_selection/0`). statifier_persistence
+0.18.0's `StatifierPersistence.Executions.step/5` answers
+`{:ok, execution, state}` with that stepped state, and nothing in its
+drive after the round writes `last_selection`, so the router reads the
+answer it already holds and asks the chart nothing.
+
+**What the outcome means.** `{:dropped, binding_id, :unmatched_event}`,
+recorded on the binding's ledger as `dropped: unmatched_event`, means
+this delivery moved nothing: `step/5` took the event, and the event
+selected no transition in the execution's current configuration. It is
+decided after the step, on the answer's `last_selection` of `:none`, on
+both paths that step: an execution that existed, and an execution this
+delivery created and then stepped (`StatifierRouter.Delivery`, added
+with this Note). Its ledger row carries the key and the execution's id.
+It is the one drop whose event did reach the execution: `step/5`
+appended it to the input log before answering, so the input log holds
+the event, as it does for a delivery. A `last_selection` of `nil` means
+no round ran on this event, not that none matched, and keeps delivered
+or created_and_delivered. The ledger's `outcome` column is unconstrained
+text (`StatifierRouter.Migrations.V01.up/1`), so the new spelling needs
+no migration.
+
+**What it cannot tell apart, and why.** It does not mean "the chart can
+never take this event". `last_selection` is two-valued: it says whether
+any transition was selected for the event, not why none was. An event no
+transition of the current state names, an event whose every candidate
+transition had a false guard, and an event another state of the same
+chart would take all read `:none`, and so all record `dropped:
+unmatched_event`. Telling them apart needs an event vocabulary on the
+engine side, one the chart can be asked of; until one exists, a host
+that needs to know whether a name can ever be taken asks the publish
+check ADR-0008 describes.
+
+**Where it does not reach.** The outcome is `route/3`'s. An
+execution-to-execution send, delivered through
+`StatifierRouter.Delivery.deliver_event/4`, keeps the outcomes ADR-0006
+gives it: a send the receiving execution does not take is still
+delivered or created_and_delivered, and the sender is told nothing new.
+ADR-0008, decision 5's first bullet, "An event the receiver's chart
+never takes is not refused", therefore still holds for a send and no
+longer for a binding.
+
+Section 1's table and section 2's cells are read with this row beside
+them: where a binding's step selects no transition, a delivered or
+created_and_delivered cell records dropped: unmatched_event instead.
+Section 8's "a later record may add it" is met by this Note, and the
+Consequence "An event the chart ignores reads as delivered" no longer
+holds for a binding.
