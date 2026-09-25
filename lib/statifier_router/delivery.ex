@@ -104,6 +104,20 @@ defmodule StatifierRouter.Delivery do
   Nothing here writes the input log: `step/5` appends the event it steps
   (ADR-0003, section 1).
 
+  ## The create and step hooks
+
+  `StatifierRouter.Config`'s `:on_create` and `:on_step` stand in for the
+  two persistence calls above (ADR-0003, the Amendment of 2026-09-25).
+  When one is set, the delivery calls it where it would have called
+  `create/4` or `step/5`, with the same arguments, inside the same
+  transaction and savepoint, and reads its answer as it reads
+  persistence's: the execution's status decides a finish, the state's
+  `last_selection` decides an unmatched event, a `{:discarded, execution}`
+  from `:on_step` is a finish, and an `{:error, reason}` from either
+  rolls the delivery back to its savepoint and is returned. An answer
+  outside the contract raises `ArgumentError`. When neither is set, the
+  delivery calls statifier_persistence itself.
+
   ## The completion hook
 
   `StatifierRouter.Config`'s `:on_complete` names a registered route an
@@ -406,7 +420,7 @@ defmodule StatifierRouter.Delivery do
   defp create(config, plan, key, delivery, execution_id, row) do
     with {:ok, machine} <- resolve(config, delivery.scope, plan.document),
          {:ok, execution, state} <-
-           Executions.create(config.store, execution_id, machine, create_options(config)),
+           persistence_create(config, execution_id, machine, create_options(config)),
          :ok <- complete(config, execution, state) do
       if execution.status in @terminal do
         finished(config, plan, key, delivery, execution_id, row)
@@ -432,13 +446,7 @@ defmodule StatifierRouter.Delivery do
   end
 
   defp step(config, plan, key, delivery, {execution_id, row}, machine, outcome) do
-    case Executions.step(
-           config.store,
-           execution_id,
-           machine,
-           delivery.event,
-           step_options(config)
-         ) do
+    case persistence_step(config, execution_id, machine, delivery.event, step_options(config)) do
       {:ok, execution, state} ->
         with :ok <- complete(config, execution, state) do
           taken(config, plan, key, delivery, execution_id, outcome, state)
@@ -481,6 +489,45 @@ defmodule StatifierRouter.Delivery do
     if row, do: stamp_terminal_seen(config, row, delivery.now)
     record(config, plan, key, delivery, "dropped: finished", execution_id)
     {:ok, {:dropped, plan.id, :finished}}
+  end
+
+  # The two persistence calls, each through the host's hook when the
+  # configuration names one (ADR-0003, the Amendment of 2026-09-25). A hook
+  # is handed exactly the arguments the direct call would be, is called
+  # here, inside this delivery's transaction and savepoint, and its answer
+  # is read as persistence's would be. An answer outside the contract
+  # raises, as a malformed resolver answer does: the delivery could only
+  # guess at what it meant.
+  defp persistence_create(%Config{on_create: nil} = config, execution_id, machine, opts),
+    do: Executions.create(config.store, execution_id, machine, opts)
+
+  defp persistence_create(%Config{on_create: hook} = config, execution_id, machine, opts) do
+    case call_hook(hook, :create, [config.store, execution_id, machine, opts]) do
+      {:ok, _execution, _state} = ok -> ok
+      {:error, _reason} = error -> error
+      other -> malformed_hook(:on_create, other, execution_id)
+    end
+  end
+
+  defp persistence_step(%Config{on_step: nil} = config, execution_id, machine, event, opts),
+    do: Executions.step(config.store, execution_id, machine, event, opts)
+
+  defp persistence_step(%Config{on_step: hook} = config, execution_id, machine, event, opts) do
+    case call_hook(hook, :step, [config.store, execution_id, machine, event, opts]) do
+      {:ok, _execution, _state} = ok -> ok
+      {:discarded, _execution} = discarded -> discarded
+      {:error, _reason} = error -> error
+      other -> malformed_hook(:on_step, other, execution_id)
+    end
+  end
+
+  defp call_hook(hook, _function, args) when is_function(hook), do: apply(hook, args)
+  defp call_hook(hook, function, args), do: apply(hook, function, args)
+
+  defp malformed_hook(name, answer, execution_id) do
+    raise ArgumentError,
+          "#{inspect(name)} answered #{inspect(answer)} for #{inspect(execution_id)}; " <>
+            "expected the return contract of the persistence call it stands in for"
   end
 
   # The two doors take the snapshot in different places, and a helper that

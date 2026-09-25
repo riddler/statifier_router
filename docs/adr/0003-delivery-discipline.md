@@ -597,3 +597,68 @@ the one that carried the Amendment.
   delivery and nothing of the host's" is the pin the Amendment names:
   a host transaction that calls `route/3`, meets an unresolved
   document and still commits the row it wrote first.
+
+## Amendment (2026-09-25, sr-vp1): a host may stand in for create/4 and step/5, and the transaction stays the delivery's
+
+Status: proposed
+
+Section 1 has the delivery call statifier_persistence's
+`Executions.create/4` and `Executions.step/5` itself, inside its
+transaction. A host whose own engine wraps those two calls - its own
+context around them, its own rows beside them, its own redrive - has had
+to choose between that wrapping and this package's transaction, savepoint,
+dedupe and ledger. This Amendment lets it keep both.
+
+- **The two keys.** `StatifierRouter.Config` takes two optional keys,
+  `:on_create` and `:on_step`. Each is a module exporting the function it
+  stands in for (`create/4`, `step/5`), called as `module.create/4` or
+  `module.step/5`, or a fun of that function's arity. `Config.new/1`
+  checks that shape and nothing more, and refuses any other value with
+  `{:error, {:invalid_value, name, value}}`.
+- **Their contracts are persistence's.** `:on_create` is handed
+  `(store, execution_id, machine, opts)` and answers
+  `{:ok, execution, state}` or `{:error, reason}`, the contract of
+  `StatifierPersistence.Executions.create/4` at statifier_persistence
+  0.18.0. `:on_step` is handed `(store, execution_id, machine, event,
+  opts)` and answers `{:ok, execution, state}`, `{:discarded, execution}`
+  or `{:error, reason}`, the contract of `step/5` at the same version.
+  The arguments are exactly those the direct call would have been handed:
+  the configuration's `:store`, the execution id the delivery minted or
+  read, the chart the resolver or the chart resolver answered, the event
+  the delivery built, and the snapshot options placed as the sr-5pi Note
+  above places them.
+- **The answer is read as persistence's would be.** The execution's
+  status decides a finish (section 4 and ADR-0004, section 3), the
+  state's `last_selection` decides an unmatched event (ADR-0004, the Note
+  of 2026-09-25), a `{:discarded, execution}` from `:on_step` is a
+  finish, the answered execution's donedata is what `:on_complete` hands
+  on, and an `{:error, reason}` from either is the delivery's error. An
+  answer outside the contract raises `ArgumentError`, as a malformed
+  resolver answer does.
+- **The transaction rule.** A hook is called where the direct call was,
+  inside the delivery's transaction and inside its savepoint (the
+  Amendment of 2026-09-23), after the dedupe claim and any address row
+  and before the ledger row. What it writes through the configuration's
+  repo joins that transaction: an `{:error, reason}` from the hook, or
+  from anything after it, rolls back to the savepoint and takes the
+  hook's own writes with the delivery's. A hook answers an error as a
+  value and never calls `c:Ecto.Repo.rollback/1`, for the reason the
+  Amendment of 2026-09-23 gives. A hook that writes through another repo
+  or another connection writes outside the delivery and survives its
+  rollback; that is the host's to keep, as the `:store` rule of section
+  1 is. A raise from a hook is section 1's raise.
+- **Both doors.** `deliver/4` and `deliver_event/4` reach the two calls
+  through the same functions, so an execution-to-execution send is
+  created and stepped through the hooks as a binding's delivery is.
+- **Absent is today.** With neither key set, the delivery calls
+  `create/4` and `step/5` itself, exactly as before this Amendment. The
+  router still writes no input of its own: section 1's sentence on the
+  input log binds this package, and a hook is expected to reach
+  `step/5` itself inside its own wrapping.
+
+**Where the code is.** `StatifierRouter.Config`, whose `hooks/1` checks
+the two keys, and `StatifierRouter.Delivery`, whose
+`persistence_create/4` and `persistence_step/5` make the call through the
+hook or directly, in the pull request that carries this Amendment. The
+persistence hooks tests pin the arguments against the direct call's, and
+each arm of each contract.

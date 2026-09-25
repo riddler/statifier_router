@@ -379,6 +379,22 @@ separate callback, `:chart_resolver`, from a content hash to
 `{:ok, machine}` or `:error`: the chart the execution's record names. A host
 with a publish store implements both over it.
 
+### Wrapping the create and step calls
+
+A host whose own engine wraps statifier_persistence's two doors can hand the
+configuration a stand-in for each. The delivery calls it where it would have
+called persistence, with the same arguments, inside the same transaction and
+savepoint, and reads its answer as it reads persistence's:
+
+| Option | Stands in for | Takes | Answers |
+|---|---|---|---|
+| `:on_create` | `StatifierPersistence.Executions.create/4` | a module exporting `create/4`, or an arity-4 fun | `{:ok, execution, state}` or `{:error, reason}` |
+| `:on_step` | `StatifierPersistence.Executions.step/5` | a module exporting `step/5`, or an arity-5 fun | `{:ok, execution, state}`, `{:discarded, execution}` or `{:error, reason}` |
+
+With neither set, the delivery calls statifier_persistence itself.
+`StatifierRouter.Config`'s documentation says what each receives and what an
+error from it rolls back.
+
 ## The host schedules the reapers
 
 This package runs no process, supervisor or scheduler. Rows that have

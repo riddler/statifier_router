@@ -124,6 +124,47 @@ defmodule StatifierRouter.ConfigTest do
                Config.new(repo: TestRepo, delivery: @delivery, executor: RecordingDelivery)
     end
 
+    # sabotage: hook?/3's fun clause accepted a fun of any arity -> the
+    # arity-3 :on_create was accepted, red; restored, green. Second
+    # mutation: hook?/3's module clause dropped function_exported?/3 -> a
+    # module without create/4 was accepted, red; restored, green.
+    test "takes :on_create and :on_step as a module exporting the call or a fun of its arity" do
+      create = fn _store, _id, _machine, _opts -> {:error, :none} end
+      step = fn _store, _id, _machine, _event, _opts -> {:error, :none} end
+      base = [repo: TestRepo, delivery: @delivery]
+
+      assert {:ok, %Config{on_create: nil, on_step: nil}} = Config.new(base)
+
+      assert {:ok, %Config{on_create: ^create, on_step: ^step}} =
+               Config.new(base ++ [on_create: create, on_step: step])
+
+      assert {:ok,
+              %Config{
+                on_create: StatifierPersistence.Executions,
+                on_step: StatifierPersistence.Executions
+              }} =
+               Config.new(
+                 base ++
+                   [
+                     on_create: StatifierPersistence.Executions,
+                     on_step: StatifierPersistence.Executions
+                   ]
+               )
+
+      for {name, value} <- [
+            on_create: fn _store, _id, _machine -> :ok end,
+            on_create: step,
+            on_create: StatifierRouter.Binding,
+            on_create: "create",
+            on_create: true,
+            on_step: create,
+            on_step: StatifierRouter.Binding,
+            on_step: NotAModule
+          ] do
+        assert Config.new(base ++ [{name, value}]) == {:error, {:invalid_value, name, value}}
+      end
+    end
+
     # sabotage: same_repo/2's mismatch arm returned :ok -> the store over
     # another repo was accepted, red; restored, green.
     test "refuses a store whose adapter options name another repo" do

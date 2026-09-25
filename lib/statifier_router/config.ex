@@ -17,6 +17,8 @@ defmodule StatifierRouter.Config do
   | `:executor` | the `StatifierPersistence.Executor` effects are handed to: a module or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:resolver` | the `StatifierRouter.Resolver` naming the chart a new execution starts on: a module implementing it or an arity-2 fun | required by `StatifierRouter.Delivery` |
   | `:chart_resolver` | a fun of `(content_hash)` compiling the chart an existing execution started on | required by `StatifierRouter.Delivery` |
+  | `:on_create` | what `StatifierRouter.Delivery` calls in place of `StatifierPersistence.Executions.create/4`, with its arguments and its return contract: a module exporting `create/4` or an arity-4 fun (see below) | `nil` (the delivery calls `create/4` itself) |
+  | `:on_step` | what `StatifierRouter.Delivery` calls in place of `StatifierPersistence.Executions.step/5`, with its arguments and its return contract: a module exporting `step/5` or an arity-5 fun (see below) | `nil` (the delivery calls `step/5` itself) |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
@@ -93,6 +95,32 @@ defmodule StatifierRouter.Config do
   attempts is bounded only by the source's own redelivery policy (the
   producer's contract, `StatifierRouter.Broadway`'s "Redelivery is the
   producer's contract").
+
+  ## Wrapping the create and step calls
+
+  `:on_create` and `:on_step` are for a host whose own engine wraps
+  statifier_persistence's two doors - its own context around them, its own
+  rows beside them - and that wants the router's transaction, savepoint,
+  dedupe and ledger to stay the router's (ADR-0003, the Amendment of
+  2026-09-25). Each takes exactly the arguments `StatifierRouter.Delivery`
+  would hand the direct call and answers with that call's own return
+  contract:
+
+    * `:on_create` - `(store, execution_id, machine, opts)`, answering
+      `{:ok, execution, state}` or `{:error, reason}`, as
+      `StatifierPersistence.Executions.create/4` does;
+    * `:on_step` - `(store, execution_id, machine, event, opts)`,
+      answering `{:ok, execution, state}`, `{:discarded, execution}` or
+      `{:error, reason}`, as `StatifierPersistence.Executions.step/5` does.
+
+  A module is called as `module.create/4` or `module.step/5`, so
+  `StatifierPersistence.Executions` itself is a valid value of either,
+  and behaves exactly as leaving the key out does. The delivery calls the
+  hook where it would have called persistence, inside the delivery's
+  transaction and its savepoint, and reads the answer as it reads
+  persistence's. `new/1` checks the shape only: a module that is loadable
+  and exports the function, or a fun of the right arity. Anything else is
+  refused with `{:error, {:invalid_value, name, value}}`.
 
   ## What the checks here do and do not catch
 
@@ -179,6 +207,8 @@ defmodule StatifierRouter.Config do
     :processor_scope,
     :on_complete,
     :timer_queue,
+    :on_create,
+    :on_step,
     bindings: [],
     persistence_options: [],
     route_adapters: %{},
@@ -208,6 +238,29 @@ defmodule StatifierRouter.Config do
   """
   @type processor_scope :: String.t() | (-> String.t() | nil)
 
+  @typedoc """
+  What the default delivery calls in place of
+  `StatifierPersistence.Executions.create/4`: a module exporting `create/4`,
+  or an arity-4 fun with that function's arguments and return contract.
+  """
+  @type on_create ::
+          module()
+          | (Storage.t(), String.t(), Statifier.Machine.t(), keyword() ->
+               {:ok, StatifierPersistence.Execution.t(), Statifier.MachineState.t()}
+               | {:error, term()})
+
+  @typedoc """
+  What the default delivery calls in place of
+  `StatifierPersistence.Executions.step/5`: a module exporting `step/5`, or
+  an arity-5 fun with that function's arguments and return contract.
+  """
+  @type on_step ::
+          module()
+          | (Storage.t(), String.t(), Statifier.Machine.t(), Statifier.Event.t(), keyword() ->
+               {:ok, StatifierPersistence.Execution.t(), Statifier.MachineState.t()}
+               | {:discarded, StatifierPersistence.Execution.t()}
+               | {:error, term()})
+
   @type t :: %__MODULE__{
           repo: module(),
           delivery: module(),
@@ -223,6 +276,8 @@ defmodule StatifierRouter.Config do
           processor_scope: processor_scope() | nil,
           on_complete: String.t() | nil,
           timer_queue: TimerQueue.t() | nil,
+          on_create: on_create() | nil,
+          on_step: on_step() | nil,
           table_prefix: String.t(),
           prefix: String.t() | nil
         }
@@ -256,11 +311,14 @@ defmodule StatifierRouter.Config do
     :on_complete,
     :timer_queue
   ]
+  # The two persistence calls a host may wrap, each with the function its
+  # module form must export (ADR-0003, the Amendment of 2026-09-25).
+  @hooks [on_create: {:create, 4}, on_step: {:step, 5}]
   @known [
     :repo,
     :delivery,
     :bindings,
-    :persistence_options | @delivery_keys ++ @storage_keys ++ @route_keys
+    :persistence_options | @delivery_keys ++ @storage_keys ++ @route_keys ++ Keyword.keys(@hooks)
   ]
 
   @schemas %{
@@ -279,7 +337,8 @@ defmodule StatifierRouter.Config do
   `:delivery`, then a missing or malformed `:store`, `:executor`,
   `:resolver` or `:chart_resolver`, in that order, then a `:store` whose
   adapter options name another repo, then a malformed
-  `:persistence_options`, then a storage value the
+  `:persistence_options`, then a malformed `:on_create` or `:on_step`,
+  then a storage value the
   table does not allow, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
   with `index` counted from zero, then a binding whose `id` is the
@@ -310,6 +369,7 @@ defmodule StatifierRouter.Config do
          :ok <- same_repo(needs[:store], repo),
          {:ok, routes} <- routes(opts),
          {:ok, persistence_options} <- persistence_options(opts, routes[:send_type]),
+         {:ok, hooks} <- hooks(opts),
          {:ok, storage} <- storage(opts),
          {:ok, bindings} <- bindings(opts) do
       {:ok,
@@ -319,7 +379,7 @@ defmodule StatifierRouter.Config do
            {:repo, repo},
            {:delivery, delivery},
            {:bindings, bindings},
-           {:persistence_options, persistence_options} | needs ++ storage ++ routes
+           {:persistence_options, persistence_options} | needs ++ storage ++ routes ++ hooks
          ]
        )}
     end
@@ -642,6 +702,28 @@ defmodule StatifierRouter.Config do
       value ->
         {:error, {:invalid_value, :timer_queue, value}}
     end
+  end
+
+  # ADR-0003, the Amendment of 2026-09-25: a hook is a module exporting the
+  # persistence function it stands in for, or a fun of that function's
+  # arity. Only the shape can be checked here; what it answers is checked
+  # by StatifierRouter.Delivery on each call.
+  defp hooks(opts) do
+    Enum.reduce_while(@hooks, {:ok, []}, fn {name, {function, arity}}, {:ok, acc} ->
+      value = Keyword.get(opts, name)
+
+      if hook?(value, function, arity),
+        do: {:cont, {:ok, [{name, value} | acc]}},
+        else: {:halt, {:error, {:invalid_value, name, value}}}
+    end)
+  end
+
+  defp hook?(nil, _function, _arity), do: true
+  defp hook?(value, _function, arity) when is_function(value, arity), do: true
+
+  defp hook?(value, function, arity) do
+    module?(value) and Code.ensure_loaded?(value) and
+      function_exported?(value, function, arity)
   end
 
   defp snapshot?(given) do
