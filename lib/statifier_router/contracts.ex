@@ -318,7 +318,11 @@ defmodule StatifierRouter.Contracts do
     each `<send>` element's source offset.
   - `:undeclared_events` - the findings of `undeclared_events/3`.
   - `:undeclared_binding_events` - `undeclared_binding_events/2` over the
-    configuration's `:bindings`.
+    configuration's `:bindings`. A configuration that gives a
+    `:bindings_resolver` keeps `bindings: []`, so this key is always empty
+    for it: `check/3` takes no scope, and the host checks each scope's
+    answer with `undeclared_binding_events/2` itself (ADR-0001, the
+    Amendment of 2026-09-25).
 
   `StatifierRouter.Routes.unsupported_types/2` is composed unchanged, and
   so are the `:unchecked` entries of `StatifierRouter.Routes.unregistered/2`;

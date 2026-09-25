@@ -292,3 +292,90 @@ above this Note was edited.
 
 The status cell for this record in `docs/adr/README.md` is flipped by a
 separate bead after all seven records; the index lags by design until then.
+
+## Amendment (2026-09-25, sr-h27): the binding set as a function of scope, exclusive with the static list
+
+Status: proposed
+
+Section 7 has the host hand the router its bindings, and until now it
+handed one list, `:bindings`, read the same for every scope. A host whose
+scopes each route their own sources to their own documents has had to put
+every scope's bindings in that one list, with nothing to keep one scope's
+events off another's bindings. This Amendment lets the binding set depend
+on the scope. Sections 1 to 6 stand: a binding's schema, its programs,
+its refusals and its fan-out are unchanged, and only where the list comes
+from changes.
+
+- **The key and its behaviour.** `StatifierRouter.Config` takes an
+  optional `:bindings_resolver`: a module implementing the one-callback
+  behaviour `StatifierRouter.BindingsResolver`, whose `resolve/1` takes a
+  scope and answers a list of `%StatifierRouter.Binding{}` structs, or an
+  arity-1 fun with that signature. `Config.new/1` checks it as it checks
+  `:resolver`: a fun of the right arity, or a loadable module exporting
+  the callback, and refuses any other value with
+  `{:error, {:invalid_value, :bindings_resolver, value}}`. A `nil` value
+  is the key left out.
+- **Exclusive with the static list.** A configuration that gives both
+  `:bindings` and a `:bindings_resolver` is refused with
+  `{:error, {:exclusive_keys, :bindings, :bindings_resolver}}`, whatever
+  the `:bindings` value, the empty list included, so neither silently
+  wins. A configuration with a resolver keeps `bindings: []`.
+- **Called at match time, per scope.** `StatifierRouter.route/3` asks the
+  resolver once per call, with the event's scope, after the event and the
+  options are checked and before any binding is evaluated; the answer
+  then plays the part the static list plays, in the order given
+  (sections 1 and 4). Caching is the host's: nothing in this package
+  keeps an answer between calls.
+- **Each answer is checked as the list is.** Section 1 refuses a
+  duplicated `id` when the host hands the router its bindings; for a
+  resolver that moment is every answer. An answer carrying a binding
+  under the reserved execution-target name is refused with
+  `{:reserved_binding_id, name}` and one carrying a duplicated `id` with
+  `{:duplicate_binding_id, id}`, the terms `Config.new/1` refuses the
+  static list with; `route/3` returns either as `{:error, reason}` before
+  any binding is evaluated, so nothing is written (ADR-0004, section 7).
+  An answer that is not a list of built bindings raises `ArgumentError`,
+  as a malformed `:resolver` answer does. The structs are trusted as
+  `StatifierRouter.Binding.new/1` built them, as a prebuilt struct in the
+  static list is.
+- **Reader by reader.** Five places read the binding set, and each does
+  one thing under a resolver:
+  - `route/3`, the matcher, reads the answer for the event's scope, as
+    above.
+  - The Broadway partitioner has the event's scope in hand and reads the
+    answer for it; an answer the checks above refuse is partitioned by
+    the message id, as an unaddressable message is, and `route/3` fails
+    the message.
+  - `subscribe/3` has no event, so it reads the scope from the
+    subscribing execution's address row and looks for the binding in the
+    answer for that scope. The row is therefore read before the binding
+    is checked, and an execution with no row is refused as
+    `{:unaddressed_execution, id}` whether or not the binding exists. An
+    answer the checks refuse raises `ArgumentError`, because this
+    function's return names only its two refusals.
+  - The publish-time checks (ADR-0008) take no scope. `check/3` reads the
+    configuration's `bindings: []`, so its `:undeclared_binding_events`
+    is empty under a resolver, and a host checks each scope's answer with
+    `undeclared_binding_events/2`, as ADR-0008, decision 2 already has a
+    host whose declarations differ by scope do. That decision says a
+    binding applies in every scope its events carry; that holds for the
+    static list, and under a resolver a binding applies in the scopes
+    whose answer carries it.
+  - The address reaper (ADR-0002, sections 5 and 6) has always taken the
+    host's bindings as its own argument rather than the configuration's.
+    A host with a resolver hands it the bindings of every scope it
+    routes; a row's horizon is read by document alone, so a document
+    bound in several scopes keeps the longest horizon among them.
+- **Absent is today.** With no `:bindings_resolver`, every reader reads
+  `:bindings` exactly as before this Amendment, `subscribe/3` included:
+  it checks the binding before it reads the address row, as it always
+  has.
+
+**Where the code is.** `StatifierRouter.BindingsResolver`, the behaviour;
+`StatifierRouter.Config`, whose `binding_source/1` checks the two keys and
+whose `bindings_for/2` answers the binding set of one scope with the
+checks above; `StatifierRouter`, whose `route/3` and `subscribe/3` read
+it; and `StatifierRouter.Broadway`, whose `partition/3` reads it; in the
+pull request that carries this Amendment. The bindings resolver tests pin
+two scopes answering different bindings for one source and the refusal of
+both keys together.

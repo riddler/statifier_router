@@ -129,7 +129,9 @@ defmodule StatifierRouter.Addresses do
   @doc """
   Stamps and deletes the address rows under `config` as the module
   documentation describes, with each row's horizon computed from
-  `bindings`.
+  `bindings`. A host whose configuration gives a `:bindings_resolver`
+  hands it the bindings of every scope it routes, since a row's horizon
+  is read by document alone (ADR-0001, the Amendment of 2026-09-25).
 
   `opts`:
 
