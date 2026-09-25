@@ -445,3 +445,39 @@ calls the callback or mints the default and checks the answer, in the
 pull request that carries this Amendment. The execution id tests pin the
 host's id on the address row, the created execution and the ledger, the
 duplicate that mints nothing, each refused answer, and the default.
+
+## Note (2026-09-25, sr-cgw): a host column at a fixed position
+
+A Note, not an amendment: it decides nothing and changes no decision.
+Section 1 leaves the migrations that create the address table, and the
+table prefix a host may set, to the code half. This records what the
+code half now also lets a host do there, so that the next reader does
+not have to derive it from the migrations.
+
+- **Three layout options, statifier_persistence's.**
+  `StatifierRouter.Migrations.up/1` takes `:leading_columns`,
+  `:timestamps_position` and `:column_collations` under the spellings
+  and validation rules statifier_persistence's migrations helper uses
+  (its `StatifierPersistence.Ecto.Config`, statifier_persistence
+  0.18.0). They are options of the migration, never keys of
+  `StatifierRouter.Config`; `down/1` accepts them and ignores them.
+- **All four tables, each laid out by the version that creates it.**
+  V01 lays out the address, dedupe and routing ledger tables and V02 the
+  subscription table. A host column goes immediately after `id` on all
+  four; `inserted_at` moves to follow it on the three that have one (the
+  dedupe table has none); a collation applies wherever a version declares
+  the named text column. No version re-places a column in a table that
+  already exists.
+- **Section 1's columns are unchanged.** The address table still holds
+  exactly the columns section 1 lists, with the unique index on
+  `(scope, document, key)`. A host column is one the package never reads
+  or writes: `StatifierRouter.Schema.Address` does not declare it.
+- **Absent is today.** With none of the three set, every table is built
+  exactly as before.
+
+**Where the code is.** `StatifierRouter.Migrations`, whose `layout!/1`
+validates the three options, and `StatifierRouter.Migrations.V01` and
+`StatifierRouter.Migrations.V02`, whose `up/1` places the columns, in
+the pull request that carries this Note. The host column tests read each
+table's columns back from the database catalog under the three options,
+and the migration tests read them back under none.

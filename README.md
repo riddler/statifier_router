@@ -519,6 +519,106 @@ config :my_app, Oban,
   ]
 ```
 
+## Placing a host column at a fixed position
+
+Postgres appends any column an `ALTER TABLE` adds, so a host that wants
+a column of its own at a fixed ordinal position on every table - a
+branch column at position 2, say - cannot get it by altering the tables
+afterwards. Pass `:leading_columns` to `StatifierRouter.Migrations` and
+it puts the columns there when it creates the tables:
+
+```elixir
+defmodule MyApp.Repo.Migrations.AddStatifierRouter do
+  use Ecto.Migration
+
+  @opts [leading_columns: [branch_id: {:text, null: true}]]
+
+  def up, do: StatifierRouter.Migrations.up(@opts)
+  def down, do: StatifierRouter.Migrations.down(@opts)
+end
+```
+
+Each entry is `name: {type, opts}`, the arguments `Ecto.Migration.add/3`
+takes. The columns go immediately after `id`, in the order given, in
+every table a version creates - V01's address, dedupe and routing ledger
+tables and V02's subscription table - so `branch_id` above sits at
+ordinal position 2 on all four. The options are the migration's, not
+`StatifierRouter.Config`'s: the configuration a host routes with does
+not take them. `down/1` accepts the same list and ignores it, so one
+list serves both directions.
+
+The option only places the column:
+
+- **It applies to a fresh create.** The columns exist only in tables a
+  version creates under the option. Each table is laid out by the
+  version that creates it, and no version re-places a column in a table
+  that already exists: a host that ran V01 without the option and adds
+  it to its V02 migration gets it on the subscription table alone.
+- **Defaults and `NOT NULL` belong to a later migration of your own.**
+  This package's inserts never name the column (below), so a `NOT NULL`
+  without a default that holds for every insert fails every write the
+  package makes. Declare the column nullable here, then give it its
+  default and its `NOT NULL` in your next migration with
+  `ALTER COLUMN ... SET DEFAULT` and `ALTER COLUMN ... SET NOT NULL`,
+  which keep it where it is. Re-adding it with `ADD COLUMN` would move it
+  to the end.
+- **The package never reads or writes it.** The schemas in
+  `StatifierRouter.Schema` do not declare the column, so every row this
+  package inserts leaves it to the column's default - `NULL` until you
+  set one.
+
+Two more options exist for a host that wrote these tables by hand and
+wants the helper to build exactly what it wrote:
+
+```elixir
+@opts [
+  leading_columns: [branch_id: {:text, null: true}],
+  timestamps_position: :leading,
+  column_collations: [execution_id: "C"]
+]
+```
+
+- **`timestamps_position: :leading`** puts `inserted_at` immediately
+  after the leading columns - after `id` when there are none - in every
+  table that has one: the address table, the routing ledger and the
+  subscription table. The dedupe table has no `inserted_at`, and the
+  address table's `terminal_seen_at` stays where it is. The default,
+  `:trailing`, is the layout this package has always built.
+- **`column_collations: [name: collation]`** declares that package
+  column with that collation wherever a version creates it: above,
+  `execution_id` is `COLLATE "C"` on the address table, the routing
+  ledger and the subscription table. The names it takes are the text
+  columns the versions declare - `scope`, `document`, `key`,
+  `execution_id`, `binding_id`, `message_id`, `outcome`, `reason` and
+  `invoke_id` - and the collation must be one your database knows. A
+  column of your own takes its collation in its `:leading_columns` opts
+  (`collation: "C"`, which `Ecto.Migration.add/3` already accepts).
+
+Like `:leading_columns`, both apply to a fresh create only. A malformed
+value for any of the three raises `ArgumentError` before any table is
+touched. Left out, every version builds exactly the tables it built
+before the options existed.
+
+To replace a hand-written migration with the helper **at the same
+migration version**, so that a database that already ran it runs
+nothing again:
+
+1. Configure the options above until the helper's tables match yours.
+   Prove it on a scratch database: build one copy with your migration
+   and one with the helper under a different `:table_prefix`, then
+   compare `information_schema.columns` (name, type, collation,
+   nullability, ordinal position) and `pg_indexes` table for table,
+   with the prefix stripped. The diff must be empty.
+2. Replace the body of your migration with the helper calls covering
+   the versions it stood in for, capped with `version:` and `from:` as
+   `StatifierRouter.Migrations` describes - a migration that stood in
+   for V01 alone becomes `up(@opts ++ [version: 1])` with
+   `down(@opts ++ [from: 1])`. Keep the file's name and version number.
+
+`Ecto.Migrator` records that version as already run on every existing
+database, so the new body only ever runs on a fresh one, where it
+builds what the comparison proved identical.
+
 ## Versioning
 
 statifier_persistence retires a chart it can prove nothing still needs, and
