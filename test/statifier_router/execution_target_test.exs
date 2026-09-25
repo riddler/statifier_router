@@ -483,6 +483,109 @@ defmodule StatifierRouter.ExecutionTargetTest do
     end
   end
 
+  describe "an immediate send on the send-processor shape" do
+    # sabotage: perform/2's execution-target clause removed -> the send
+    # went through the route registry and was answered
+    # {:unregistered_route, "execution"}, with no counter created, red;
+    # restored, green.
+    # sabotage: the clause passed the host's `:processor_scope` string to
+    # to_execution/3 as the sender -> no address row was found and the send
+    # was refused as unaddressed_sender, red; restored, green.
+    test "delivers through the address the sender's session id names, under that row's scope" do
+      config = config("plain_join", processor_scope: "not_the_senders_scope")
+      sender = sender(config)
+
+      assert perform_immediate(
+               config,
+               send_effect(%{
+                 "document" => "placement_counter",
+                 "key" => "home_top",
+                 "placement_id" => "home_top"
+               }),
+               sender
+             ) == :ok
+
+      assert [counter] = counter_addresses(config)
+      # ADR-0006, section 1: the scope is read from the sender's own
+      # address row, never from the host's `:processor_scope`.
+      assert counter.scope == @scope
+      assert counter.key == "home_top"
+
+      assert {:ok, [%{event: event, door: "step"}]} =
+               Executions.inputs(config.store, counter.execution_id)
+
+      assert event.name == "pair.joined"
+      assert event.data == %{"placement_id" => "home_top"}
+      assert event.origin == "#_scxml_" <> sender
+      assert event.origintype == @type_string
+    end
+
+    # sabotage: perform/2's execution-target clause called
+    # processor_scope/1 before to_execution/3, as resolve/3 does for a
+    # route -> the host's fun was asked for a send it plays no part in,
+    # red; restored, green.
+    test "never asks the host's scope fun for a send to the reserved target" do
+      pid = self()
+
+      config =
+        config("plain_join",
+          processor_scope: fn ->
+            send(pid, :processor_scope_asked)
+            "not_the_senders_scope"
+          end
+        )
+
+      sender = sender(config)
+
+      assert perform_immediate(
+               config,
+               send_effect(%{"document" => "placement_counter", "key" => "home_top"}),
+               sender
+             ) == :ok
+
+      refute_received :processor_scope_asked
+      assert [%Address{scope: @scope}] = counter_addresses(config)
+    end
+
+    # sabotage: to_execution/3 answered :ok for a sender with no address
+    # row -> the refusal was swallowed and the host had nothing to report,
+    # red; restored, green.
+    test "refuses a session id that names no address row by the executor seam's name, and records nothing" do
+      config = config("plain_join")
+      _sender = sender(config)
+      before = length(ledger(config))
+
+      assert perform_immediate(
+               config,
+               send_effect(%{"document" => "placement_counter", "key" => "home_top"}),
+               "session_no_address"
+             ) == {:error, {:send_refused, :unaddressed_sender}}
+
+      assert length(ledger(config)) == before
+      assert counter_addresses(config) == []
+    end
+
+    # sabotage: envelope/3 took a missing `document` param as
+    # "placement_counter" -> the processor shape's send was delivered
+    # rather than refused by `document`, red; restored, green.
+    test "refuses a malformed envelope by the same reason and row the executor seam writes" do
+      config = config("plain_join")
+      sender = sender(config)
+
+      assert perform_immediate(config, send_effect(%{"key" => "home_top"}), sender) ==
+               {:error, {:send_refused, :document}}
+
+      assert %Ledger{
+               binding_id: "execution",
+               scope: @scope,
+               outcome: "send_refused",
+               reason: "document",
+               key: nil,
+               execution_id: nil
+             } = List.last(ledger(config))
+    end
+  end
+
   describe "the reserved name at configuration time" do
     # sabotage: route_adapters/1 dropped its reserved-name check -> a host
     # registered a transport under the name a chart writes for the
@@ -550,7 +653,8 @@ defmodule StatifierRouter.ExecutionTargetTest do
         chart_resolver: fn content_hash -> Map.fetch(by_hash, content_hash) end,
         bindings: [impression_binding(document)],
         send_type: @type_string,
-        timer_queue: Keyword.get(opts, :timer_queue)
+        timer_queue: Keyword.get(opts, :timer_queue),
+        processor_scope: Keyword.get(opts, :processor_scope)
       )
 
     executor = fn effect, context ->
@@ -613,6 +717,20 @@ defmodule StatifierRouter.ExecutionTargetTest do
       },
       opts
     )
+  end
+
+  # The send-processor shape end to end: deliver/3 plans under the session
+  # id, and perform/2 runs with the configuration installed in this
+  # process, as a host's session would.
+  defp perform_immediate(config, effect, session_id) do
+    on_exit(&SendHandler.delete_config/0)
+    event = SendEvent.build(effect, session_id)
+
+    assert {:ok, [{:handler, SendHandler, payload}]} =
+             SendHandler.deliver(effect, event, %{session_id: session_id})
+
+    :ok = SendHandler.put_config(config)
+    SendHandler.perform(payload, %{session_id: session_id})
   end
 
   defp delayed_effect do
