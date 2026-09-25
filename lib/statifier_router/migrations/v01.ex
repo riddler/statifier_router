@@ -53,6 +53,14 @@ defmodule StatifierRouter.Migrations.V01 do
 
   Index: `<table>_binding_id_inserted_at_index` on `(binding_id,
   inserted_at)`, since the ledger is read per binding.
+
+  The tables above are the layout with no layout option set. The
+  `StatifierRouter.Migrations` layout options reshape them only as this
+  version creates them: `:leading_columns` go immediately after `id` on
+  all three, `timestamps_position: :leading` moves `inserted_at` to
+  follow them on the two tables that have one, and `:column_collations`
+  declares each named text column with its collation wherever a table
+  here has it.
   """
 
   use Ecto.Migration
@@ -60,11 +68,17 @@ defmodule StatifierRouter.Migrations.V01 do
   alias StatifierRouter.Config
 
   @typedoc "The resolved storage options `StatifierRouter.Migrations` hands each version."
-  @type storage :: %{table_prefix: String.t(), prefix: String.t() | nil}
+  @type storage :: %{
+          required(:table_prefix) => String.t(),
+          required(:prefix) => String.t() | nil,
+          optional(:leading_columns) => [{atom(), {term(), keyword()}}],
+          optional(:timestamps_position) => :trailing | :leading,
+          optional(:column_collations) => [{atom(), String.t()}]
+        }
 
   @doc "Creates the V01 tables and their indexes."
   @spec up(storage()) :: :ok
-  def up(%{table_prefix: table_prefix, prefix: prefix}) do
+  def up(%{table_prefix: table_prefix, prefix: prefix} = storage) do
     if prefix do
       execute(~s(CREATE SCHEMA IF NOT EXISTS "#{prefix}"))
     end
@@ -72,11 +86,13 @@ defmodule StatifierRouter.Migrations.V01 do
     addresses = Config.table_name(table_prefix, :addresses)
 
     create table(addresses, prefix: prefix) do
-      add(:scope, :text, null: false)
-      add(:document, :text, null: false)
-      add(:key, :text, null: false)
-      add(:execution_id, :text, null: false)
-      add(:inserted_at, :utc_datetime_usec, null: false)
+      add_leading_columns(storage)
+      add_inserted_at(storage, :leading)
+      add(:scope, :text, collated(storage, :scope, null: false))
+      add(:document, :text, collated(storage, :document, null: false))
+      add(:key, :text, collated(storage, :key, null: false))
+      add(:execution_id, :text, collated(storage, :execution_id, null: false))
+      add_inserted_at(storage, :trailing)
       add(:terminal_seen_at, :utc_datetime_usec, null: true)
     end
 
@@ -94,8 +110,9 @@ defmodule StatifierRouter.Migrations.V01 do
     dedupe = Config.table_name(table_prefix, :dedupe)
 
     create table(dedupe, prefix: prefix) do
-      add(:binding_id, :text, null: false)
-      add(:message_id, :text, null: false)
+      add_leading_columns(storage)
+      add(:binding_id, :text, collated(storage, :binding_id, null: false))
+      add(:message_id, :text, collated(storage, :message_id, null: false))
       add(:expires_at, :utc_datetime_usec, null: false)
     end
 
@@ -111,14 +128,16 @@ defmodule StatifierRouter.Migrations.V01 do
     ledger = Config.table_name(table_prefix, :routing_ledger)
 
     create table(ledger, prefix: prefix) do
-      add(:binding_id, :text, null: false)
-      add(:message_id, :text, null: false)
-      add(:scope, :text, null: false)
-      add(:outcome, :text, null: false)
-      add(:key, :text, null: true)
-      add(:execution_id, :text, null: true)
-      add(:reason, :text, null: true)
-      add(:inserted_at, :utc_datetime_usec, null: false)
+      add_leading_columns(storage)
+      add_inserted_at(storage, :leading)
+      add(:binding_id, :text, collated(storage, :binding_id, null: false))
+      add(:message_id, :text, collated(storage, :message_id, null: false))
+      add(:scope, :text, collated(storage, :scope, null: false))
+      add(:outcome, :text, collated(storage, :outcome, null: false))
+      add(:key, :text, collated(storage, :key, null: true))
+      add(:execution_id, :text, collated(storage, :execution_id, null: true))
+      add(:reason, :text, collated(storage, :reason, null: true))
+      add_inserted_at(storage, :trailing)
     end
 
     create(
@@ -129,6 +148,31 @@ defmodule StatifierRouter.Migrations.V01 do
     )
 
     :ok
+  end
+
+  # Called first inside a `create table` block, right after the implicit
+  # `id`: `add/3` appends to the table being created, so the host's columns
+  # land at positions 2..n, in the order given.
+  defp add_leading_columns(storage) do
+    for {name, {type, opts}} <- Map.get(storage, :leading_columns, []),
+        do: add(name, type, opts)
+  end
+
+  # Called twice in a table that has `inserted_at`: once after the leading
+  # columns and once where the package's layout puts it. Only the call
+  # whose position matches the configured one adds the column.
+  defp add_inserted_at(storage, position) do
+    if Map.get(storage, :timestamps_position, :trailing) == position,
+      do: add(:inserted_at, :utc_datetime_usec, null: false)
+  end
+
+  # The `add/3` opts for a package text column, carrying the collation
+  # `:column_collations` names for it, if any.
+  defp collated(storage, name, opts) do
+    case Keyword.fetch(Map.get(storage, :column_collations, []), name) do
+      {:ok, collation} -> Keyword.put(opts, :collation, collation)
+      :error -> opts
+    end
   end
 
   @doc "Drops the V01 tables in reverse creation order; the Postgres schema stays."

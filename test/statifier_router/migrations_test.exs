@@ -165,6 +165,22 @@ defmodule StatifierRouter.MigrationsTest do
     Map.new(rows, fn [name, columns] -> {name, columns} end)
   end
 
+  defp column_layout(table) do
+    %{rows: rows} =
+      SQL.query!(
+        TestRepo,
+        """
+        SELECT column_name, collation_name
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        ORDER BY ordinal_position
+        """,
+        [@schema, table]
+      )
+
+    Enum.map(rows, fn [name, collation] -> {name, collation} end)
+  end
+
   defp unique_suffix, do: Integer.to_string(System.unique_integer([:positive]))
 
   describe "every version through a host's delegating migration" do
@@ -206,6 +222,53 @@ defmodule StatifierRouter.MigrationsTest do
                  "invoke_id"
                ]
              }
+    end
+
+    # With no layout option set, every table keeps the column order and the
+    # default collations it had before the options existed.
+    #
+    # sabotage: made the :timestamps_position default in Migrations
+    # :leading -> red on kx_router_addresses, inserted_at came back second;
+    # restored, green.
+    test "lays every table out in the package's order with no layout option" do
+      assert column_layout("kx_router_addresses") == [
+               {"id", nil},
+               {"scope", nil},
+               {"document", nil},
+               {"key", nil},
+               {"execution_id", nil},
+               {"inserted_at", nil},
+               {"terminal_seen_at", nil}
+             ]
+
+      assert column_layout("kx_router_dedupe") == [
+               {"id", nil},
+               {"binding_id", nil},
+               {"message_id", nil},
+               {"expires_at", nil}
+             ]
+
+      assert column_layout("kx_router_routing_ledger") == [
+               {"id", nil},
+               {"binding_id", nil},
+               {"message_id", nil},
+               {"scope", nil},
+               {"outcome", nil},
+               {"key", nil},
+               {"execution_id", nil},
+               {"reason", nil},
+               {"inserted_at", nil}
+             ]
+
+      assert column_layout("kx_router_subscriptions") == [
+               {"id", nil},
+               {"binding_id", nil},
+               {"execution_id", nil},
+               {"invoke_id", nil},
+               {"scope", nil},
+               {"key", nil},
+               {"inserted_at", nil}
+             ]
     end
 
     # sabotage: dropped V01's routing_ledger scope column -> the insert
