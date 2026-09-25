@@ -54,6 +54,30 @@ defmodule StatifierRouter.Contracts do
     to the execution target is never delivered, so the lookup is not
     asked. A binding has no delay and never carries this reason.
 
+  ## The route findings
+
+  `check/3` also carries every `<send>` of the configuration's type that
+  will never be handed to the route its literal `target` names, under
+  `:unregistered_routes`, each entry `%{route, location, reason}`
+  (ADR-0008's 2026-09-24 Amendment):
+
+  - `:unregistered` - the `target` names no registered route, or the send
+    writes no `target`: `StatifierRouter.Routes.unregistered/2`'s finding.
+  - `:no_timer_queue` - the `target` names a registered route, the send
+    writes a literal `delay`, and the configuration has no
+    `:timer_queue`, so `StatifierRouter.SendHandler` never queues it and
+    refuses it, as `{:no_timer_queue, send_id}` once the route resolves.
+    A send to the reserved execution target is never this finding; its
+    delay is a `:delay` finding above.
+
+  ## The finding reasons are closed
+
+  `t:reason/0`, and so the three of them a `t:binding_finding/0` carries,
+  and `t:route_reason/0` are closed sets (ADR-0008's 2026-09-24
+  Amendment). A host may match on them exhaustively. A new reason arrives
+  only with a record that decides it, in a minor release whose changelog
+  names it as breaking.
+
   ## What cannot be checked
 
   Only a literal can be judged. A send `undeclared_events/3` selects but
@@ -103,9 +127,28 @@ defmodule StatifierRouter.Contracts do
 
   @typedoc """
   Which contract refused a name; see the moduledoc. `:delay` is a
-  `<send>`'s only; a binding finding never carries it.
+  `<send>`'s only; a binding finding never carries it. A closed set.
   """
   @type reason :: :undeclared | :undeclared_by_computed_set | :not_published | :delay
+
+  @typedoc """
+  Why a `<send>` of the configuration's type is not handed to the route
+  its literal `target` names; see the moduledoc. A closed set.
+  """
+  @type route_reason :: :unregistered | :no_timer_queue
+
+  @typedoc """
+  One entry under `check/3`'s `:unregistered_routes`: the route name, the
+  `<send>` element's location and the reason. `route` is `nil` only for
+  an `:unregistered` send that writes no `target`. It is
+  `t:StatifierRouter.Routes.finding/0` with `reason` added, so a pattern
+  on `route` and `location` alone matches every entry.
+  """
+  @type route_finding :: %{
+          route: String.t() | nil,
+          location: Location.t(),
+          reason: route_reason()
+        }
 
   @typedoc """
   The host's lookup: a receiving document id to its declared names, to
@@ -166,7 +209,7 @@ defmodule StatifierRouter.Contracts do
   @typedoc "What `check/3` answers; see its `@doc`."
   @type check_report :: %{
           unsupported_types: [Statifier.Send.Types.unsupported_send()],
-          unregistered_routes: [Routes.finding()],
+          unregistered_routes: [route_finding()],
           unchecked: [Routes.unchecked() | unchecked()],
           undeclared_events: [finding()],
           undeclared_binding_events: [binding_finding()]
@@ -262,8 +305,13 @@ defmodule StatifierRouter.Contracts do
   keys (ADR-0008, decision 6):
 
   - `:unsupported_types` - `StatifierRouter.Routes.unsupported_types/2`.
-  - `:unregistered_routes` - the `:unregistered` list of
-    `StatifierRouter.Routes.unregistered/2`.
+  - `:unregistered_routes` - every `<send>` of the configuration's type
+    that is never handed to the route its literal `target` names, as
+    `%{route, location, reason}` in document order: each entry of the
+    `:unregistered` list of `StatifierRouter.Routes.unregistered/2` with
+    reason `:unregistered`, and each send that writes a literal `delay`
+    to a registered route while the configuration has no `:timer_queue`,
+    with reason `:no_timer_queue` (see `t:route_finding/0`).
   - `:unchecked` - the unchecked entries of
     `StatifierRouter.Routes.unregistered/2` (`:typeexpr`, `:targetexpr`)
     and of `undeclared_events/3` together, in document order, ordered by
@@ -272,7 +320,10 @@ defmodule StatifierRouter.Contracts do
   - `:undeclared_binding_events` - `undeclared_binding_events/2` over the
     configuration's `:bindings`.
 
-  Both route functions are composed unchanged. A finding under either
+  `StatifierRouter.Routes.unsupported_types/2` is composed unchanged, and
+  so are the `:unchecked` entries of `StatifierRouter.Routes.unregistered/2`;
+  its `:unregistered` entries each gain `reason: :unregistered`, and
+  nothing else about them changes. A finding under either
   `:undeclared_events` or `:undeclared_binding_events` carries one of the
   three reasons, `:undeclared`, `:undeclared_by_computed_set` (the
   receiver declares nothing and `Statifier.Chart.check_accepts/2` finds
@@ -291,12 +342,43 @@ defmodule StatifierRouter.Contracts do
 
     %{
       unsupported_types: Routes.unsupported_types(config, machine),
-      unregistered_routes: routes.unregistered,
+      unregistered_routes: route_findings(config, machine, routes.unregistered),
       unchecked: Enum.sort_by(routes.unchecked ++ events.unchecked, & &1.location.start_offset),
       undeclared_events: events.undeclared,
       undeclared_binding_events: undeclared_binding_events(config.bindings, lookup)
     }
   end
+
+  # ADR-0008's 2026-09-24 Amendment: `Routes.unregistered/2`'s findings,
+  # each tagged `:unregistered`, and the delayed route sends a host with
+  # no timer queue refuses, merged in document order.
+  @spec route_findings(Config.t(), Machine.t(), [Routes.finding()]) :: [route_finding()]
+  defp route_findings(config, machine, unregistered) do
+    unregistered
+    |> Enum.map(&Map.put(&1, :reason, :unregistered))
+    |> Kernel.++(unqueued(config, machine))
+    |> Enum.sort_by(& &1.location.start_offset)
+  end
+
+  # A `<send>` of the configuration's literal type whose literal `target`
+  # is a registered route and which writes a literal `delay`, on a
+  # configuration with no timer queue. The reserved execution target is
+  # never a registered route (`Config.new/1` refuses one under that
+  # name), so the registry test is also what keeps such a send out; an
+  # unregistered target is `Routes.unregistered/2`'s finding, not this.
+  @spec unqueued(Config.t(), Machine.t()) :: [route_finding()]
+  defp unqueued(
+         %Config{timer_queue: nil, send_type: send_type, route_adapters: adapters},
+         %Machine{contents: contents}
+       )
+       when is_binary(send_type) do
+    for %Content.Send{type: {:static, ^send_type}, target: {:static, route}, delay: {:static, _}} =
+          node <- Tuple.to_list(contents),
+        Map.has_key?(adapters, route),
+        do: %{route: route, location: node.location, reason: :no_timer_queue}
+  end
+
+  defp unqueued(%Config{}, %Machine{}), do: []
 
   # One compiled executable-content node. Only an execution-target
   # `<send>` of this configuration's literal type is looked at.

@@ -5,6 +5,7 @@ defmodule StatifierRouter.ContractsTest do
   alias StatifierRouter.Config
   alias StatifierRouter.Contracts
   alias StatifierRouter.RecordingRoute
+  alias StatifierRouter.RecordingTimerQueue
   alias StatifierRouter.Routes
   alias StatifierRouter.TestRepo
 
@@ -74,6 +75,15 @@ defmodule StatifierRouter.ContractsTest do
     <send type="#{@type_string}" target="execution" #{event_attr} #{delay_attr}>#{params}</send>
     """
   end
+
+  # A send to the registered route `doorstep_photos`, written with the
+  # given extra attributes.
+  defp to_photos(attrs),
+    do: ~s(<send type="#{@type_string}" target="doorstep_photos" event="parcel.photo" #{attrs}/>)
+
+  # check/3's report over a courier round of `sends`, under `config(opts)`.
+  defp routes_of(sends, opts \\ []),
+    do: Contracts.check(config(opts), compile!(courier_round(sends)), declares_both())
 
   @parcel_params ~s(<param name="document" expr="'parcel'"/><param name="key" expr="parcel_id"/>)
 
@@ -555,13 +565,114 @@ defmodule StatifierRouter.ContractsTest do
     # Sabotage: dropping each entry's location from the unsupported_types
     # list in check/3 makes it differ from the direct call and this goes
     # red.
-    test "composes both route functions unchanged" do
+    test "composes unsupported_types unchanged and tags each unregistered route" do
       config = config()
       machine = compile!(courier_round(@mixed_sends))
       report = Contracts.check(config, machine, declares_both())
 
       assert report.unsupported_types == Routes.unsupported_types(config, machine)
-      assert report.unregistered_routes == Routes.unregistered(config, machine).unregistered
+
+      assert report.unregistered_routes ==
+               Enum.map(
+                 Routes.unregistered(config, machine).unregistered,
+                 &Map.put(&1, :reason, :unregistered)
+               )
+    end
+  end
+
+  describe "check/3's unregistered_routes (ADR-0008, the 2026-09-24 Amendment)" do
+    # Sabotage: tagging the Routes entries `:no_timer_queue` instead of
+    # `:unregistered` in route_findings/3 turns this red.
+    test "an unregistered route's entry carries reason :unregistered" do
+      sends = ~s(<send type="#{@type_string}" target="returns_desk" event="parcel.returned"/>)
+
+      assert [%{route: "returns_desk", reason: :unregistered}] =
+               routes_of(sends).unregistered_routes
+    end
+
+    # A map pattern ignores an extra key, so a host's existing
+    # `%{route: _, location: _}` match keeps matching every entry.
+    # Sabotage: building each :no_timer_queue entry without its `route`
+    # key in unqueued/2 leaves that entry unmatched and this goes red.
+    test "a route and location pattern matches every entry" do
+      sends = """
+      <send type="#{@type_string}" target="returns_desk" event="parcel.returned"/>
+      #{to_photos(~s(delay="2h"))}
+      """
+
+      entries = routes_of(sends).unregistered_routes
+      assert [_, _] = entries
+      assert Enum.all?(entries, &match?(%{route: route, location: _} when is_binary(route), &1))
+    end
+
+    # Sabotage: replacing unqueued/2's `Map.has_key?(adapters, route)`
+    # filter with `false`, so it answers [], turns this red.
+    test "a literal delay to a registered route with no timer queue is :no_timer_queue" do
+      assert [
+               %{
+                 route: "doorstep_photos",
+                 location: %{start_line: 4},
+                 reason: :no_timer_queue
+               }
+             ] = routes_of(to_photos(~s(delay="2h"))).unregistered_routes
+    end
+
+    # Sabotage: dropping `timer_queue: nil` from unqueued/2's first clause
+    # head reports the send even with a queue and this goes red.
+    test "a configuration with a timer queue has no :no_timer_queue entry" do
+      assert [] =
+               routes_of(to_photos(~s(delay="2h")), timer_queue: {RecordingTimerQueue, %{}}).unregistered_routes
+    end
+
+    # The ruling names a literal delay; a `delayexpr` is not selected.
+    # Sabotage: matching any non-nil `delay` in unqueued/2 (a
+    # `delay: delay` filter with `delay != nil`) reports this and it goes
+    # red.
+    test "a delayexpr is not a :no_timer_queue entry" do
+      assert [] = routes_of(to_photos(~s(delayexpr="photo_after"))).unregistered_routes
+    end
+
+    # Sabotage: dropping unqueued/2's `delay: {:static, _}` from the
+    # pattern reports every send to the route and this goes red.
+    test "an undelayed send to a registered route is not an entry" do
+      assert [] = routes_of(to_photos("")).unregistered_routes
+    end
+
+    # The reserved execution target is excluded: its delay is the
+    # `:delay` finding under undeclared_events, and nothing else.
+    # Sabotage: replacing unqueued/2's `Map.has_key?(adapters, route)`
+    # filter with `true` reports this send, and the unregistered one of
+    # the next test twice, and both go red.
+    test "a delayed send to the execution target is never a route entry" do
+      sends = delayed(~s(delay="2h"), ~s(event="parcel.delivered"), @parcel_params)
+
+      assert %{unregistered_routes: [], undeclared_events: [%{reason: :delay}]} =
+               routes_of(sends)
+    end
+
+    # The target is resolved first at run time, so the unregistered route
+    # is the one entry. Sabotage: replacing unqueued/2's
+    # `Map.has_key?(adapters, route)` filter with `true` adds a second,
+    # :no_timer_queue entry and this goes red.
+    test "a delayed send to an unregistered route is one :unregistered entry" do
+      sends =
+        ~s(<send type="#{@type_string}" target="returns_desk" event="parcel.returned" delay="2h"/>)
+
+      assert [%{route: "returns_desk", reason: :unregistered}] =
+               routes_of(sends).unregistered_routes
+    end
+
+    # Sabotage: dropping route_findings/3's `Enum.sort_by` puts the
+    # :no_timer_queue entry after the later :unregistered one and this
+    # goes red.
+    test "merges both reasons in document order" do
+      sends = """
+      #{to_photos(~s(delay="2h"))}
+      <send type="#{@type_string}" target="returns_desk" event="parcel.returned"/>
+      """
+
+      assert [%{reason: :no_timer_queue}, %{reason: :unregistered}] =
+               routes_of(sends).unregistered_routes
     end
   end
 end
