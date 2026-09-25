@@ -622,7 +622,7 @@ Every module named here lands in the same commit as this Note.
 A Note, not an amendment: it decides nothing and changes no decision. The
 Note above it says section 7's routing-ledger row "is not built" and that
 minting or widening a vocabulary for it was left for a ruling. The ruling
-was taken on 2026-09-21 (RF062-R1), the row is built, and that bullet is
+was taken on 2026-09-21, the row is built, and that bullet is
 superseded by this Note. Everything else that Note records still holds.
 
 **What was ruled.** That the row extends ADR-0006, section 6's send
