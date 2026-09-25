@@ -118,6 +118,8 @@ defmodule StatifierRouter.WebhookTest do
 
       assert executions() == 1
 
+      assert [_created, _duplicate, %{execution_id: ^execution_id}] = ledger(config)
+
       assert Enum.map(ledger(config), &{&1.outcome, &1.message_id}) == [
                {"created_and_delivered", @body_sha},
                {"duplicate", @body_sha},

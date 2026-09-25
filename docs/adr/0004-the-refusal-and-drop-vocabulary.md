@@ -423,21 +423,19 @@ acknowledge the message, and the source hands it over again. The test
 ## Note (2026-09-25, sr-020): dropped: unmatched_event is recorded, and what it cannot tell apart
 
 This Note says what the outcome section 8 deferred means now that the
-package records it. It reopens no decision above it, and no line above it
-was edited.
+package records it. It narrows section 3's rule and the second
+Consequence, as its last paragraph says: this drop is decided after a
+step, and can leave behind an execution whose input log holds the event.
+No line above it was edited.
 
 **What changed underneath.** Section 8 deferred the outcome because
 naming it needed the router to ask the chart what its current state
-accepts. It no longer needs that question. statifier 2.9.0 stamps the
-round's selection on the state it answers:
-`Statifier.Interpreter.handle_event/2` sets the state's `last_selection`
-to `:selected` when the delivered event selected at least one transition
-and to `:none` when it selected none, whether or not tracing is on
-(`t:Statifier.MachineState.last_selection/0`). statifier_persistence
-0.18.0's `StatifierPersistence.Executions.step/5` answers
-`{:ok, execution, state}` with that stepped state, and nothing in its
-drive after the round writes `last_selection`, so the router reads the
-answer it already holds and asks the chart nothing.
+accepts. It no longer does, for two facts. The stepped state carries the
+round's selection: `last_selection` is `:selected` when the delivered
+event selected a transition and `:none` when it selected none
+(`t:Statifier.MachineState.last_selection/0`, statifier 2.9.0).
+`step/5` answers that state (`StatifierPersistence.Executions.step/5`,
+statifier_persistence 0.18.0). The router reads it from the answer.
 
 **What the outcome means.** `{:dropped, binding_id, :unmatched_event}`,
 recorded on the binding's ledger as `dropped: unmatched_event`, means
@@ -480,4 +478,10 @@ them: where a binding's step selects no transition, a delivered or
 created_and_delivered cell records dropped: unmatched_event instead.
 Section 8's "a later record may add it" is met by this Note, and the
 Consequence "An event the chart ignores reads as delivered" no longer
-holds for a binding.
+holds for a binding. Section 3's rule, that for a drop the router never
+creates, steps or writes an execution except the create that precedes a
+dropped: finished, and the second Consequence, that the one execution a
+drop can leave behind is that create's and its input log does not hold
+the event, are read with this drop as a second exception: it steps the
+execution, and when this delivery created the execution, that execution
+stays and its input log holds the event.
