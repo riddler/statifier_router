@@ -122,8 +122,12 @@ defmodule StatifierRouter.DedupeTest do
       assert StatifierRouter.route(config, impression(), now: at_expiry) ==
                {:ok, [{:duplicate, "impressions_to_join"}]}
 
-      assert {:ok, [{:delivered, "impressions_to_join", ^execution_id}]} =
-               StatifierRouter.route(config, impression(), now: after_expiry)
+      # Past the horizon it is no duplicate: the step takes it again. The
+      # execution already left the state that takes an impression, so the
+      # step selects nothing and records dropped: unmatched_event (ADR-0004,
+      # the Note of 2026-09-25); the input log holds it all the same.
+      assert StatifierRouter.route(config, impression(), now: after_expiry) ==
+               {:ok, [{:dropped, "impressions_to_join", :unmatched_event}]}
 
       assert inputs(config, execution_id) == [
                {0, "step", "impression"},
@@ -133,7 +137,7 @@ defmodule StatifierRouter.DedupeTest do
       expires_again = DateTime.add(after_expiry, 1_000, :millisecond)
       assert dedupe_rows(config) == [{"impressions_to_join", "ad_events/3/1042", expires_again}]
 
-      assert ["created_and_delivered", "duplicate", "delivered"] =
+      assert ["created_and_delivered", "duplicate", "dropped: unmatched_event"] =
                Enum.map(ledger(config), & &1.outcome)
     end
 

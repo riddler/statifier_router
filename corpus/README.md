@@ -137,7 +137,7 @@ A step is one of:
 
 | Key | Compared with |
 |---|---|
-| `ledger` | the routing ledger's rows for the case's bindings, oldest first, each as `binding`, `message_id`, `outcome` and `key`; `outcome` is spelled as ADR-0004 spells it (`delivered`, `created_and_delivered`, `duplicate`, `key_refused`, `dropped: no_execution`, `dropped: finished`) |
+| `ledger` | the routing ledger's rows for the case's bindings, oldest first, each as `binding`, `message_id`, `outcome` and `key`; `outcome` is spelled as ADR-0004 spells it (`delivered`, `created_and_delivered`, `duplicate`, `key_refused`, `dropped: no_execution`, `dropped: finished`, `dropped: unmatched_event`) |
 | `status` | the execution's status: `active`, `completed`, `failed` or `cancelled` |
 | `configuration` | the execution's active leaf states, sorted; a finished execution has none |
 | `timers` | the event names of the timers still pending, sorted |

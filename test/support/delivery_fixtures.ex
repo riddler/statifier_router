@@ -53,6 +53,36 @@ defmodule StatifierRouter.DeliveryFixtures do
   </scxml>
   """
 
+  # A parcel scanned from depot to doorstep: loaded onto the van, then
+  # delivered. A `delivered` scan at the depot, or a second `loaded` scan on
+  # the van, is an event the current state has no transition for.
+  @parcel """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="at_depot">
+    <state id="at_depot">
+      <transition event="loaded" target="on_van"/>
+    </state>
+    <state id="on_van">
+      <transition event="delivered" target="doorstep"/>
+    </state>
+    <final id="doorstep"/>
+  </scxml>
+  """
+
+  # The same parcel held on the van: its one `delivered` transition is
+  # guarded false, so a `delivered` scan is named by the state and never
+  # taken.
+  @held_parcel """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="at_depot">
+    <state id="at_depot">
+      <transition event="loaded" target="on_van"/>
+    </state>
+    <state id="on_van">
+      <transition event="delivered" cond="false" target="doorstep"/>
+    </state>
+    <final id="doorstep"/>
+  </scxml>
+  """
+
   # A chart that is finished as soon as it is initialized.
   @instant """
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="done">
@@ -85,13 +115,45 @@ defmodule StatifierRouter.DeliveryFixtures do
     ]
   end
 
+  @doc """
+  Two bindings for the `parcel_scans` source, keyed by the parcel: a
+  `loaded` scan and a `delivered` scan, both to `document`.
+  """
+  @spec parcel_bindings(String.t()) :: [map()]
+  def parcel_bindings(document \\ "parcel_route") do
+    for kind <- ["loaded", "delivered"] do
+      %{
+        id: "#{kind}_scans",
+        source: "parcel_scans",
+        match: "event.kind == '#{kind}'",
+        key: "event.parcel_id",
+        document: document,
+        event: kind,
+        data: ["parcel_id"]
+      }
+    end
+  end
+
+  @doc "A `kind` scan of the parcel `pcl_4821` under `message_id`."
+  @spec parcel_scan(String.t(), String.t()) :: StatifierRouter.source_event()
+  def parcel_scan(message_id, kind) do
+    %{
+      scope: "7c1e",
+      message_id: message_id,
+      source: "parcel_scans",
+      data: %{"kind" => kind, "parcel_id" => "pcl_4821"}
+    }
+  end
+
   @doc "The compiled charts, by document."
   @spec machines() :: %{String.t() => Machine.t()}
   def machines do
     for {document, source} <- [
           {"impression_click_join", @join},
           {"instant_join", @instant},
-          {"invoked_join", @invoked}
+          {"invoked_join", @invoked},
+          {"parcel_route", @parcel},
+          {"held_parcel_route", @held_parcel}
         ],
         into: %{} do
       {:ok, machine} = Statifier.compile(source)

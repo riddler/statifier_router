@@ -113,8 +113,9 @@ defmodule StatifierRouter do
 
   It answers with one of `{:delivered, binding_id, execution_id}`,
   `{:created_and_delivered, binding_id, execution_id}`,
-  `{:duplicate, binding_id}`, `{:dropped, binding_id, :no_execution}` and
-  `{:dropped, binding_id, :finished}` for the binding it was handed, or
+  `{:duplicate, binding_id}`, `{:dropped, binding_id, :no_execution}`,
+  `{:dropped, binding_id, :finished}` and
+  `{:dropped, binding_id, :unmatched_event}` for the binding it was handed, or
   with `{:error, reason}`, and it writes that outcome's rows inside the
   delivery's own transaction (ADR-0003, section 1). Any other answer
   raises `ArgumentError`. The default module is `StatifierRouter.Delivery`.
@@ -158,7 +159,7 @@ defmodule StatifierRouter do
           | {:duplicate, String.t()}
           | {:no_match, String.t()}
           | {:key_refused, String.t(), refusal_reason()}
-          | {:dropped, String.t(), :no_execution | :finished}
+          | {:dropped, String.t(), :no_execution | :finished | :unmatched_event}
 
   @typedoc """
   One invocation of one execution: the execution's id and the `invoke_id`
@@ -456,7 +457,7 @@ defmodule StatifierRouter do
   defp check_answer({:duplicate, id} = outcome, _module, id), do: outcome
 
   defp check_answer({:dropped, id, why} = outcome, _module, id)
-       when why in [:no_execution, :finished],
+       when why in [:no_execution, :finished, :unmatched_event],
        do: outcome
 
   defp check_answer({:error, _reason} = error, _module, _id), do: error

@@ -85,7 +85,15 @@ defmodule StatifierRouter.Delivery do
   address has no row, and `{:dropped, binding_id, :finished}` when the
   execution was terminal: read terminal before the step, created already
   terminal, or answered `{:discarded, execution}` by `step/5` (ADR-0004,
-  section 3). A terminal sighting through an address row stamps the row's
+  section 3). A binding's delivery whose `step/5` took the event and
+  selected no transition for it - the state `step/5` answers carries
+  `last_selection: :none` - is `{:dropped, binding_id, :unmatched_event}`,
+  on the delivered path and on the created path alike, and its ledger
+  row names the execution (ADR-0004, the Note of 2026-09-25). The
+  execution's input log holds the event all the same, because `step/5`
+  appended it. `deliver_event/4` does not take this outcome: a send the
+  receiving execution does not take is delivered or created_and_delivered
+  as before. A terminal sighting through an address row stamps the row's
   `terminal_seen_at` when it is still empty (ADR-0002, section 5); the
   row itself is left in place, and removing it is
   `StatifierRouter.Addresses.reap/2`'s. Every outcome but the duplicate
@@ -433,8 +441,7 @@ defmodule StatifierRouter.Delivery do
          ) do
       {:ok, execution, state} ->
         with :ok <- complete(config, execution, state) do
-          record(config, plan, key, delivery, Atom.to_string(outcome), execution_id)
-          {:ok, {outcome, plan.id, execution_id}}
+          taken(config, plan, key, delivery, execution_id, outcome, state)
         end
 
       {:discarded, _execution} ->
@@ -443,6 +450,31 @@ defmodule StatifierRouter.Delivery do
       {:error, _reason} = error ->
         error
     end
+  end
+
+  # What a step that took the event records. A binding's delivery whose
+  # event selected no transition is dropped: unmatched_event (ADR-0004, the
+  # Note of 2026-09-25), read off the `last_selection` statifier stamps on
+  # the state `step/5` answers; `:selected`, and `nil` (no round ran on
+  # this event), keep the delivered or created_and_delivered outcome. The
+  # execution target's door keeps its own outcomes: ADR-0006 settles what
+  # a sender is told, and this record's Note does not reach it.
+  defp taken(
+         config,
+         %Binding{} = plan,
+         key,
+         delivery,
+         execution_id,
+         _outcome,
+         %MachineState{last_selection: :none}
+       ) do
+    record(config, plan, key, delivery, "dropped: unmatched_event", execution_id)
+    {:ok, {:dropped, plan.id, :unmatched_event}}
+  end
+
+  defp taken(config, plan, key, delivery, execution_id, outcome, _state) do
+    record(config, plan, key, delivery, Atom.to_string(outcome), execution_id)
+    {:ok, {outcome, plan.id, execution_id}}
   end
 
   defp finished(config, plan, key, delivery, execution_id, row) do
