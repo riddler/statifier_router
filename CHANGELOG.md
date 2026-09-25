@@ -10,6 +10,24 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/ma
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.5.0] 2026-09-25
+
+Feature release: a live session's sends get a delivery scope and the execution target, and a delivery whose step selected no transition says so. `StatifierRouter.Config.new/1` takes `:processor_scope`, so a `Statifier.Session`'s sends resolve their routes under a scope's `:route_overrides`, and a fun there that answers neither a non-empty scope string nor `nil` is answered `{:error, {:invalid_value, :processor_scope, value}}`, a new member of the open `t:StatifierRouter.SendHandler.reason/0`. On the send-processor shape an immediate send to the reserved `execution` target is delivered or refused as at the executor seam, where it was answered as an unregistered route.
+
+Upgrading: **two closed sets a host matches grow.** Every `:unregistered_routes` entry of `StatifierRouter.Contracts.check/3` now carries `reason`, `:unregistered` or `:no_timer_queue`, typed as the closed `t:StatifierRouter.Contracts.route_reason/0`; and `StatifierRouter.route/3` gains the outcome `{:dropped, binding_id, :unmatched_event}`, recorded on the routing ledger as `dropped: unmatched_event`, for a delivery whose step selected no transition. The dependency floors move to `statifier ~> 2.9` and `statifier_persistence ~> 0.18`; this package adds no migration and no new table.
+
+### Added
+
+- `StatifierRouter.Config.new/1` takes `:processor_scope`, a scope string or a zero-arity fun `StatifierRouter.SendHandler` calls per send, so a live `Statifier.Session`'s sends resolve their routes under that scope's `:route_overrides`.
+- **Breaking** for a host that matches `StatifierRouter.route/3`'s outcomes exhaustively, or a custom `:delivery` module's answers: a binding's delivery whose step selected no transition for the event now answers `{:dropped, binding_id, :unmatched_event}` in place of `{:delivered, binding_id, execution_id}` or `{:created_and_delivered, binding_id, execution_id}`, and its routing-ledger row reads `dropped: unmatched_event` with the execution's id. The execution still took the event, so its input log holds it, and a created execution stays. The outcome cannot tell an event the current state has no transition for from one whose every guard was false. An execution-to-execution send keeps its outcomes. Add a clause for the new tuple wherever you match outcomes; no migration.
+
+### Changed
+
+- **Breaking** for a host that matches `StatifierRouter.Contracts.check/3`'s `:unregistered_routes` entries exactly or builds them itself: every entry now carries `reason`, `:unregistered` for a `<send>` whose literal `target` names no registered route (the entries it reported before), or `:no_timer_queue` for a `<send>` that writes a literal `delay` to a registered route on a configuration with no `:timer_queue`, a send `StatifierRouter.SendHandler` never queues and refuses at run time, as `{:no_timer_queue, send_id}` once the route resolves. A `%{route: _, location: _}` pattern still matches every entry. Add a `reason` key wherever you compare or build a whole entry, and treat a `:no_timer_queue` entry as you treat an unregistered route, or configure a `:timer_queue`. `StatifierRouter.Routes.unregistered/2` is unchanged.
+- `t:StatifierRouter.Contracts.reason/0` and the new `t:StatifierRouter.Contracts.route_reason/0` are documented as closed sets: a new reason arrives only in a minor release that names it as breaking.
+- On the send-processor shape, `StatifierRouter.SendHandler.perform/2` delivers an immediate `<send>` whose `target` is the reserved `execution` name to the execution its `document` and `key` params address, or refuses it as `{:error, {:send_refused, reason}}`, exactly as `handle_effect/3` does at the executor seam; it no longer answers `{:error, {:unregistered_route, "execution"}}`. The sender's scope is read from the address row its session id names, and a session id that names none is refused as `:unaddressed_sender`.
+- Requires `statifier ~> 2.9` (the `last_selection` the outcome is read from) and `statifier_persistence ~> 0.18`. A host still on statifier_persistence below 0.17 runs that package's V08 migration before deploying, as its 0.17.0 changelog says.
+
 ## [0.4.1] 2026-09-23
 
 Patch release: the publish-time contract check now flags a delayed send to the execution target. `StatifierRouter.Contracts.check/3` and `StatifierRouter.Contracts.undeclared_events/3` report such a `<send>` as a finding with reason `:delay`, the send `StatifierRouter.SendHandler` refuses at run time, so a host's publish step can catch it before a document goes live; `t:StatifierRouter.Contracts.reason/0` gains `:delay`. No migration, no new configuration option, and no dependency floor moves.
