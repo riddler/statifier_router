@@ -180,8 +180,9 @@ defmodule StatifierRouter.SendHandler do
   unregistered route" below describes, so a row this package could not
   write does not take the sender's step down.
 
-  The branch is in `handle_effect/3`, beside `mine?/2` and before
-  `hand_off/3`, and that placement is load-bearing rather than tidy.
+  At the executor seam the branch is in `handle_effect/3`, beside
+  `mine?/2` and before `hand_off/3`, and that placement is load-bearing
+  rather than tidy.
   `hand_off/3` marks a route as running for the length of the dispatch,
   and `StatifierRouter.Delivery.deliver/4` refuses while that mark is set
   (ADR-0005, decision 5). That refusal protects the sending execution's
@@ -190,6 +191,18 @@ defmodule StatifierRouter.SendHandler do
   refuses the one case it would collide with - a send to the sender's own
   address - for that very lock reason. Branching before `hand_off/3` keeps
   the two mechanisms apart rather than narrowing the guard.
+
+  On the send-processor shape `perform/2` takes the same branch (ADR-0006,
+  as its Note of 2026-09-24 has it): an immediate send to the reserved
+  name is delivered, or refused, exactly as at the executor seam, and is
+  never answered as an unregistered route. The sender is the composed
+  key's scope half, the session id, so its scope is read from the address
+  row that id names, and a session id that names none is refused as
+  `unaddressed_sender`. The configuration's `:processor_scope` is not
+  asked: it picks a route override and plays no part in which scope a
+  chart may address. Nothing is marked as running on this shape, and
+  `StatifierRouter.Delivery.deliver_event/4` opens the transaction the
+  delivery runs in.
 
   A refusal and a miss are reported to the sender the way ADR-0005,
   section 7 reports an unregistered route: `{:error, reason}` from this
@@ -406,7 +419,7 @@ defmodule StatifierRouter.SendHandler do
 
   def perform({:send, %Send{} = effect, event, key}, _ctx) do
     case fetch_config() do
-      {:ok, config} -> route(config, effect.target, event, key, :processor)
+      {:ok, config} -> perform_send(config, effect, event, key)
       {:error, _reason} = error -> error
     end
   end
@@ -525,6 +538,18 @@ defmodule StatifierRouter.SendHandler do
   defp mine?(%Config{send_type: send_type}, effect),
     do: is_binary(send_type) and effect.type == send_type
 
+  # The send-processor shape's branch, the one `handle_effect/3` takes at
+  # the executor seam: the reserved target goes to `to_execution/3` with
+  # the composed key's scope half, the session id, as the sender, and never
+  # reaches the route registry or `:processor_scope` (ADR-0006, section 1).
+  @spec perform_send(Config.t(), Send.t(), Statifier.Event.t(), Route.idempotency_key()) ::
+          :ok | {:error, reason()}
+  defp perform_send(config, %Send{target: @execution_target} = send, _event, {sender, _, _}),
+    do: to_execution(config, send, sender)
+
+  defp perform_send(config, send, event, key),
+    do: route(config, send.target, event, key, :processor)
+
   @spec hand_off(Config.t(), Send.t(), String.t()) :: :ok | {:error, reason()}
   defp hand_off(config, send, scope) do
     in_route(scope, fn ->
@@ -581,7 +606,8 @@ defmodule StatifierRouter.SendHandler do
 
   # -------------------------------------------------------------------
   # The execution target (ADR-0006). Reached from handle_effect/3 before
-  # hand_off/3, so nothing here runs with a route marked as running.
+  # hand_off/3, so nothing here runs with a route marked as running, and
+  # from perform/2, where nothing is marked at all.
   # -------------------------------------------------------------------
 
   @spec to_execution(Config.t(), Send.t(), String.t()) :: :ok | {:error, reason()}

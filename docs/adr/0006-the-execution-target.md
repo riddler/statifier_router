@@ -688,3 +688,52 @@ separate change. This Amendment is that change. Ruled by the operator,
   (the sender's address row, as the sr-p6u Note has it), nor the execution
   target on the send-processor shape, which is a later change. It grows
   the public configuration, so it ships in a minor.
+
+## Note (2026-09-24, sr-kqu): an immediate send to the execution target is delivered on the send-processor shape too
+
+Status: proposed
+
+A Note, not an amendment: it decides nothing this record had not already
+decided, and it changes no decision or amendment above it. It records a
+gap between the record and the code, ruled by the operator on 2026-09-24
+to be a gap and not a scope rule, and the change that closes it.
+
+- **The case.** On the send-processor shape `perform/2` handed every
+  immediate send to the route registry, the reserved target included
+  (`StatifierRouter.SendHandler`'s `perform/2`, read at `bc3b5f6`), and
+  the registry can never hold the reserved name
+  (`StatifierRouter.Config.new/1` refuses a route registered under it
+  with `{:reserved_route, name}`). So a live session's send to
+  `execution` was answered `{:error, {:unregistered_route, "execution"}}`
+  and never delivered. Only `handle_effect/3` branched to the execution
+  target (`handle_effect/3`'s send clause, read at `bc3b5f6`).
+- **Why nothing new is decided.** Section 1 says what a send to the
+  reserved name means without naming a shape; section 2 composes its
+  message id on both shapes, the session id being the scope half on this
+  one; section 3 reports its misses through both shapes; section 4 holds
+  that at this package's seam the sender's session id is its execution
+  id; and the sr-p6u Note says the send-processor shape is not exempt by
+  construction. The shape was always in this record's scope.
+- **What the handler does now.** On the send-processor shape an immediate
+  send to the reserved name takes the branch `handle_effect/3` takes: it
+  is delivered through `StatifierRouter.Delivery.deliver_event/4`, or
+  refused by one of section 6's reasons with the ledger row section 6
+  gives that reason, and it is never answered as an unregistered route
+  (the private `perform_send/4` in `StatifierRouter.SendHandler`, in the
+  same change as this Note).
+- **The scope is the sender's, read as section 1 reads it.** The sender
+  is the composed key's scope half, which on this shape is the session
+  id, and the scope is read from the address row that id names
+  (`StatifierRouter.Addresses.by_execution/2`). A session id that names
+  no address row is refused as `unaddressed_sender` and nothing is
+  recorded, as section 6 has it. The configuration's `:processor_scope`
+  (the sr-a7e Amendment) is not asked for this send: it names the scope a
+  route override is read in, and it plays no part in which scope a chart
+  may address, which section 1 keeps the sender's own.
+- **What this Note does not change.** A delayed send to the reserved name
+  is still refused as `delay` on both shapes, before the route registry
+  is asked (the sr-73n Amendment; the first clause of
+  `StatifierRouter.SendHandler`'s private `enqueue/5`). Reporting a
+  refusal or a miss to the chart on this shape is still the host's,
+  through `Statifier.Session.failed_send/3`, as section 3 says. The
+  record's status on line 3 is not touched.
