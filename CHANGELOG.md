@@ -10,6 +10,19 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/ma
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.6.0] 2026-09-25
+
+Feature release: a host that wraps the engine can plug into the router without forking it. `StatifierRouter.Config.new/1` takes `:on_create` and `:on_step`, which the default delivery calls in place of statifier_persistence's create and step; `:bindings_resolver`, which answers the bindings per scope through the new `StatifierRouter.BindingsResolver` behaviour; and `:execution_id`, which mints each new execution's id. `StatifierRouter.Migrations.up/1` takes the host column layout options `:leading_columns`, `:timestamps_position` and `:column_collations`. Every new key and option is optional, and a host that sets none of them sees no change.
+
+Upgrading: `Config.new/1`'s refusal union grows by one member, `{:exclusive_keys, :bindings, :bindings_resolver}`, answered only to a configuration that gives both keys. No migration, no new table, and no dependency floor moves.
+
+### Added
+
+- `StatifierRouter.Config` takes `:on_create` and `:on_step`, a module or a fun the default delivery calls in place of `StatifierPersistence.Executions.create/4` and `step/5`, with the same arguments and return contract, inside the delivery's transaction; left out, the delivery calls statifier_persistence itself as before.
+- `StatifierRouter.Config` takes `:bindings_resolver`, a module implementing the new `StatifierRouter.BindingsResolver` behaviour or an arity-1 fun, answering the bindings of one scope; `route/3`, the Broadway partitioner and `subscribe/3` read its answer for the scope in hand, checked for the reserved and duplicated binding ids as `:bindings` is. It is exclusive with `:bindings`, and `Config.new/1` refuses both with `{:error, {:exclusive_keys, :bindings, :bindings_resolver}}`; left out, `:bindings` is read as before.
+- `StatifierRouter.Config` takes `:execution_id`, a module exporting `execution_id/3` or an arity-3 fun of `(scope, document, key)` answering a non-empty string, which the default delivery mints each new execution's id with; that id is the one on the address row, the created execution and the ledger. An answer that is not a non-empty string raises `ArgumentError`. Left out, the id is a UXID with the prefix `ex`, as before.
+- `StatifierRouter.Migrations.up/1` takes `:leading_columns`, `:timestamps_position` and `:column_collations`, statifier_persistence's layout options under the same spellings and rules: host-owned columns immediately after `id`, `inserted_at` moved to follow them, and a collation per package text column, applied only as a version creates a table, on all four tables. `down/1` accepts and ignores them. Left out, the tables are built exactly as before.
+
 ## [0.5.0] 2026-09-25
 
 Feature release: a live session's sends get a delivery scope and the execution target, and a delivery whose step selected no transition says so. `StatifierRouter.Config.new/1` takes `:processor_scope`, so a `Statifier.Session`'s sends resolve their routes under a scope's `:route_overrides`, and a fun there that answers neither a non-empty scope string nor `nil` is answered `{:error, {:invalid_value, :processor_scope, value}}`, a new member of the open `t:StatifierRouter.SendHandler.reason/0`. On the send-processor shape an immediate send to the reserved `execution` target is delivered or refused as at the executor seam, where it was answered as an unregistered route.
