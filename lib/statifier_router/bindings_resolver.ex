@@ -42,7 +42,9 @@ defmodule StatifierRouter.BindingsResolver do
   `{:reserved_binding_id, name}`, and a duplicated `id` as
   `{:duplicate_binding_id, id}`. An answer that is not a list of
   `%StatifierRouter.Binding{}` structs raises `ArgumentError`, as a
-  malformed `StatifierRouter.Resolver` answer does.
+  malformed `StatifierRouter.Resolver` answer does. `StatifierRouter.Broadway`'s
+  partitioner rescues that raise and hashes the message id, and
+  `route/3` raises it again where the message fails.
 
   What each caller does with a refused answer:
 
