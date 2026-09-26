@@ -48,7 +48,7 @@ defmodule StatifierRouter.Migrations.V02 do
 
   alias StatifierRouter.Config
 
-  @typedoc "The resolved storage options `StatifierRouter.Migrations` hands each version."
+  @typedoc "The resolved storage and layout options `StatifierRouter.Migrations` hands each version."
   @type storage :: %{
           required(:table_prefix) => String.t(),
           required(:prefix) => String.t() | nil,
