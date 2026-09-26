@@ -42,8 +42,9 @@
   # way HexDocs and hex.pm will read them. The Docs stage runs `mix docs` and
   # fails on any ExDoc warning. The Doc links stage fails on the link rules
   # ExDoc accepts silently: a README relative link to a file not in the
-  # package files, a published relative link to a file that is not an extra,
-  # two extras sharing a basename, and a silent rewrite to a different extra.
+  # package files, a relative link in a Markdown extra to a file that is not
+  # itself an extra, two extras sharing a basename, and a silent rewrite to a
+  # different extra.
   # That is how two relative links into docs/adr/ and changelog.d/ shipped in
   # 0.1.0, rendered as links to the README itself with `mix docs` clean.
   # `:auto` runs both whenever ex_doc is installed, which it is in dev and
