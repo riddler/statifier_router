@@ -501,3 +501,41 @@ tag and `main` at the time of the flip:
   default UXID when the key is `nil` and calls the host's callback
   otherwise.
 - The tests are in `test/statifier_router/execution_id_test.exs`.
+
+## Note (2026-09-26, sr-up8j): the address table's columns under a host column
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. The third bullet of the sr-cgw Note says
+the address table "still holds exactly the columns section 1 lists".
+With `:leading_columns` set that is loose: the table then holds one
+more column per host column, which the bullet's next sentence goes on
+to describe. Read that bullet's first sentence as:
+
+- **Section 1's columns are unchanged.** The address table holds every
+  column section 1 lists, unchanged, plus any host column, with the
+  unique index on `(scope, document, key)`.
+
+"Unchanged" is each listed column's name, type and nullability.
+`timestamps_position: :leading` moves `inserted_at` to follow the host
+columns, and `:column_collations` may declare a collation on a listed
+text column, both as the sr-cgw Note's second bullet says; section 1
+decides neither a column order nor a collation, so neither changes
+what it lists. With none of the three layout options set, the table is
+built exactly as before, as the sr-cgw Note's last bullet says. The
+implicit `id` primary key, which section 1 does not list either way,
+is not changed by this Note.
+
+**Where the code is**, each read at `1e72588`:
+
+- `StatifierRouter.Migrations.up/1` takes `:leading_columns` and
+  validates it in the private `layout!/1`.
+- `StatifierRouter.Migrations.V01.up/1` creates the address table with
+  the host columns right after `id`, through the private
+  `add_leading_columns/1`, then the six columns section 1 lists;
+  `StatifierRouter.Migrations.V02` creates only the subscription table.
+- `StatifierRouter.Schema.Address` declares section 1's columns and `id`
+  and no host column, so the package never reads or writes one.
+- The test "place a leading column, the timestamp and a collation on all
+  four tables" in `test/statifier_router/host_columns_test.exs` reads
+  the address table's column names, in order, and their collations back
+  from the database catalog.
