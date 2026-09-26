@@ -39,13 +39,15 @@ defmodule StatifierRouter.Migrations do
       schemas do not declare the column, so the package never reads or
       writes it; a default or a `NOT NULL` belongs to a later migration of
       the host's own. A name a table the call creates already declares -
-      `id`, or any column `StatifierRouter.Migrations.V01` or
+      any column `StatifierRouter.Migrations.V01` or
       `StatifierRouter.Migrations.V02` lists for it - raises
       `ArgumentError` naming the column and those tables, before any DDL
       runs, where Postgres would otherwise refuse the `CREATE TABLE` with a
       duplicate column. A name only a table the call does not create
       declares is a host column like any other: `up(from: 2)` may lead
-      with `expires_at`, which only V01's dedupe table has.
+      with `expires_at`, which only V01's dedupe table has. The primary
+      key is the repo's `:migration_primary_key` and is not checked: a
+      repo that sets it to `false` may lead with an `id` of its own.
     * `:timestamps_position` - where `inserted_at` goes in every table a
       version creates that has one (the address table, the routing ledger
       and the subscription table; the dedupe table has none): `:trailing`
@@ -112,15 +114,17 @@ defmodule StatifierRouter.Migrations do
     :invoke_id
   ]
 
-  # The columns each version declares in each table it creates, the
-  # implicit `id` included. A leading column may not reuse one of them in
-  # a table the call creates: Postgres refuses a duplicate column name.
+  # The columns each version declares in each table it creates. A leading
+  # column may not reuse one of them in a table the call creates: Postgres
+  # refuses a duplicate column name. The primary key is left out: whether
+  # a table gets one, and its name, is the repo's :migration_primary_key,
+  # which Ecto reads inside the migration runner, and a repo that turns it
+  # off may lead with an `id` of its own.
   @package_columns %{
     1 => [
-      addresses: [:id, :scope, :document, :key, :execution_id, :inserted_at, :terminal_seen_at],
-      dedupe: [:id, :binding_id, :message_id, :expires_at],
+      addresses: [:scope, :document, :key, :execution_id, :inserted_at, :terminal_seen_at],
+      dedupe: [:binding_id, :message_id, :expires_at],
       routing_ledger: [
-        :id,
         :binding_id,
         :message_id,
         :scope,
@@ -132,7 +136,7 @@ defmodule StatifierRouter.Migrations do
       ]
     ],
     2 => [
-      subscriptions: [:id, :binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
+      subscriptions: [:binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
     ]
   }
 

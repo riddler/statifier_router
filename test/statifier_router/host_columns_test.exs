@@ -109,12 +109,29 @@ defmodule StatifierRouter.HostColumnsTest do
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
+  # A repo with its implicit primary key turned off leads with one of its
+  # own named id: the package does not declare the primary key.
+  defmodule MigrateHcOwnId do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [
+      table_prefix: "hc_router_",
+      prefix: "hc_router_schema",
+      leading_columns: [id: {:bigserial, primary_key: true}]
+    ]
+
+    def up, do: StatifierRouter.Migrations.up(@opts)
+    def down, do: StatifierRouter.Migrations.down(@opts)
+  end
+
   @version 20_260_925_000_301
   @v01_version 20_260_925_000_302
   @v02_version 20_260_925_000_303
   @v01_invoke_version 20_260_925_000_304
   @v02_expires_version 20_260_925_000_305
   @v02_plain_version 20_260_925_000_306
+  @own_id_version 20_260_925_000_307
   @schema "hc_router_schema"
   @tables [
     "hc_router_addresses",
@@ -148,7 +165,8 @@ defmodule StatifierRouter.HostColumnsTest do
         @v02_version,
         @v01_invoke_version,
         @v02_expires_version,
-        @v02_plain_version
+        @v02_plain_version,
+        @own_id_version
       ]
     ])
 
@@ -330,8 +348,8 @@ defmodule StatifierRouter.HostColumnsTest do
 
   describe "a leading column named like a package column" do
     # The refusal's column sets pinned to the DDL: every column the plain
-    # migrations create, read back from the catalog, is refused under the
-    # span that creates its table.
+    # migrations create but the repo's primary key, read back from the
+    # catalog, is refused under the span that creates its table.
     # sabotage: dropped :terminal_seen_at from @package_columns' address
     # entry -> red here on terminal_seen_at, which then reached the DDL.
     test "is refused for every column the tables the call creates declare" do
@@ -344,7 +362,8 @@ defmodule StatifierRouter.HostColumnsTest do
             {"hc_router_routing_ledger", [version: 1]},
             {"hc_router_subscriptions", [from: 2]}
           ],
-          {column, _collation} <- columns(table) do
+          {column, _collation} <- columns(table),
+          column != "id" do
         name = String.to_existing_atom(column)
 
         assert_raise ArgumentError,
@@ -371,6 +390,31 @@ defmodule StatifierRouter.HostColumnsTest do
 
       :ok = Migrator.down(TestRepo, @v02_expires_version, MigrateHcV02Expires, log: false)
       :ok = Migrator.down(TestRepo, @v01_invoke_version, MigrateHcV01Invoke, log: false)
+      assert tables_present() == []
+    end
+
+    # sabotage: put :id back in @package_columns' address entry -> red
+    # here, the leading id was refused before the DDL.
+    test "leads with a primary key of the host's own under migration_primary_key: false" do
+      repo_env = Application.fetch_env!(:statifier_router, TestRepo)
+
+      Application.put_env(
+        :statifier_router,
+        TestRepo,
+        Keyword.put(repo_env, :migration_primary_key, false)
+      )
+
+      try do
+        :ok = Migrator.up(TestRepo, @own_id_version, MigrateHcOwnId, log: false)
+      after
+        Application.put_env(:statifier_router, TestRepo, repo_env)
+      end
+
+      for table <- @tables do
+        assert [{"id", nil} | _] = columns(table), table
+      end
+
+      :ok = Migrator.down(TestRepo, @own_id_version, MigrateHcOwnId, log: false)
       assert tables_present() == []
     end
   end
@@ -419,18 +463,19 @@ defmodule StatifierRouter.HostColumnsTest do
       end
     end
 
-    # One name per distinct set of tables that declares it: every table,
-    # three of the four, the address and ledger tables, the address table
-    # alone, the dedupe table alone, the ledger table alone and the
-    # subscription table alone. None of these reaches the DDL, so the
-    # call needs no migration runner.
+    # One name per distinct set of tables that declares it under the
+    # full walk: the three with a binding id, the three with a scope or
+    # a timestamp, the address table alone, the dedupe table alone, the
+    # ledger table alone and the subscription table alone; then the
+    # address and ledger tables under version: 1. None of these reaches
+    # the DDL, so the call needs no migration runner.
     # sabotage: made up/1 skip refuse_package_column_names!/2 -> red here,
     # the first name reached V01's DDL outside a migration runner.
     # sabotage: dropped :expires_at from @package_columns' dedupe entry ->
     # red here on :expires_at.
     test "reject a leading column a table the call creates already declares" do
       for {name, tables} <- [
-            id: "addresses, dedupe, routing_ledger, subscriptions",
+            binding_id: "dedupe, routing_ledger, subscriptions",
             scope: "addresses, routing_ledger, subscriptions",
             document: "addresses",
             terminal_seen_at: "addresses",

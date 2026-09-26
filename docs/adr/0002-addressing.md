@@ -548,18 +548,26 @@ The sr-cgw Note above gives `StatifierRouter.Migrations.up/1` a
 `:leading_columns` option and says it is validated under
 statifier_persistence's rules. Those rules refuse a malformed entry and
 a name given twice, and nothing else, so a host column named like a
-column the package declares - `id`, `scope`, `inserted_at` - passed
+column the package declares - `scope`, `inserted_at` - passed
 validation and the version's `CREATE TABLE` then failed in Postgres
 with a duplicate column error. This Amendment decides that the router
 refuses such a name itself, before any DDL.
 
 - **What is refused.** A `:leading_columns` name that a table the call
-  creates already declares: the implicit `id`, or any column
-  `StatifierRouter.Migrations.V01` lists for the address, dedupe or
-  routing ledger table or `StatifierRouter.Migrations.V02` lists for the
-  subscription table. `up/1` raises `ArgumentError` naming each such
-  column and the tables that declare it. The comparison is on the name
-  exactly as given.
+  creates already declares: any column `StatifierRouter.Migrations.V01`
+  lists for the address, dedupe or routing ledger table or
+  `StatifierRouter.Migrations.V02` lists for the subscription table.
+  `up/1` raises `ArgumentError` naming each such column and the tables
+  that declare it. The comparison is on the name exactly as given.
+- **The primary key is not in the set.** Whether a table gets an
+  implicit primary key, and under what name, is the host repo's
+  `:migration_primary_key` configuration, which Ecto's `table/2` reads
+  inside the migration runner; the package does not declare that
+  column. A repo that sets `migration_primary_key: false` may lead with
+  its own `id: {:bigserial, primary_key: true}`, and that migrated
+  before this Amendment and still does. A leading column that repeats
+  the name of the primary key the repo configures (`id` by default)
+  is not refused here and fails in Postgres as it did before.
 - **Only the tables the call creates.** The set is taken from the
   versions `from:` and `version:` walk. A name only a table outside that
   span declares is a host column like any other: `up(from: 2)` may lead
@@ -569,8 +577,10 @@ refuses such a name itself, before any DDL.
 - **`down/1` is unchanged.** It creates no table and accepts and ignores
   the layout options, as the sr-cgw Note says.
 - **Nothing that worked stops working.** Every name refused here made
-  the migration fail before; the refusal moves that failure ahead of
-  the DDL and names the column.
+  the migration fail before, whatever the repo's `:migration_primary_key`:
+  the refused names are the package's own columns, never the primary
+  key. The refusal moves that failure ahead of the DDL and names the
+  column.
 - **The router decides for itself.** This departs from the sr-cgw
   Note's "under the spellings and validation rules
   statifier_persistence's migrations helper uses" in this one rule: the
@@ -588,7 +598,9 @@ mirror are the `up/1` of `StatifierRouter.Migrations.V01` and of
 a table the call creates already declares" pins the refusal and its
 message for one name per distinct set of declaring tables; "is refused
 for every column the tables the call creates declare" reads every
-column of the plainly migrated tables back from the database catalog
-and checks each is refused under the span that creates its table; and
-"is a host column when only a table outside the call declares it"
-migrates the two names above.
+column but `id` of the plainly migrated tables back from the database
+catalog and checks each is refused under the span that creates its
+table; "is a host column when only a table outside the call declares
+it" migrates the two names above; and "leads with a primary key of the
+host's own under migration_primary_key: false" migrates a leading `id`
+with the repo's implicit primary key turned off.
