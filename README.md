@@ -624,6 +624,28 @@ nothing again:
 database, so the new body only ever runs on a fresh one, where it
 builds what the comparison proved identical.
 
+## Upgrading the tables
+
+A package release that adds a migration version needs one more migration
+of the host's own, starting where the last one stopped. V03 is one: it
+renames the subscription table's unique index, which V02 named past the 63
+bytes Postgres keeps of an identifier, so Postgres created it under a
+truncated name. A host that has already run V02 adds:
+
+```elixir
+defmodule MyApp.Repo.Migrations.RenameStatifierRouterSubscriptionIndex do
+  use Ecto.Migration
+
+  def up, do: StatifierRouter.Migrations.up(from: 3)
+  def down, do: StatifierRouter.Migrations.down(from: 3, version: 3)
+end
+```
+
+with the same `:table_prefix` and `:prefix` its earlier migrations pass.
+Nothing is rebuilt, and on a database where the index already carries its
+new name the migration does nothing. `StatifierRouter.Migrations` says what
+a long `:table_prefix` does to the index names.
+
 ## A host that wraps the engine
 
 Some hosts already run statifier_persistence under an engine of their own:

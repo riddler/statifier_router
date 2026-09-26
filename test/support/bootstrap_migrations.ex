@@ -15,7 +15,8 @@ defmodule StatifierRouter.BootstrapMigrations do
     {20_260_919_000_101, __MODULE__.DefaultTables},
     {20_260_919_000_102, __MODULE__.PersistenceTables},
     {20_260_919_000_103, __MODULE__.SubscriptionsTable},
-    {20_260_925_000_104, __MODULE__.PersistenceEndedAt}
+    {20_260_925_000_104, __MODULE__.PersistenceEndedAt},
+    {20_260_925_000_105, __MODULE__.SubscriptionIndexName}
   ]
 
   defmodule DefaultTables do
@@ -43,6 +44,20 @@ defmodule StatifierRouter.BootstrapMigrations do
     # `CREATE TABLE` against tables that already exist.
     def up, do: Migrations.up(from: 2, version: 2)
     def down, do: Migrations.down(from: 2, version: 2)
+  end
+
+  defmodule SubscriptionIndexName do
+    @moduledoc false
+    use Ecto.Migration
+
+    alias StatifierRouter.Migrations
+
+    # What a host already at V02 writes for V03: the rename of the
+    # subscription index V02 created under a truncated name. A test
+    # database bootstrapped before V03 existed holds that name, and this
+    # step renames it the way it would a host's.
+    def up, do: Migrations.up(from: 3, version: 3)
+    def down, do: Migrations.down(from: 3, version: 3)
   end
 
   defmodule PersistenceTables do

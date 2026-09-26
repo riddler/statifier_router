@@ -31,6 +31,12 @@ defmodule StatifierRouter.Migrations.V02 do
   since the engine's cancellation carries an `invoke_id` and an execution
   and no binding.
 
+  Under the default table prefix that name is 70 bytes, past the 63
+  Postgres keeps, so Postgres creates the index under its first 63 bytes.
+  This version still builds it that way, so a database that already ran
+  it and a fresh one hold the same index; `StatifierRouter.Migrations.V03`
+  renames it to `<table>_invocation_index`.
+
   The table above is the layout with no layout option set. The
   `StatifierRouter.Migrations` layout options reshape it only as this
   version creates it, on the same terms as V01's tables: the
