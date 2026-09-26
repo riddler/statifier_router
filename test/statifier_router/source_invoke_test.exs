@@ -158,6 +158,30 @@ defmodule StatifierRouter.SourceInvokeTest do
 
       assert subscriptions(config) == []
     end
+
+    # With no :bindings_resolver the binding is checked against the static
+    # configuration before the address row is read, so an unknown binding
+    # is the refusal when both apply. Under a resolver the order is the
+    # other way round, as subscribe/3's doc says.
+    #
+    # sabotage: binding_and_address/3's static clause read the address row
+    # before checking the binding -> the refusal became
+    # {:unaddressed_execution, _}, red; restored, green.
+    test "an unknown binding for an unaddressed parcel execution is refused as the unknown binding" do
+      bindings = Enum.map(parcel_bindings(), &Map.put(&1, :create, :always_new))
+      config = config(self(), bindings: bindings)
+      scan = parcel_scan("parcel_scans/1/0001", "loaded")
+
+      assert {:ok, [{:created_and_delivered, "loaded_scans", execution_id}, _]} =
+               StatifierRouter.route(config, scan, now: @now)
+
+      assert addresses(config) == []
+
+      assert StatifierRouter.subscribe(config, "no_such_binding", {execution_id, "inv_1"}) ==
+               {:error, {:unknown_binding, "no_such_binding"}}
+
+      assert subscriptions(config) == []
+    end
   end
 
   describe "the delegate a host's invoke handler calls" do
