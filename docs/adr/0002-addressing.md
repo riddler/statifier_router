@@ -542,7 +542,7 @@ is not changed by this Note.
 
 ## Amendment (2026-09-26, sr-3o5z): a host column may not reuse a package column's name
 
-Status: proposed
+Status: accepted
 
 The sr-cgw Note above gives `StatifierRouter.Migrations.up/1` a
 `:leading_columns` option and says it is validated under
@@ -604,3 +604,48 @@ table; "is a host column when only a table outside the call declares
 it" migrates the two names above; and "leads with a primary key of the
 host's own under migration_primary_key: false" migrates a leading `id`
 with the repo's implicit primary key turned off.
+
+## Note (2026-09-26): the sr-3o5z Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator's word of 2026-09-26 is to accept the
+records whose code has been published, and the `## Amendment (2026-09-26,
+sr-3o5z)` above is one: its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 101 (`a018c43`, with `d160c59`, which
+left the primary key out of the refused set) and shipped in
+statifier_router 0.7.0 (tag `v0.7.0`, at `672eaa5`, published on Hex
+2026-09-26). The record's own status on line 3 was already `accepted` and
+was not touched, and the Note of 2026-09-26 on the columns under a host
+column carries no status of its own.
+
+Every claim was re-verified by anchor at `672eaa5`, which is both the tag
+and `main` at the time of the flip:
+
+- `StatifierRouter.Migrations.up/1` calls the private
+  `refuse_package_column_names!/2` over the span before any version's
+  `up`, and it raises `ArgumentError` naming each colliding column and the
+  tables that declare it; the comparison is `name in columns`, on the
+  name as given.
+- The private `@package_columns` attribute lists, for version 1, every
+  column `StatifierRouter.Migrations.V01`'s `up` adds to the address,
+  dedupe and routing ledger tables and, for version 2, every column
+  `StatifierRouter.Migrations.V02`'s `up` adds to the subscription table,
+  `inserted_at` included where the table has it and no `id` in any set.
+  No commit between `98d6e3e` and `672eaa5` other than `a018c43` touches
+  either version module.
+- The set is taken from the span `from:` and `version:` walk (the
+  private `span!/3`), so a name only a table outside the span declares
+  passes.
+- `down/1` parses the layout options with `up/1`'s rules and never calls
+  the refusal.
+- The tests are in `test/statifier_router/host_columns_test.exs`: "reject
+  a leading column a table the call creates already declares", "is
+  refused for every column the tables the call creates declare", "is a
+  host column when only a table outside the call declares it" and "leads
+  with a primary key of the host's own under migration_primary_key:
+  false".
+- The 0.7.0 section of `CHANGELOG.md` names the refusal as a fix.
+
+The sentence "statifier_persistence's helper does not refuse a package
+column's name at the time of writing" is about that package at the time
+of writing, and this Note does not re-read it.
