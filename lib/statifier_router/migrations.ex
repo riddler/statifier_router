@@ -87,11 +87,47 @@ defmodule StatifierRouter.Migrations do
   to hand an `{:error, reason}` to.
 
   `StatifierRouter.Migrations.V01` records what the first version creates,
-  and `StatifierRouter.Migrations.V02` what the second adds.
+  `StatifierRouter.Migrations.V02` what the second adds, and
+  `StatifierRouter.Migrations.V03` what the third renames.
 
   `:from` is **inclusive**: `up(from: 2)` runs V02, and a host already on
   V01 that writes it gets the subscription table without V01's
   `CREATE TABLE` running a second time (ADR-0007, section 6).
+
+  ## Upgrading to V03
+
+  V03 renames the subscription table's unique index, which V02 named past
+  the 63 bytes Postgres keeps of an identifier, to `<table>_invocation_index`.
+  A host that has already run V02 runs one more version, in a new migration
+  of its own:
+
+      def up, do: StatifierRouter.Migrations.up(from: 3)
+      def down, do: StatifierRouter.Migrations.down(from: 3, version: 3)
+
+  with the same `:table_prefix` and `:prefix` as its earlier migrations.
+  V03 renames the index in place and nothing is rebuilt. A host whose first
+  migration calls `up/1` with no `version:` gets V03 from it on a fresh
+  database, and still writes the migration above for the databases that
+  ran the first one before V03 existed: on a fresh database the second
+  run finds the index already renamed and does nothing.
+
+  ## Index names and a long `:table_prefix`
+
+  Every index name the versions leave is the table's name followed by a
+  suffix, and Postgres keeps at most 63 bytes of it. Under the default
+  prefix, `"statifier_router_"` (17 bytes), every name fits; the longest,
+  `statifier_router_routing_ledger_binding_id_inserted_at_index`, is 60
+  bytes. A `:table_prefix` longer than 20 bytes takes that name past 63,
+  and longer ones take more of the names with it. Such a prefix is
+  accepted: Postgres creates the index under its first 63 bytes and logs a
+  notice, and the index works as before, since the package's queries name
+  an index's columns, never its name. What changes is the name a host
+  reads back - a unique violation's constraint name, or `pg_indexes` -
+  which is the truncated one. V03 accounts for that when it renames: it
+  looks the index up under the name Postgres gave it. A prefix of 49 bytes
+  or more fails V01 itself: the routing ledger's table name then takes up
+  all 63 bytes, its index name cut to 63 bytes is the table's own name,
+  and Postgres refuses the `CREATE INDEX` because that relation exists.
   """
 
   alias StatifierRouter.Config
@@ -137,12 +173,14 @@ defmodule StatifierRouter.Migrations do
     ],
     2 => [
       subscriptions: [:binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
-    ]
+    ],
+    3 => []
   }
 
   @migrations %{
     1 => StatifierRouter.Migrations.V01,
-    2 => StatifierRouter.Migrations.V02
+    2 => StatifierRouter.Migrations.V02,
+    3 => StatifierRouter.Migrations.V03
   }
 
   # Read off the map rather than written beside it, so the default target

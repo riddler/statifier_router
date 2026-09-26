@@ -30,15 +30,27 @@ defmodule StatifierRouter.MigrationsTest do
   end
 
   # What a host already running V01 writes for V02: `from:` names the first
-  # version it has not run, and the walk includes it.
+  # version it has not run, and the walk includes it. Capped at V02, as the
+  # host wrote it before V03 existed.
   defmodule MigrateKxV02 do
     @moduledoc false
     use Ecto.Migration
 
     @opts [table_prefix: "kx_router_", prefix: "kx_router_schema"]
 
-    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2, version: 2])
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
+  end
+
+  # And what the same host writes for V03.
+  defmodule MigrateKxV03 do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [table_prefix: "kx_router_", prefix: "kx_router_schema"]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 3])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 3, version: 3])
   end
 
   defmodule MigrateKx do
@@ -53,10 +65,13 @@ defmodule StatifierRouter.MigrationsTest do
   @version 20_260_919_000_201
   @v01_version 20_260_922_000_202
   @v02_version 20_260_922_000_203
+  @v03_version 20_260_926_000_204
   @schema "kx_router_schema"
   @v01_tables ["kx_router_addresses", "kx_router_dedupe", "kx_router_routing_ledger"]
   @v02_tables ["kx_router_subscriptions"]
   @tables Enum.sort(@v01_tables ++ @v02_tables)
+  @v02_index "kx_router_subscriptions_execution_id_binding_id_invoke_id_index"
+  @v03_index "kx_router_subscriptions_invocation_index"
 
   setup_all do
     Sandbox.mode(TestRepo, :auto)
@@ -106,7 +121,7 @@ defmodule StatifierRouter.MigrationsTest do
     end
 
     SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = ANY($1)", [
-      [@version, @v01_version, @v02_version]
+      [@version, @v01_version, @v02_version, @v03_version]
     ])
 
     :ok
@@ -192,7 +207,9 @@ defmodule StatifierRouter.MigrationsTest do
 
     # sabotage: dropped V01's `create(index(addresses, [:execution_id], ...))`
     # -> red on the addresses index list, which the old indisunique filter had
-    # hidden; restored, green.
+    # hidden; restored, green. sabotage: removed V03 from the Migrations
+    # version map -> red on the subscriptions index list, which kept V02's
+    # name; restored, green.
     test "names every index on every version's tables and its columns" do
       assert index_columns("kx_router_addresses") == %{
                "kx_router_addresses_pkey" => ["id"],
@@ -216,7 +233,7 @@ defmodule StatifierRouter.MigrationsTest do
 
       assert index_columns("kx_router_subscriptions") == %{
                "kx_router_subscriptions_pkey" => ["id"],
-               "kx_router_subscriptions_execution_id_binding_id_invoke_id_index" => [
+               "kx_router_subscriptions_invocation_index" => [
                  "execution_id",
                  "binding_id",
                  "invoke_id"
@@ -397,8 +414,7 @@ defmodule StatifierRouter.MigrationsTest do
           TestRepo.insert!(Config.put_meta(config, row))
         end
 
-      assert error.constraint ==
-               "kx_router_subscriptions_execution_id_binding_id_invoke_id_index"
+      assert error.constraint == "kx_router_subscriptions_invocation_index"
 
       # A second invocation of the same binding in the same execution is a
       # second row, not a conflict (ADR-0007, section 6).
@@ -425,7 +441,13 @@ defmodule StatifierRouter.MigrationsTest do
       :ok = migrate_step(:up, @v02_version, MigrateKxV02)
       assert tables_present() == @tables
 
+      :ok = migrate_step(:up, @v03_version, MigrateKxV03)
+      assert Map.has_key?(index_columns("kx_router_subscriptions"), @v03_index)
+
       # And back down the same way, one version at a time.
+      :ok = migrate_step(:down, @v03_version, MigrateKxV03)
+      assert Map.has_key?(index_columns("kx_router_subscriptions"), @v02_index)
+
       :ok = migrate_step(:down, @v02_version, MigrateKxV02)
       assert tables_present() == @v01_tables
 
@@ -474,8 +496,8 @@ defmodule StatifierRouter.MigrationsTest do
     # sabotage: validate_version! accepted any integer -> the call reached
     # the DDL and raised RuntimeError, red; restored, green.
     test "a version this package does not know raises" do
-      assert_raise ArgumentError, ~r/unknown migration version 3/, fn ->
-        Migrations.up(version: 3)
+      assert_raise ArgumentError, ~r/unknown migration version 4/, fn ->
+        Migrations.up(version: 4)
       end
 
       assert_raise ArgumentError, ~r/unknown migration from 0/, fn -> Migrations.down(from: 0) end
