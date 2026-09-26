@@ -4,9 +4,11 @@ defmodule StatifierRouter.PersistenceHooksTest do
   import StatifierRouter.DeliveryFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Statifier.Effect.Send
   alias Statifier.Event
   alias StatifierPersistence.Executions
   alias StatifierRouter.Schema.{Address, Ledger}
+  alias StatifierRouter.SendHandler
   alias StatifierRouter.TestRepo
 
   # ADR-0003, the Amendment of 2026-09-25: `:on_create` and `:on_step` stand
@@ -210,6 +212,149 @@ defmodule StatifierRouter.PersistenceHooksTest do
       assert_raise ArgumentError, ~r/:on_step answered :ok/, fn ->
         StatifierRouter.route(config, scan("parcel_scans/1/0001", "loaded"), now: @now)
       end
+    end
+  end
+
+  describe "the execution-to-execution door" do
+    # ADR-0006: a send to the `execution` target is delivered by
+    # `StatifierRouter.Delivery.deliver_event/4`, which settles through the
+    # same create and step as route/3, so the hooks and the host's
+    # `:execution_id` stand in there too. The sender is a parcel created by
+    # a scan; the target is a second parcel on the same route.
+
+    # A send from the sender's step, of the configuration's send type, to
+    # the parcel `key` on `parcel_route`.
+    defp parcel_send(event, key, ordinal) do
+      %Send{
+        event: event,
+        target: "execution",
+        type: "myapp:parcel",
+        data: %{"document" => "parcel_route", "key" => key},
+        send_id: "send_1",
+        c_index: 3,
+        owner: nil,
+        macrostep: 1,
+        microstep: 0,
+        round: 0,
+        ordinal: ordinal
+      }
+    end
+
+    defp seam(execution_id), do: %{execution_id: execution_id, content_hash: "sha_1"}
+
+    # Reports each call to `pid` and answers a `trip_` id named for the
+    # key, a fictional prefix of the kind a host would choose.
+    defp target_ids(pid) do
+      fn scope, document, key ->
+        send(pid, {:minted, scope, document, key})
+        "trip_" <> key
+      end
+    end
+
+    # The sender's own create and step went through the hooks too; drop
+    # their reports so every assertion below reads the door's alone.
+    defp flush_hook_reports do
+      receive do
+        {:minted, _, _, _} -> flush_hook_reports()
+        {:on_create, _, _, _, _} -> flush_hook_reports()
+        {:on_step, _, _, _, _, _} -> flush_hook_reports()
+      after
+        0 -> :ok
+      end
+    end
+
+    # sabotage: deliver_event/4 settled with `on_create`, `on_step` and
+    # `execution_id` set to nil on the configuration -> the direct calls
+    # ran, no hook reported and the target's id was a UXID, red; restored,
+    # green. Second mutation: `on_step` alone set to nil there -> no
+    # :on_step report for the target, red; restored, green.
+    test "a send that creates its target calls :execution_id, :on_create and :on_step" do
+      config =
+        parcel_config(
+          on_create: recording_create(self()),
+          on_step: recording_step(self()),
+          execution_id: target_ids(self())
+        )
+
+      machine = Map.fetch!(machines(), "parcel_route")
+      store = config.store
+      create_opts = [executor: config.executor, initialize: config.persistence_options]
+      step_opts = [{:executor, config.executor} | config.persistence_options]
+
+      assert {:ok, [{:created_and_delivered, "loaded_scans", "trip_pcl_4821" = sender}, _]} =
+               StatifierRouter.route(config, scan("parcel_scans/1/0001", "loaded"), now: @now)
+
+      flush_hook_reports()
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, parcel_send("loaded", "pcl_5930", 1)},
+               seam(sender)
+             ) == :ok
+
+      assert_received {:minted, "7c1e", "parcel_route", "pcl_5930"}
+      assert_received {:on_create, ^store, "trip_pcl_5930", ^machine, ^create_opts}
+
+      assert_received {:on_step, ^store, "trip_pcl_5930", ^machine,
+                       %Event{name: "loaded", origin: origin}, ^step_opts}
+
+      assert origin == "#_scxml_" <> sender
+
+      assert %Address{execution_id: "trip_pcl_5930"} =
+               Enum.find(addresses(config), &(&1.key == "pcl_5930"))
+
+      assert %Ledger{
+               binding_id: "execution",
+               outcome: "created_and_delivered",
+               key: "pcl_5930",
+               execution_id: "trip_pcl_5930"
+             } = List.last(ledger(config))
+
+      assert inputs(config, "trip_pcl_5930") == [{0, "step", "loaded"}]
+    end
+
+    # sabotage: both mutations above -> no :on_step report for the second
+    # send, red; restored, green.
+    test "a send to a target that exists calls :on_step alone, and mints nothing" do
+      config =
+        parcel_config(
+          on_create: recording_create(self()),
+          on_step: recording_step(self()),
+          execution_id: target_ids(self())
+        )
+
+      machine = Map.fetch!(machines(), "parcel_route")
+      store = config.store
+      step_opts = [{:executor, config.executor} | config.persistence_options]
+
+      assert {:ok, [{:created_and_delivered, "loaded_scans", sender}, _]} =
+               StatifierRouter.route(config, scan("parcel_scans/1/0001", "loaded"), now: @now)
+
+      assert :ok =
+               SendHandler.handle_effect(
+                 config,
+                 {:send, parcel_send("loaded", "pcl_5930", 1)},
+                 seam(sender)
+               )
+
+      flush_hook_reports()
+
+      assert SendHandler.handle_effect(
+               config,
+               {:send, parcel_send("delivered", "pcl_5930", 2)},
+               seam(sender)
+             ) == :ok
+
+      refute_received {:minted, _, _, _}
+      refute_received {:on_create, _, _, _, _}
+
+      assert_received {:on_step, ^store, "trip_pcl_5930", ^machine, %Event{name: "delivered"},
+                       ^step_opts}
+
+      assert %Ledger{outcome: "delivered", key: "pcl_5930", execution_id: "trip_pcl_5930"} =
+               List.last(ledger(config))
+
+      assert inputs(config, "trip_pcl_5930") == [{0, "step", "loaded"}, {1, "step", "delivered"}]
     end
   end
 end
