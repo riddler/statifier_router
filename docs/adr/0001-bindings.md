@@ -295,7 +295,7 @@ separate bead after all seven records; the index lags by design until then.
 
 ## Amendment (2026-09-25, sr-h27): the binding set as a function of scope, exclusive with the static list
 
-Status: proposed
+Status: accepted
 
 Section 7 has the host hand the router its bindings, and until now it
 handed one list, `:bindings`, read the same for every scope. A host whose
@@ -379,3 +379,30 @@ it; and `StatifierRouter.Broadway`, whose `partition/3` reads it; in the
 pull request that carries this Amendment. The bindings resolver tests pin
 two scopes answering different bindings for one source and the refusal of
 both keys together.
+
+## Note (2026-09-25): the sr-h27 Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator accepted the `## Amendment (2026-09-25,
+sr-h27)` on 2026-09-25, and its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 89 (`da78b5f`) and shipped in
+statifier_router 0.6.0 (tag `v0.6.0`, at `0854a99`). The record's own
+status on line 3 was already `accepted` and was not touched.
+
+Every claim was re-verified by anchor at `0854a99`, which is both the
+tag and `main` at the time of the flip:
+
+- The behaviour is `StatifierRouter.BindingsResolver`
+  (`lib/statifier_router/bindings_resolver.ex`).
+- `StatifierRouter.Config`'s private `binding_source/1` checks the two
+  keys, and its `bindings_for/2` answers the static list when no
+  resolver is set and asks the resolver otherwise.
+- `StatifierRouter.Broadway`'s `partition/3` reads the binding set of the
+  event's scope.
+- The tests are in `test/statifier_router/bindings_resolver_test.exs`.
+
+Under a resolver, `check/3` reads `bindings: []`, so its
+`:undeclared_binding_events` is empty whether or not any binding was
+checked, as the reader list above says. sr-9fud makes that visible in the
+report; it lands with a later Note on this record and does not hold this
+flip.

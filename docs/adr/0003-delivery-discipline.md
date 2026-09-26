@@ -600,7 +600,7 @@ the one that carried the Amendment.
 
 ## Amendment (2026-09-25, sr-vp1): a host may stand in for create/4 and step/5, and the transaction stays the delivery's
 
-Status: proposed
+Status: accepted
 
 Section 1 has the delivery call statifier_persistence's
 `Executions.create/4` and `Executions.step/5` itself, inside its
@@ -662,3 +662,27 @@ the two keys, and `StatifierRouter.Delivery`, whose
 hook or directly, in the pull request that carries this Amendment. The
 persistence hooks tests pin the arguments against the direct call's, and
 each arm of each contract.
+
+## Note (2026-09-25): the sr-vp1 Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator accepted the `## Amendment (2026-09-25,
+sr-vp1)` on 2026-09-25, and its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 88 (`53d8118`) and shipped in
+statifier_router 0.6.0 (tag `v0.6.0`, at `0854a99`). The record's own
+status on line 3 was already `accepted` and was not touched.
+
+Every claim was re-verified by anchor at `0854a99`, which is both the
+tag and `main` at the time of the flip:
+
+- `StatifierRouter.Delivery`'s private `persistence_create/4` and
+  `persistence_step/5` call statifier_persistence directly when the key
+  is `nil` and the host's hook otherwise.
+- The tests are in `test/statifier_router/persistence_hooks_test.exs`.
+
+**One anchor that is inexact.** The Amendment names the check as
+`StatifierRouter.Config`'s `hooks/1`. It was `hooks/1` when the
+Amendment landed (`53d8118`); the sr-1b2 Amendment on ADR-0002 widened
+it to `hooks/2`, which checks the two keys and `:execution_id` with one
+function. What it checks for `:on_create` and `:on_step` is as the
+Amendment says.

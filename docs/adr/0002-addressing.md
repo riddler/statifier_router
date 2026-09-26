@@ -387,7 +387,7 @@ then.
 
 ## Amendment (2026-09-25, sr-1b2): a host may mint the execution id
 
-Status: proposed
+Status: accepted
 
 Section 3 has the router mint every execution id, as a UXID with the
 prefix `ex`, and leaves the format to the code half. A host that already
@@ -481,3 +481,23 @@ validates the three options, and `StatifierRouter.Migrations.V01` and
 the pull request that carries this Note. The host column tests read each
 table's columns back from the database catalog under the three options,
 and the migration tests read them back under none.
+
+## Note (2026-09-25): the sr-1b2 Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator accepted the `## Amendment (2026-09-25,
+sr-1b2)` on 2026-09-25, and its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 90 (`0f0ebb0`) and shipped in
+statifier_router 0.6.0 (tag `v0.6.0`, at `0854a99`). The record's own
+status on line 3 was already `accepted` and was not touched, and the
+sr-cgw Note above carries no status of its own.
+
+Every claim was re-verified by anchor at `0854a99`, which is both the
+tag and `main` at the time of the flip:
+
+- `StatifierRouter.Config`'s private `hooks/2` checks `:execution_id`
+  against `execution_id/3`, as it checks `:on_create` and `:on_step`.
+- `StatifierRouter.Delivery`'s private `mint_execution_id/4` mints the
+  default UXID when the key is `nil` and calls the host's callback
+  otherwise.
+- The tests are in `test/statifier_router/execution_id_test.exs`.
