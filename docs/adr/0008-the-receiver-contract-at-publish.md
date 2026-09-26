@@ -917,3 +917,29 @@ whose every event is declared answers `unchecked: []`.
 - **A publish-time check that takes a scope**, or one that calls the
   resolver.
 - **Whether the `unchecked` reasons are a closed set.**
+
+## Note (2026-09-26, sr-8jr7): decision 2's "every scope" holds for the static list, and decision 3's location rule has one exception
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it.
+
+**Decision 2, under a bindings resolver.** Decision 2 says a binding
+applies in every scope its events carry, so a host whose declarations
+differ by scope calls the binding check once per scope, with one lookup
+each. ADR-0001's Amendment of 2026-09-25 (the bindings resolver,
+accepted 2026-09-25) restates that sentence as holding for the static
+`:bindings` list only: under a `:bindings_resolver`, a binding applies in
+the scopes whose answer carries it. A host with a resolver checks each
+scope's answer with `undeclared_binding_events/2` and that scope's
+lookup; `check/3` builds its `undeclared_binding_events` from the
+configuration's `bindings: []` and never calls the resolver
+(`StatifierRouter.Contracts.check/3`, read at `98d6e3e`).
+
+**Decision 3, under the Amendment of 2026-09-26.** Decision 3 says every
+`unchecked` entry carries the `<send>` element's location. The Amendment
+of 2026-09-26 above, at proposed, names decision 6's `unchecked` key as
+what it amends; it also makes the one exception to decision 3's
+location rule, the `:bindings_resolver` entry, whose `location` is
+`nil`. Its public anchors are `check/3`, which puts that entry first,
+and the type `t:StatifierRouter.Contracts.bindings_unchecked/0`, which
+spells it (both read at `98d6e3e`).
