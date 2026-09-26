@@ -818,3 +818,102 @@ carries 0.6.0 and no change to them:
 - The tests are in `test/statifier_router/contracts_test.exs`, in the
   describe block `check/3's unregistered_routes (ADR-0008, the
   2026-09-24 Amendment)`.
+
+## Amendment (2026-09-26, sr-9fud): under a bindings resolver, `check/3`'s `unchecked` list opens with one `:bindings_resolver` entry that has no location
+
+Status: proposed
+
+ADR-0001's 2026-09-25 Amendment lets a configuration answer its bindings
+per scope through a `:bindings_resolver`, keeps `bindings: []` on such a
+configuration, and leaves `check/3` taking no scope. Decision 6 has
+`check/3` build `undeclared_binding_events` from the configuration's
+`:bindings`, so under a resolver that key is empty whether or not any
+binding's event would be refused.
+
+- **What the check does today** (read at `89bbd28`). `check/3` never
+  calls the resolver, and nothing else in its report depends on one: its
+  `undeclared_binding_events` is `undeclared_binding_events/2` over
+  `config.bindings`, which is `[]` under a resolver
+  (`StatifierRouter.Contracts.check/3`). A host with a resolver and a
+  binding whose event its document never declared gets a report
+  identical to a clean pass.
+- **What decision 3 says of the like case.** A send that decision 1
+  selects but cannot judge "is never a finding and never passed
+  silently". The bindings under a resolver are not judged, and until
+  now they are passed silently.
+
+The operator ruled on 2026-09-25 that the report carries an explicit
+marker that the binding check did not run, with the spelling left to
+this record.
+
+### The decision
+
+1. **The marker.** When the configuration's `:bindings_resolver` is not
+   `nil`, `check/3`'s `unchecked` list holds
+   `%{reason: :bindings_resolver, location: nil}` as its first entry,
+   exactly once, whatever the machine and the lookup. The resolver is
+   still never called, and the lookup is not asked anything for it.
+2. **An entry, not a key.** `check/3` keeps its five keys; no sixth is
+   added. A new key would appear in the report of every host, with a
+   resolver or without one; the entry appears only in a report whose
+   configuration gives a resolver.
+3. **The one entry with no location.** Every other `unchecked` entry
+   carries a `<send>` element's location. This one names no element,
+   because the bindings are configuration and not chart, so its
+   `location` is `nil`. Its type is
+   `t:StatifierRouter.Contracts.bindings_unchecked/0`, and `check/3`'s
+   report type admits it beside the two located shapes.
+4. **Order.** It comes before the located entries, which stay in
+   document order by each `<send>` element's source offset, so the
+   ordering never reads its location.
+5. **Decision 6's `unchecked` key, as amended**: the `:bindings_resolver`
+   entry when the configuration gives a resolver, then
+   `Routes.unregistered/2`'s and `undeclared_events/3`'s unchecked
+   entries together, in document order. `undeclared_events/3`,
+   `undeclared_binding_events/2` and `Routes.unregistered/2` are
+   unchanged.
+6. **The per-scope check stays the host's.** Under a resolver
+   `undeclared_binding_events` stays empty, and a host checks each
+   scope's answer with `undeclared_binding_events/2`, as decision 2 and
+   ADR-0001's 2026-09-25 Amendment already have it do.
+7. **Absent is today.** A configuration with no `:bindings_resolver`
+   gets exactly the report it got before this Amendment.
+8. **The release.** Whether the `unchecked` reasons are a closed set was
+   left undecided by the 2026-09-24 Amendment, and this Amendment does
+   not decide it. The entry ships in a minor release all the same, and
+   its changelog names it as breaking for a host with a resolver that
+   reads every entry's `location`.
+
+### The code
+
+In the same change as this Amendment, citing it:
+`StatifierRouter.Contracts`'s `check/3` puts the answer of its private
+`bindings_unchecked/1` before the sorted located entries. The type is
+`t:StatifierRouter.Contracts.bindings_unchecked/0`. The tests are in
+`test/statifier_router/contracts_test.exs`, in the describe block
+`check/3 under a bindings resolver (ADR-0008, the 2026-09-26 Amendment)`,
+and in `test/statifier_router/bindings_resolver_test.exs`, in the
+describe block `the publish-time checks under a bindings resolver`, each
+with its sabotage note.
+
+### The example
+
+A depot routes its scans per scope, through a `:bindings_resolver`. A
+chart with no execution-target or route sends is checked against it:
+
+    %{
+      unsupported_types: [],
+      unregistered_routes: [],
+      unchecked: [%{reason: :bindings_resolver, location: nil}],
+      undeclared_events: [],
+      undeclared_binding_events: []
+    }
+
+The same chart under a configuration with a static `:bindings` list
+whose every event is declared answers `unchecked: []`.
+
+### What this Amendment does not decide
+
+- **A publish-time check that takes a scope**, or one that calls the
+  resolver.
+- **Whether the `unchecked` reasons are a closed set.**
