@@ -428,3 +428,30 @@ scope's answer with `undeclared_binding_events/2`. The code is
 `StatifierRouter.Contracts`'s `check/3` and its private
 `bindings_unchecked/1`, in the pull request that carries ADR-0008's
 Amendment.
+
+## Note (2026-09-26): the anchor of the Note above is `check/3` and `t:StatifierRouter.Contracts.bindings_unchecked/0`
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It restates where the Note above points for
+its code.
+
+The Note above ends by naming `check/3` and the private
+`bindings_unchecked/1` as the code. A private function can be renamed
+or folded away with no change a host could see, so it is not an anchor
+this record keeps. The anchor is the public surface alone:
+
+- `StatifierRouter.Contracts.check/3`, whose `@doc` says that under a
+  `:bindings_resolver` the entry `%{reason: :bindings_resolver,
+  location: nil}` comes first under `:unchecked`, and that it is absent
+  without one.
+- The public type `t:StatifierRouter.Contracts.bindings_unchecked/0`,
+  which spells that entry and is the first member of the `:unchecked`
+  element type in `t:StatifierRouter.Contracts.check_report/0`.
+
+The tests are the `check/3 under a bindings resolver` block in
+`test/statifier_router/contracts_test.exs`. ADR-0008's Amendment of
+2026-09-26, which the Note above names at `proposed`, has since been
+accepted, by the Note at the foot of that record.
+
+Every claim was verified by anchor at `4998efc`, `main` when this Note
+was written. No line above this Note was edited.
