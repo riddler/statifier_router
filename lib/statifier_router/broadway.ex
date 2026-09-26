@@ -162,14 +162,18 @@ defmodule StatifierRouter.Broadway do
   Under a `:bindings_resolver`, the bindings are the resolver's answer for
   the event's scope, asked here once per message and again by `route/3` in
   `handle_message/3` (ADR-0001, the Amendment of 2026-09-25). An answer
-  that is not a list of bindings raises, and here that raise takes the
-  producer down, as a raising `normalize` does (below).
+  that is not a list of bindings raises `ArgumentError`; here that raise
+  is rescued and the message is partitioned by its message id, so it does
+  not take the producer down. `route/3` raises the same `ArgumentError`
+  in `handle_message/3`, and Broadway fails the message there. A resolver
+  that raises `ArgumentError` itself is treated the same way; any other
+  raise from the resolver is not rescued here.
 
   A message no such binding addresses is partitioned by the hash of its
   message id. So is a message `normalize` builds no routable event from,
-  and one whose resolver answer `StatifierRouter.route/3` would refuse: a
-  partitioner answers for every message, and `handle_message/3` is where
-  such a message fails.
+  one whose resolver answer `StatifierRouter.route/3` would refuse, and
+  one whose resolver answer is malformed: a partitioner answers for every
+  message, and `handle_message/3` is where such a message fails.
 
   `normalize` is called here as well as in `handle_message/3`, and here it
   runs in the producer's dispatcher, where a raise takes the producer down
@@ -181,7 +185,7 @@ defmodule StatifierRouter.Broadway do
     case normalize.(message) do
       %{scope: scope, source: source, data: data} = event
       when is_binary(scope) and is_binary(source) and is_map(data) ->
-        case Config.bindings_for(router, scope) do
+        case bindings_for(router, scope) do
           {:ok, bindings} -> by_address(bindings, event)
           {:error, _refused} -> by_message_id(event)
         end
@@ -197,6 +201,16 @@ defmodule StatifierRouter.Broadway do
       {:ok, _outcomes} -> message
       {:error, reason} -> Message.failed(message, reason)
     end
+  end
+
+  # Config.bindings_for/2 raises ArgumentError on a malformed resolver
+  # answer. The partitioner runs in the producer's dispatcher, so the raise
+  # is turned into the refused path here and route/3, which raises it again
+  # in handle_message/3, is where the message fails.
+  defp bindings_for(router, scope) do
+    Config.bindings_for(router, scope)
+  rescue
+    error in ArgumentError -> {:error, error}
   end
 
   defp by_address(bindings, event) do

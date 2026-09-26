@@ -77,9 +77,8 @@ defmodule StatifierRouter.BindingsResolverTest do
     }
   end
 
-  # The execution the impression-and-click join's first event creates,
-  # under the scope 7c1e, which the resolver below answers the join's
-  # bindings for.
+  # The execution the first routed event creates, under the scope 7c1e,
+  # which the resolver below answers the bindings for.
   defp joined_execution(config) do
     assert {:ok, [{:created_and_delivered, "impressions_to_join", execution_id}, _]} =
              StatifierRouter.route(config, impression(), now: ~U[2026-09-19 08:00:00.000000Z])
@@ -236,6 +235,22 @@ defmodule StatifierRouter.BindingsResolverTest do
                refused,
                normalize
              ) == :erlang.phash2("parcel_scans/4/3")
+    end
+
+    # sabotage: partition/3 called Config.bindings_for/2 without the
+    # rescue -> the malformed answer raised ArgumentError out of
+    # partition/3, red; restored, green.
+    test "hashes the message id for a malformed answer, and route/3 raises it" do
+      normalize = &StatifierRouter.Broadway.normalize/1
+      not_a_list = recording_config(fn _scope -> :none end)
+      event = scan(@north, "parcel_scans/4/4", "loaded")
+
+      assert StatifierRouter.Broadway.partition(message(event), not_a_list, normalize) ==
+               :erlang.phash2("parcel_scans/4/4")
+
+      assert_raise ArgumentError, ~r/answered :none/, fn ->
+        StatifierRouter.route(not_a_list, event)
+      end
     end
   end
 

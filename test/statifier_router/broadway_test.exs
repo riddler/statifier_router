@@ -197,6 +197,39 @@ defmodule StatifierRouter.BroadwayTest do
 
       stop(pipeline)
     end
+
+    # sabotage: partition/3 called Config.bindings_for/2 without the
+    # rescue -> the partitioner's raise took the producer down and no ack
+    # arrived, red; restored, green.
+    test "a message whose bindings resolver answer is malformed is failed in route/3" do
+      config = config(self(), bindings_resolver: fn _scope -> :none end)
+      pipeline = start(config, processors: [default: [concurrency: 4]])
+      producer = pipeline |> Broadway.producer_names() |> hd() |> Process.whereis()
+
+      log =
+        capture_log(fn ->
+          for n <- 1..2 do
+            scan = parcel_scan("parcel_scans/3/#{n}", "loaded")
+
+            ref =
+              Broadway.test_message(pipeline, scan.data,
+                metadata: Map.take(scan, [:scope, :message_id, :source])
+              )
+
+            assert_receive {:ack, ^ref, [],
+                            [%Message{status: {:error, %ArgumentError{message: message}, _}}]},
+                           5_000
+
+            assert message =~ "answered :none"
+          end
+        end)
+
+      assert log =~ "answered :none"
+      assert Process.whereis(hd(Broadway.producer_names(pipeline))) == producer
+      assert executions() == 0
+
+      stop(pipeline)
+    end
   end
 
   describe "partition/3" do
