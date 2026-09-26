@@ -38,7 +38,14 @@ defmodule StatifierRouter.Migrations do
       `branch_id` at ordinal position 2 on all four tables. The package's
       schemas do not declare the column, so the package never reads or
       writes it; a default or a `NOT NULL` belongs to a later migration of
-      the host's own.
+      the host's own. A name a table the call creates already declares -
+      `id`, or any column `StatifierRouter.Migrations.V01` or
+      `StatifierRouter.Migrations.V02` lists for it - raises
+      `ArgumentError` naming the column and those tables, before any DDL
+      runs, where Postgres would otherwise refuse the `CREATE TABLE` with a
+      duplicate column. A name only a table the call does not create
+      declares is a host column like any other: `up(from: 2)` may lead
+      with `expires_at`, which only V01's dedupe table has.
     * `:timestamps_position` - where `inserted_at` goes in every table a
       version creates that has one (the address table, the routing ledger
       and the subscription table; the dedupe table has none): `:trailing`
@@ -105,6 +112,30 @@ defmodule StatifierRouter.Migrations do
     :invoke_id
   ]
 
+  # The columns each version declares in each table it creates, the
+  # implicit `id` included. A leading column may not reuse one of them in
+  # a table the call creates: Postgres refuses a duplicate column name.
+  @package_columns %{
+    1 => [
+      addresses: [:id, :scope, :document, :key, :execution_id, :inserted_at, :terminal_seen_at],
+      dedupe: [:id, :binding_id, :message_id, :expires_at],
+      routing_ledger: [
+        :id,
+        :binding_id,
+        :message_id,
+        :scope,
+        :outcome,
+        :key,
+        :execution_id,
+        :reason,
+        :inserted_at
+      ]
+    ],
+    2 => [
+      subscriptions: [:id, :binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
+    ]
+  }
+
   @migrations %{
     1 => StatifierRouter.Migrations.V01,
     2 => StatifierRouter.Migrations.V02
@@ -123,10 +154,10 @@ defmodule StatifierRouter.Migrations do
     {from, opts} = Keyword.pop(opts, :from, @initial_version)
     validate_version!(from, "from")
     {storage, target} = parse!(opts, @current_version)
+    span = span!(from, target, :up)
+    refuse_package_column_names!(storage.leading_columns, span)
 
-    from
-    |> span!(target, :up)
-    |> Enum.each(fn version -> Map.fetch!(@migrations, version).up(storage) end)
+    Enum.each(span, fn version -> Map.fetch!(@migrations, version).up(storage) end)
   end
 
   @doc """
@@ -227,6 +258,28 @@ defmodule StatifierRouter.Migrations do
     raise ArgumentError,
           "the :leading_columns entry for #{inspect(name)} must be {type, opts}, " <>
             "got: #{inspect(other)}"
+  end
+
+  # Checked in up/1 only, against the tables the span creates: down/1
+  # creates no table and ignores the layout options, and a name only a
+  # table outside the span declares is a host column like any other.
+  defp refuse_package_column_names!(leading_columns, span) do
+    tables = Enum.flat_map(span, &Map.fetch!(@package_columns, &1))
+
+    collisions =
+      for {name, _column} <- leading_columns,
+          declared_in = for({table, columns} <- tables, name in columns, do: table),
+          declared_in != [],
+          do: "#{inspect(name)} (in #{Enum.join(declared_in, ", ")})"
+
+    if collisions != [] do
+      raise ArgumentError,
+            "the :leading_columns option names a column the package declares: " <>
+              Enum.join(collisions, "; ") <>
+              "; a host column needs a name no table this call creates declares"
+    end
+
+    :ok
   end
 
   defp validate_timestamps_position!(position) when position in @timestamps_positions,

@@ -539,3 +539,56 @@ is not changed by this Note.
   four tables" in `test/statifier_router/host_columns_test.exs` reads
   the address table's column names, in order, and their collations back
   from the database catalog.
+
+## Amendment (2026-09-26, sr-3o5z): a host column may not reuse a package column's name
+
+Status: proposed
+
+The sr-cgw Note above gives `StatifierRouter.Migrations.up/1` a
+`:leading_columns` option and says it is validated under
+statifier_persistence's rules. Those rules refuse a malformed entry and
+a name given twice, and nothing else, so a host column named like a
+column the package declares - `id`, `scope`, `inserted_at` - passed
+validation and the version's `CREATE TABLE` then failed in Postgres
+with a duplicate column error. This Amendment decides that the router
+refuses such a name itself, before any DDL.
+
+- **What is refused.** A `:leading_columns` name that a table the call
+  creates already declares: the implicit `id`, or any column
+  `StatifierRouter.Migrations.V01` lists for the address, dedupe or
+  routing ledger table or `StatifierRouter.Migrations.V02` lists for the
+  subscription table. `up/1` raises `ArgumentError` naming each such
+  column and the tables that declare it. The comparison is on the name
+  exactly as given.
+- **Only the tables the call creates.** The set is taken from the
+  versions `from:` and `version:` walk. A name only a table outside that
+  span declares is a host column like any other: `up(from: 2)` may lead
+  with `expires_at`, which only the dedupe table has, and
+  `up(version: 1)` with `invoke_id`, which only the subscription table
+  has. Both migrated before this Amendment and still do.
+- **`down/1` is unchanged.** It creates no table and accepts and ignores
+  the layout options, as the sr-cgw Note says.
+- **Nothing that worked stops working.** Every name refused here made
+  the migration fail before; the refusal moves that failure ahead of
+  the DDL and names the column.
+- **The router decides for itself.** This departs from the sr-cgw
+  Note's "under the spellings and validation rules
+  statifier_persistence's migrations helper uses" in this one rule: the
+  spellings are unchanged, and statifier_persistence's helper does not
+  refuse a package column's name at the time of writing. Whether it
+  should is that package's call; this record does not wait on it.
+
+**Where the code is.** `StatifierRouter.Migrations`, whose `up/1`
+calls the private `refuse_package_column_names!/2` over the span, which
+reads the column sets from the private `@package_columns` attribute, in
+the pull request that carries this Amendment. The tables those sets
+mirror are the `up/1` of `StatifierRouter.Migrations.V01` and of
+`StatifierRouter.Migrations.V02`, read at `98d6e3e`. In
+`test/statifier_router/host_columns_test.exs`, "reject a leading column
+a table the call creates already declares" pins the refusal and its
+message for one name per distinct set of declaring tables; "is refused
+for every column the tables the call creates declare" reads every
+column of the plainly migrated tables back from the database catalog
+and checks each is refused under the span that creates its table; and
+"is a host column when only a table outside the call declares it"
+migrates the two names above.

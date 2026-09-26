@@ -68,9 +68,53 @@ defmodule StatifierRouter.HostColumnsTest do
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
+  # A leading column named like a package column that only a table outside
+  # the call's span declares: invoke_id is the subscription table's alone
+  # (V02), expires_at the dedupe table's alone (V01).
+  defmodule MigrateHcV01Invoke do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [
+      table_prefix: "hc_router_",
+      prefix: "hc_router_schema",
+      leading_columns: [invoke_id: {:text, null: true}]
+    ]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [version: 1])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 1, version: 1])
+  end
+
+  defmodule MigrateHcV02Expires do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [
+      table_prefix: "hc_router_",
+      prefix: "hc_router_schema",
+      leading_columns: [expires_at: {:utc_datetime_usec, null: true}]
+    ]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
+  end
+
+  defmodule MigrateHcV02Plain do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [table_prefix: "hc_router_", prefix: "hc_router_schema"]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
+  end
+
   @version 20_260_925_000_301
   @v01_version 20_260_925_000_302
   @v02_version 20_260_925_000_303
+  @v01_invoke_version 20_260_925_000_304
+  @v02_expires_version 20_260_925_000_305
+  @v02_plain_version 20_260_925_000_306
   @schema "hc_router_schema"
   @tables [
     "hc_router_addresses",
@@ -98,7 +142,14 @@ defmodule StatifierRouter.HostColumnsTest do
     end
 
     SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = ANY($1)", [
-      [@version, @v01_version, @v02_version]
+      [
+        @version,
+        @v01_version,
+        @v02_version,
+        @v01_invoke_version,
+        @v02_expires_version,
+        @v02_plain_version
+      ]
     ])
 
     :ok
@@ -277,6 +328,53 @@ defmodule StatifierRouter.HostColumnsTest do
     end
   end
 
+  describe "a leading column named like a package column" do
+    # The refusal's column sets pinned to the DDL: every column the plain
+    # migrations create, read back from the catalog, is refused under the
+    # span that creates its table.
+    # sabotage: dropped :terminal_seen_at from @package_columns' address
+    # entry -> red here on terminal_seen_at, which then reached the DDL.
+    test "is refused for every column the tables the call creates declare" do
+      :ok = Migrator.up(TestRepo, @v01_version, MigrateHcV01Plain, log: false)
+      :ok = Migrator.up(TestRepo, @v02_plain_version, MigrateHcV02Plain, log: false)
+
+      for {table, span} <- [
+            {"hc_router_addresses", [version: 1]},
+            {"hc_router_dedupe", [version: 1]},
+            {"hc_router_routing_ledger", [version: 1]},
+            {"hc_router_subscriptions", [from: 2]}
+          ],
+          {column, _collation} <- columns(table) do
+        name = String.to_existing_atom(column)
+
+        assert_raise ArgumentError,
+                     ~r/names a column the package declares: #{inspect(name)} /,
+                     fn ->
+                       Migrations.up(span ++ [leading_columns: [{name, {:text, []}}]])
+                     end
+      end
+    end
+
+    # sabotage: made refuse_package_column_names!/2 check every version's
+    # tables rather than the span's -> red here, invoke_id refused under
+    # version: 1.
+    test "is a host column when only a table outside the call declares it" do
+      :ok = Migrator.up(TestRepo, @v01_invoke_version, MigrateHcV01Invoke, log: false)
+
+      assert [{"id", nil}, {"invoke_id", nil}, {"scope", nil} | _] =
+               columns("hc_router_addresses")
+
+      :ok = Migrator.up(TestRepo, @v02_expires_version, MigrateHcV02Expires, log: false)
+
+      assert [{"id", nil}, {"expires_at", nil}, {"binding_id", nil} | _] =
+               columns("hc_router_subscriptions")
+
+      :ok = Migrator.down(TestRepo, @v02_expires_version, MigrateHcV02Expires, log: false)
+      :ok = Migrator.down(TestRepo, @v01_invoke_version, MigrateHcV01Invoke, log: false)
+      assert tables_present() == []
+    end
+  end
+
   describe "the options" do
     # sabotage: made layout!/1 take :leading_columns unchecked -> red
     # here, the first malformed spelling reached the DDL.
@@ -318,6 +416,45 @@ defmodule StatifierRouter.HostColumnsTest do
 
       assert_raise ArgumentError, ~r/unknown column :branch_id in :column_collations/, fn ->
         Migrations.up(column_collations: [branch_id: "C"])
+      end
+    end
+
+    # One name per distinct set of tables that declares it: every table,
+    # three of the four, the address and ledger tables, the address table
+    # alone, the dedupe table alone, the ledger table alone and the
+    # subscription table alone. None of these reaches the DDL, so the
+    # call needs no migration runner.
+    # sabotage: made up/1 skip refuse_package_column_names!/2 -> red here,
+    # the first name reached V01's DDL outside a migration runner.
+    # sabotage: dropped :expires_at from @package_columns' dedupe entry ->
+    # red here on :expires_at.
+    test "reject a leading column a table the call creates already declares" do
+      for {name, tables} <- [
+            id: "addresses, dedupe, routing_ledger, subscriptions",
+            scope: "addresses, routing_ledger, subscriptions",
+            document: "addresses",
+            terminal_seen_at: "addresses",
+            expires_at: "dedupe",
+            reason: "routing_ledger",
+            invoke_id: "subscriptions",
+            inserted_at: "addresses, routing_ledger, subscriptions"
+          ] do
+        message =
+          "the :leading_columns option names a column the package declares: " <>
+            "#{inspect(name)} (in #{tables}); " <>
+            "a host column needs a name no table this call creates declares"
+
+        assert_raise ArgumentError, message, fn ->
+          Migrations.up(leading_columns: [{:branch_id, {:text, []}}, {name, {:text, []}}])
+        end
+      end
+
+      assert_raise ArgumentError, ~r/:inserted_at \(in addresses, routing_ledger\)/, fn ->
+        Migrations.up(
+          leading_columns: [inserted_at: {:text, []}],
+          timestamps_position: :leading,
+          version: 1
+        )
       end
     end
 
