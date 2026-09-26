@@ -580,6 +580,32 @@ defmodule StatifierRouter.ContractsTest do
     end
   end
 
+  describe "check/3 with the host's own send types (ADR-0005, the 2026-09-26 Amendment)" do
+    @courier_sends """
+    <send type="#{@type_string}" target="doorstep_photos" event="parcel.photographed"/>
+    <send type="depot:courier" target="van_7" event="parcel.loaded"/>
+    <send type="depot:audit" target="audit_log" event="parcel.seen"/>
+    """
+
+    # Sabotage: Routes.unsupported_types/2 reading the router's type alone
+    # (the snapshot built without the host's map) reports depot:courier
+    # and this goes red.
+    test "supports a type the host declared in :send_handlers" do
+      config = config(send_handlers: %{"depot:courier" => MyApp.Courier})
+      report = Contracts.check(config, compile!(courier_round(@courier_sends)), declares_both())
+
+      assert [%{type: "depot:audit"}] = report.unsupported_types
+    end
+
+    # Sabotage: defaulting :send_handlers to a map naming depot:courier
+    # drops it from this report and this goes red.
+    test "reports the same type unsupported on a configuration without it" do
+      report = Contracts.check(config(), compile!(courier_round(@courier_sends)), declares_both())
+
+      assert [%{type: "depot:courier"}, %{type: "depot:audit"}] = report.unsupported_types
+    end
+  end
+
   describe "check/3 under a bindings resolver (ADR-0008, the 2026-09-26 Amendment)" do
     # Sabotage: bindings_unchecked/1's resolver clause answering [] leaves
     # the report identical to a clean pass and this goes red.

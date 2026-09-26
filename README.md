@@ -649,6 +649,7 @@ scans from depot to doorstep:
     on_step: MyApp.ParcelStepper,
     execution_id: MyApp.ParcelRouteIds,
     send_type: "myapp:router",
+    send_handlers: %{"myapp:courier" => MyApp.Courier},
     route_adapters: %{"doorstep_photos" => {MyApp.OutboxRoute, %{queue: "photos"}}},
     timer_queue: {MyApp.ObanTimerQueue, %{}}
   )
@@ -665,33 +666,24 @@ configuration.
 
 ### Where the send types come from
 
-`:send_type` is the one type string the router's handler answers to.
-`StatifierRouter.Config.new/1` builds the `send_types:` snapshot from it,
-as `Statifier.Send.Types.from_send_types(%{"myapp:router" =>
-StatifierRouter.SendHandler})`, and puts it into `:persistence_options`.
-The delivery hands those options to `:on_create` inside `initialize:` and
-to `:on_step` beside the event. A configuration that also gives
-`:persistence_options` a `:send_types` of its own is refused with
-`{:error, {:declared_send_types, "myapp:router"}}`.
-
-A stepper that registers send types of its own - here a courier
-processor beside the router's handler - stamps its own snapshot in the
-hooks, built from a map that keeps the router's type on
-`StatifierRouter.SendHandler`:
+`:send_type` is the one type string the router's handler answers to, and
+`:send_handlers` maps each send type the host serves itself to the module
+that processes it - here a courier processor beside the router's
+handler. `StatifierRouter.Config.new/1` builds one `send_types:` snapshot
+from both, as `Statifier.Send.Types.from_send_types(%{"myapp:router" =>
+StatifierRouter.SendHandler, "myapp:courier" => MyApp.Courier})`, and puts
+it into `:persistence_options`. The delivery hands those options to
+`:on_create` inside `initialize:` and to `:on_step` beside the event, so
+the hooks stamp no snapshot of their own:
 
 ```elixir
 defmodule MyApp.ParcelStepper do
   alias StatifierPersistence.Executions
 
-  def create(store, execution_id, machine, opts) do
-    types = send_types()
-    opts = Keyword.update(opts, :initialize, [send_types: types], &Keyword.put(&1, :send_types, types))
-    Executions.create(store, execution_id, machine, opts)
-  end
+  def create(store, execution_id, machine, opts),
+    do: Executions.create(store, execution_id, machine, opts)
 
   def step(store, execution_id, machine, event, opts) do
-    opts = Keyword.put(opts, :send_types, send_types())
-
     with {:ok, execution, state} <- Executions.step(store, execution_id, machine, event, opts) do
       # The host's own row, inside the delivery's transaction.
       MyApp.ParcelLog.record!(execution, event)
@@ -705,22 +697,27 @@ defmodule MyApp.ParcelStepper do
       MyApp.Courier.handle_effect(effect, context)
     end
   end
-
-  defp send_types do
-    Statifier.Send.Types.from_send_types(%{
-      "myapp:router" => StatifierRouter.SendHandler,
-      "myapp:courier" => MyApp.Courier
-    })
-  end
 end
 ```
 
-The publish-time checks read the configuration, not the hooks:
-`StatifierRouter.Routes.unsupported_types/2`, and so the `:unsupported_types`
-of `StatifierRouter.Contracts.check/3`, judges a chart against the snapshot on
-`:persistence_options`, so a `<send type="myapp:courier">` is reported
-there. The host judges its charts against its own snapshot with
-`Statifier.Send.Types.unsupported_sends/2`.
+The publish-time checks read the same snapshot:
+`StatifierRouter.Routes.unsupported_types/2`, and so the
+`:unsupported_types` of `StatifierRouter.Contracts.check/3`, judges a
+chart against the set every delivery carries, so a
+`<send type="myapp:courier">` is supported there and a type in neither
+key is reported. Left out, `:send_handlers` changes nothing: the snapshot
+is built from `:send_type` alone, and a `<send type="myapp:courier">` is
+reported unsupported.
+
+A `:send_handlers` entry under the router's own type is refused with
+`{:error, {:declared_send_types, "myapp:router"}}`, and so is a
+configuration that gives `:send_type` and also gives
+`:persistence_options` a `:send_types` of its own. A map that is not one
+of non-empty type strings to modules, or that names a built-in spelling
+such as `"scxml"`, is refused with
+`{:error, {:invalid_value, :send_handlers, value}}`. A host whose hooks
+stamp a snapshot of their own over the router's keeps working, but its
+publish check still reads only the configuration's.
 
 ### Where `put_config/1` is called
 
