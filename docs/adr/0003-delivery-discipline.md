@@ -686,3 +686,48 @@ Amendment landed (`53d8118`); the sr-1b2 Amendment on ADR-0002 widened
 it to `hooks/2`, which checks the two keys and `:execution_id` with one
 function. What it checks for `:on_create` and `:on_step` is as the
 Amendment says.
+
+## Note (2026-09-26, sr-zsa9): the unmatched-event drop the hooks Amendment names is the binding door's
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. It says which door one clause of the
+Amendment of 2026-09-25 above, the create and step hooks, applies to,
+because two of that Amendment's bullets read together suggest both.
+
+Its bullet "The answer is read as persistence's would be" lists, among
+the readings of a hook's answer, that "the state's `last_selection`
+decides an unmatched event (ADR-0004, the Note of 2026-09-25)". Its
+bullet "Both doors" says that `deliver/4` and `deliver_event/4` "reach
+the two calls through the same functions". The second is true of the
+calls: both doors reach `:on_create` and `:on_step` through the same
+private functions. It is not true of what an answer whose state carries
+`last_selection: :none` becomes.
+
+- **A binding's delivery drops.** On `deliver/4`, the door a binding's
+  delivery takes from `route/3` when `:delivery` is left at its default,
+  a step whose answered state carries `last_selection: :none` is
+  `{:dropped, binding_id, :unmatched_event}` and is recorded as
+  `dropped: unmatched_event`, whether `step/5` or an `:on_step` hook
+  answered it. `StatifierRouter.Delivery`'s private
+  `taken/7` makes that outcome only for a `%StatifierRouter.Binding{}`
+  plan.
+- **An execution-to-execution send does not.** On `deliver_event/4`,
+  the same answer keeps the delivered or created_and_delivered outcome
+  ADR-0006 gives a send, as ADR-0004's Note of 2026-09-25 says under
+  "Where it does not reach". The plan this door is handed is
+  `StatifierRouter.SendHandler`'s own map, built in its private
+  `deliver_to/5`, not a binding, so `taken/7`'s other clause records
+  it. The execution target tests' "a send the receiving execution does
+  not take" pins it.
+
+The rest of that bullet - the execution's status deciding a finish, a
+`{:discarded, execution}` from `:on_step` being a finish, the donedata
+`:on_complete` hands on, and an `{:error, reason}` from either hook
+being the delivery's error - is read the same way on both doors, in the
+private `create/6` and `step/7` both doors share.
+
+Every anchor above was read at `0bb620e`, `main` when this Note was
+written: `lib/statifier_router/delivery.ex` for `taken/7`, `create/6`
+and `step/7`, `lib/statifier_router/send_handler.ex` for
+`deliver_to/5`, and `test/statifier_router/execution_target_test.exs`
+for the test.
