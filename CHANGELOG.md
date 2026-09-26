@@ -10,6 +10,25 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.7.0] 2026-09-26
+
+Feature release: a host that serves send types of its own can declare them, and the contract check says when it did not check a resolver's bindings. `StatifierRouter.Config.new/1` takes `:send_handlers`, merged with `:send_type` into the one `send_types:` snapshot every delivery carries, so `StatifierRouter.Contracts.check/3` stops reporting the host's own types as unsupported. Two fixes: `StatifierRouter.Migrations.up/1` refuses, before any DDL runs, a `:leading_columns` name that a table the call creates already declares, and `StatifierRouter.Broadway`'s partitioner keeps the producer up on a malformed `:bindings_resolver` answer.
+
+Upgrading: **breaking for a host that sets `:bindings_resolver` and reads `StatifierRouter.Contracts.check/3`'s `:unchecked` entries** - the list now opens with `%{reason: :bindings_resolver, location: nil}`, the one entry with no location; a configuration without a resolver gets the report it got before. `Config.new/1`'s refusal union grows by one member, `{:exclusive_keys, :send_handlers, :send_types}`, answered only to a configuration that gives a non-empty `:send_handlers` beside a `:persistence_options` carrying its own `:send_types` and no `:send_type`. No migration, no new table, and no dependency floor moves.
+
+### Added
+
+- `StatifierRouter.Config.new/1` takes `:send_handlers`, a map from each send type the host serves itself to its processor module, merged with `:send_type` into the one `send_types:` snapshot every delivery carries, so `StatifierRouter.Contracts.check/3` no longer reports the host's own types under `:unsupported_types`; left out, the snapshot is built from `:send_type` alone as before.
+
+### Changed
+
+- **Breaking** for a host that sets `:bindings_resolver` and reads `StatifierRouter.Contracts.check/3`'s `:unchecked` entries: the list now opens with `%{reason: :bindings_resolver, location: nil}`, saying the bindings were not checked, where the report before was identical to a clean pass. It is the one entry with no location, so skip it or match its reason before reading `location`, and keep checking each scope's bindings with `StatifierRouter.Contracts.undeclared_binding_events/2`. This is the one change for a host with a resolver; a configuration without one gets the report it got before.
+
+### Fixed
+
+- `StatifierRouter.Migrations.up/1` raises `ArgumentError` naming the column and the tables before any DDL runs when a `:leading_columns` name is one a table the call creates already declares (`scope`, `inserted_at` and the like; the primary key the repo configures is not checked), where the migration before failed inside Postgres with a duplicate column error. A name only a table outside the call declares, such as `expires_at` under `up(from: 2)`, is accepted as before.
+- `StatifierRouter.Broadway`'s partitioner no longer takes the producer down when a `:bindings_resolver` answers something that is not a list of bindings: it partitions that message by its message id, and `route/3` raises the `ArgumentError` in `handle_message/3`, where Broadway fails the message.
+
 ## [0.6.0] 2026-09-25
 
 Feature release: a host that wraps the engine can plug into the router without forking it. `StatifierRouter.Config.new/1` takes `:on_create` and `:on_step`, which the default delivery calls in place of statifier_persistence's create and step; `:bindings_resolver`, which answers the bindings per scope through the new `StatifierRouter.BindingsResolver` behaviour; and `:execution_id`, which mints each new execution's id. `StatifierRouter.Migrations.up/1` takes the host column layout options `:leading_columns`, `:timestamps_position` and `:column_collations`. Every new key and option is optional, and a host that sets none of them sees no change.

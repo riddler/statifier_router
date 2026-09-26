@@ -920,7 +920,7 @@ decision record that fixes it, in [docs/adr/](https://github.com/riddler/statifi
 ```elixir
 def deps do
   [
-    {:statifier_router, "~> 0.6.0"}
+    {:statifier_router, "~> 0.7.0"}
   ]
 end
 ```
