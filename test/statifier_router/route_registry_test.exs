@@ -183,6 +183,93 @@ defmodule StatifierRouter.RouteRegistryTest do
     end
   end
 
+  describe "the host's own send types, :send_handlers (ADR-0005, the 2026-09-26 Amendment)" do
+    # sabotage: send_types/2 dropped the host's map and built the snapshot
+    # from the router's type alone -> the courier type was missing, red;
+    # restored, green.
+    test "are merged with the router's type into the one snapshot" do
+      %Config{persistence_options: options, send_handlers: handlers} =
+        config(send_type: "myapp:sink", send_handlers: %{"myapp:courier" => MyApp.Courier})
+
+      assert handlers == %{"myapp:courier" => MyApp.Courier}
+
+      assert Keyword.fetch!(options, :send_types) ==
+               Types.from_send_types(%{
+                 "myapp:sink" => SendHandler,
+                 "myapp:courier" => MyApp.Courier
+               })
+    end
+
+    # sabotage: persistence_options/3 answered the given list whenever
+    # send_type was nil -> no snapshot was built from the host's map, red;
+    # restored, green.
+    test "build the snapshot alone on a configuration with no :send_type" do
+      %Config{persistence_options: options} =
+        config(send_handlers: %{"myapp:courier" => MyApp.Courier})
+
+      assert Keyword.fetch!(options, :send_types) ==
+               Types.from_send_types(%{"myapp:courier" => MyApp.Courier})
+    end
+
+    # sabotage: the default changed from %{} to a one-entry map -> a
+    # configuration that sets none of it carried another type, red;
+    # restored, green.
+    test "change nothing when left out or given empty" do
+      for extra <- [[], [send_handlers: nil], [send_handlers: %{}]] do
+        assert %Config{persistence_options: [send_types: types], send_handlers: %{}} =
+                 config([send_type: "myapp:sink"] ++ extra)
+
+        assert types == Types.from_send_types(%{"myapp:sink" => SendHandler})
+        assert %Config{persistence_options: []} = config(extra)
+      end
+    end
+
+    # sabotage: send_handler?/1 dropped its supported_type? conjunct -> a
+    # built-in spelling was accepted, red; restored, green.
+    test "refuse a malformed map" do
+      for refused <- [
+            [{"myapp:courier", MyApp.Courier}],
+            %{"" => MyApp.Courier},
+            %{courier: MyApp.Courier},
+            %{"myapp:courier" => "MyApp.Courier"},
+            %{"myapp:courier" => nil},
+            %{"scxml" => MyApp.Courier}
+          ] do
+        assert Config.new(repo: TestRepo, delivery: @delivery, send_handlers: refused) ==
+                 {:error, {:invalid_value, :send_handlers, refused}}
+      end
+    end
+
+    # sabotage: the Map.has_key?(given, send_type) clause removed -> the
+    # host's module silently replaced the router's handler, red; restored,
+    # green.
+    test "refuse an entry under the router's own type" do
+      assert Config.new(
+               repo: TestRepo,
+               delivery: @delivery,
+               send_type: "myapp:sink",
+               send_handlers: %{"myapp:sink" => MyApp.Courier}
+             ) == {:error, {:declared_send_types, "myapp:sink"}}
+    end
+
+    # sabotage: the exclusive_keys clause removed -> the host's
+    # :send_types passed and the map was dropped unread, red; restored,
+    # green.
+    test "refuse to compete with a :send_types the host declared itself" do
+      declared = Types.from_send_types(%{"myapp:other" => MyApp.Courier})
+
+      assert Config.new(
+               repo: TestRepo,
+               delivery: @delivery,
+               send_handlers: %{"myapp:courier" => MyApp.Courier},
+               persistence_options: [send_types: declared]
+             ) == {:error, {:exclusive_keys, :send_handlers, :send_types}}
+
+      assert %Config{persistence_options: [send_types: ^declared]} =
+               config(send_handlers: %{}, persistence_options: [send_types: declared])
+    end
+  end
+
   describe "Config.route/3" do
     # sabotage: route/3 merged the registered configuration over the
     # override instead of the override over it -> the scope's sink did

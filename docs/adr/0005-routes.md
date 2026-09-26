@@ -1101,3 +1101,123 @@ followed the Amendment's first draft, and each holds:
   and the handler's moduledoc says that answer is not reported to the
   chart and that reporting a miss through
   `Statifier.Session.failed_send/3` is the host's.
+
+## Amendment (2026-09-26, sr-mqzz): a host's own send types join the router's in one snapshot, through `:send_handlers`
+
+Status: proposed
+
+Decision 6 builds the `Statifier.Send.Types` snapshot "from decision 5's
+handler module and the type or types the host registers it under", and
+the sr-5em Note records how it landed: `StatifierRouter.Config.new/1`
+builds it from the one `:send_type` and `StatifierRouter.SendHandler`,
+and refuses a configuration that also declares `:send_types` itself.
+Neither said what a host does when it serves send types of its own
+beside the router's handler.
+
+- **What the configuration does today** (read at `1e72588`). The only
+  way to put a type into the snapshot is `:send_type`; a `:send_types`
+  of the host's own inside `:persistence_options` is refused with
+  `{:declared_send_types, send_type}` once `:send_type` is set
+  (`StatifierRouter.Config`'s private `persistence_options/2`).
+- **What that costs at run time.** Every create and every step of every
+  delivery carries that snapshot (`StatifierRouter.Delivery`'s private
+  `create_options/1` and `step_options/1`), so a host that serves a
+  courier type of its own has to stamp a second snapshot in its
+  `:on_create` and `:on_step` hooks over the router's.
+- **What that costs at publish.** `StatifierRouter.Routes.unsupported_types/2`
+  judges a chart against the snapshot on `:persistence_options`
+  (its own `@doc`), and so does the `:unsupported_types` key of
+  `StatifierRouter.Contracts.check/3`, which composes it unchanged
+  (ADR-0008, decision 6). Every `<send>` of the host's own type is
+  reported unsupported there, and the README told the host to judge its
+  charts with `Statifier.Send.Types.unsupported_sends/2` itself.
+
+The question left open was which of three answers holds: the
+configuration gains a way to declare the extra types, `check/3` takes
+the host's snapshot as an argument, or the README workaround stands.
+
+### The decision
+
+1. **The configuration gains a key.** `:send_handlers` is a map from a
+   non-empty type string to the module that processes it, the shape
+   `Statifier.Send.Types.from_send_types/1` takes. `new/1` merges it with
+   `%{send_type => StatifierRouter.SendHandler}` and builds the one
+   snapshot from the merged map. On a configuration with no `:send_type`
+   the snapshot is built from `:send_handlers` alone. The key is named
+   for its values, not `:send_types`, which already names the snapshot
+   inside `:persistence_options` (decision 6 closed the like ambiguity
+   over `:routes` by vocabulary, and this keeps to it).
+2. **One snapshot, at run time and at publish.** The merged snapshot is
+   the one on `:persistence_options`, so every delivery's create and
+   step carry the host's types beside the router's, and
+   `Routes.unsupported_types/2` and `check/3` judge a chart against the
+   set it will be started with. A second argument to `check/3` is not
+   taken: it would let the publish check judge a set the deliveries do
+   not carry, which is the gap decision 6 exists to close.
+3. **Refusals.** A value that is not a map of non-empty type strings to
+   module names, or that names a built-in spelling (`"scxml"` or the
+   SCXML processor's URI, which the engine classifies as built-in
+   whatever the set holds), is refused with
+   `{:invalid_value, :send_handlers, value}`. An entry under the
+   configuration's own `:send_type` is refused with
+   `{:declared_send_types, send_type}`, the refusal the sr-5em Note
+   records for a `:send_types` of the host's own: that type names the
+   router's handler and no other module. A non-empty `:send_handlers`
+   beside a `:persistence_options` that carries `:send_types`, on a
+   configuration with no `:send_type`, is refused with
+   `{:exclusive_keys, :send_handlers, :send_types}` rather than one of
+   the two silently winning. Only the shape is checked; `new/1` does not
+   load the module.
+4. **Absent is today.** Left out, or given as `nil` or `%{}`, the
+   snapshot is built from `:send_type` alone, and a configuration with
+   neither carries none, exactly as before this Amendment. The refusals
+   above reach only a configuration that gives the key another value.
+5. **The workaround stays valid and stops being needed.** A host whose
+   hooks stamp their own snapshot keeps working, and its publish check
+   still reads the configuration. The README section "Where the send
+   types come from" now shows the key.
+6. **The release.** The key is an addition to the configuration and
+   ships in a minor release.
+
+### The code
+
+In the same change as this Amendment, citing it:
+`StatifierRouter.Config` gains the `:send_handlers` option and struct
+field (its moduledoc table and the paragraph after `:send_type`'s), its
+private `send_handlers/2` checks the value, and its private
+`persistence_options/3` and `send_types/2` build the merged snapshot.
+`StatifierRouter.Routes.unsupported_types/2` is unchanged. The tests are
+in `test/statifier_router/route_registry_test.exs`, in the describe block
+`the host's own send types, :send_handlers (ADR-0005, the 2026-09-26
+Amendment)`, and in `test/statifier_router/contracts_test.exs`, in the
+describe block `check/3 with the host's own send types (ADR-0005, the
+2026-09-26 Amendment)`, each with its sabotage note.
+
+### The example
+
+A depot's charts send parcel photos through the router's type and load
+vans through a courier processor of the host's own:
+
+    StatifierRouter.Config.new(
+      repo: MyApp.Repo,
+      store: store,
+      executor: &MyApp.ParcelStepper.execute/2,
+      resolver: MyApp.PublishedCharts,
+      chart_resolver: &MyApp.PublishedCharts.chart/1,
+      send_type: "myapp:router",
+      send_handlers: %{"myapp:courier" => MyApp.Courier},
+      route_adapters: %{"doorstep_photos" => {MyApp.OutboxRoute, %{}}}
+    )
+
+A `<send type="myapp:courier">` is supported by `check/3` under this
+configuration and is reported under `:unsupported_types` without the
+`:send_handlers` line.
+
+### What this Amendment does not decide
+
+- **Whether `StatifierRouter.SendHandler` may be named under a second
+  type** in `:send_handlers`. It answers to `:send_type` alone, and the
+  key does not change that.
+- **Whether a `:send_handlers` module must implement
+  `Statifier.Send.Processor`.** The engine's constructor does not ask
+  it, and neither does this key.

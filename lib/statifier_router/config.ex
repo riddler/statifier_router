@@ -25,6 +25,7 @@ defmodule StatifierRouter.Config do
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
+  | `:send_handlers` | the host's own `<send>` processors served beside the router's handler, a map from a non-empty type string to the processor module, merged with `:send_type` into the one `send_types:` snapshot (see below) | `%{}` |
   | `:processor_scope` | the scope a live session's sends resolve their routes in on the send-processor shape: a non-empty string, or a zero-arity fun answering one or `nil` (see below) | `nil` |
   | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it; an `{:error, _}` from that route rolls the delivery back, finishing step included, so a route that never succeeds keeps the execution from finishing (see below) | `nil` |
   | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
@@ -57,6 +58,27 @@ defmodule StatifierRouter.Config do
   adapter and holds no type string. A configuration that gives both
   `:send_type` and a `:send_types` of its own is refused with
   `{:declared_send_types, send_type}` rather than one silently winning.
+
+  `:send_handlers` is for a host that serves send types of its own beside
+  the router's handler: a map from each type string to the module that
+  processes it, the shape `Statifier.Send.Types.from_send_types/1` takes.
+  `new/1` merges it with `%{send_type => StatifierRouter.SendHandler}` and
+  builds the one snapshot from the merged map (ADR-0005, the Amendment of
+  2026-09-26), so every create and every step of every delivery carries
+  the host's types beside the router's, and
+  `StatifierRouter.Routes.unsupported_types/2` judges a chart against that
+  same set. Left out, or given as `nil` or `%{}`, the snapshot is built from
+  `:send_type` alone, exactly as before. A map that is not one of
+  non-empty type strings to module names, or that names a built-in
+  spelling (`"scxml"` or the SCXML processor's URI), is refused with
+  `{:invalid_value, :send_handlers, value}`; an entry under the
+  `:send_type` itself is refused with `{:declared_send_types, send_type}`,
+  as a `:send_types` of the host's own is; and a non-empty map beside a
+  `:persistence_options` that carries `:send_types`, on a configuration
+  with no `:send_type`, is refused with
+  `{:exclusive_keys, :send_handlers, :send_types}`. Only the shape is
+  checked: the module is the engine's to call, and `new/1` does not load
+  it.
 
   `:processor_scope` names the scope `:route_overrides` is read in on the
   send-processor shape, where a live `Statifier.Session` registers
@@ -236,6 +258,7 @@ defmodule StatifierRouter.Config do
       "routing"
   """
 
+  alias Statifier.Send.Target
   alias Statifier.Send.Types
   alias StatifierPersistence.Storage
   alias StatifierRouter.Binding
@@ -264,6 +287,7 @@ defmodule StatifierRouter.Config do
     :bindings_resolver,
     bindings: [],
     persistence_options: [],
+    send_handlers: %{},
     route_adapters: %{},
     route_overrides: %{},
     table_prefix: "statifier_router_"
@@ -336,6 +360,7 @@ defmodule StatifierRouter.Config do
           route_adapters: %{optional(String.t()) => Route.t()},
           route_overrides: %{optional(String.t()) => %{optional(String.t()) => map()}},
           send_type: String.t() | nil,
+          send_handlers: %{optional(String.t()) => module()},
           processor_scope: processor_scope() | nil,
           on_complete: String.t() | nil,
           timer_queue: TimerQueue.t() | nil,
@@ -363,6 +388,7 @@ defmodule StatifierRouter.Config do
           | {:reserved_route, String.t()}
           | {:reserved_binding_id, String.t()}
           | {:exclusive_keys, :bindings, :bindings_resolver}
+          | {:exclusive_keys, :send_handlers, :send_types}
 
   @tables [:addresses, :dedupe, :routing_ledger, :subscriptions]
   @storage_keys [:table_prefix, :prefix]
@@ -387,7 +413,8 @@ defmodule StatifierRouter.Config do
     :delivery,
     :bindings,
     :bindings_resolver,
-    :persistence_options
+    :persistence_options,
+    :send_handlers
     | @delivery_keys ++
         @storage_keys ++
         @route_keys ++
@@ -410,9 +437,9 @@ defmodule StatifierRouter.Config do
   an unknown option, then a missing or malformed `:repo`, then a malformed
   `:delivery`, then a missing or malformed `:store`, `:executor`,
   `:resolver` or `:chart_resolver`, in that order, then a `:store` whose
-  adapter options name another repo, then a malformed
-  `:persistence_options`, then a malformed `:on_create` or `:on_step`,
-  then a malformed `:execution_id`, then a storage value the
+  adapter options name another repo, then a malformed `:send_handlers`,
+  then a malformed `:persistence_options`, then a malformed `:on_create`
+  or `:on_step`, then a malformed `:execution_id`, then a storage value the
   table does not allow, then `:bindings` and `:bindings_resolver` both
   given, then a malformed `:bindings_resolver`, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
@@ -443,7 +470,9 @@ defmodule StatifierRouter.Config do
          {:ok, needs} <- delivery_needs(opts, delivery),
          :ok <- same_repo(needs[:store], repo),
          {:ok, routes} <- routes(opts),
-         {:ok, persistence_options} <- persistence_options(opts, routes[:send_type]),
+         {:ok, send_handlers} <- send_handlers(opts, routes[:send_type]),
+         {:ok, persistence_options} <-
+           persistence_options(opts, routes[:send_type], send_handlers),
          {:ok, hooks} <- hooks(opts, @hooks),
          {:ok, minter} <- hooks(opts, @minter),
          {:ok, storage} <- storage(opts),
@@ -454,7 +483,8 @@ defmodule StatifierRouter.Config do
          [
            {:repo, repo},
            {:delivery, delivery},
-           {:persistence_options, persistence_options}
+           {:persistence_options, persistence_options},
+           {:send_handlers, send_handlers}
            | bindings ++ needs ++ storage ++ routes ++ hooks ++ minter
          ]
        )}
@@ -649,22 +679,72 @@ defmodule StatifierRouter.Config do
   # place are accepted: `:initialize` and `:metadata` are per-execution
   # host data rather than a standing snapshot, and `:executor` is the
   # configuration's own option.
-  defp persistence_options(opts, send_type) do
+  defp persistence_options(opts, send_type, send_handlers) do
     given = Keyword.get(opts, :persistence_options, [])
 
+    if snapshot?(given),
+      do: place_send_types(given, send_type, send_handlers),
+      else: {:error, {:invalid_value, :persistence_options, given}}
+  end
+
+  # Where the send-types snapshot comes from: the host's own `:send_types`,
+  # or the one this configuration builds from `:send_type` and
+  # `:send_handlers`, never both (ADR-0005, decision 6 and the Amendment of
+  # 2026-09-26). With neither key given, `given` passes through unchanged.
+  defp place_send_types(given, send_type, send_handlers) do
+    declared? = Keyword.has_key?(given, :send_types)
+
     cond do
-      not snapshot?(given) -> {:error, {:invalid_value, :persistence_options, given}}
-      is_nil(send_type) -> {:ok, given}
-      Keyword.has_key?(given, :send_types) -> {:error, {:declared_send_types, send_type}}
-      true -> {:ok, given ++ [send_types: send_types(send_type)]}
+      declared? and is_binary(send_type) ->
+        {:error, {:declared_send_types, send_type}}
+
+      declared? and send_handlers != %{} ->
+        {:error, {:exclusive_keys, :send_handlers, :send_types}}
+
+      is_nil(send_type) and send_handlers == %{} ->
+        {:ok, given}
+
+      true ->
+        {:ok, given ++ [send_types: send_types(send_type, send_handlers)]}
     end
   end
 
   # ADR-0005 decision 6: the snapshot is built from the handler module and
   # the type string it is registered under, never from the route registry,
   # which maps a route name to an adapter and holds no type string at all.
-  defp send_types(send_type),
-    do: Types.from_send_types(%{send_type => SendHandler})
+  # The Amendment of 2026-09-26 merges the host's own processors into the
+  # same map, so one snapshot carries both.
+  defp send_types(nil, send_handlers), do: Types.from_send_types(send_handlers)
+
+  defp send_types(send_type, send_handlers),
+    do: Types.from_send_types(Map.put(send_handlers, send_type, SendHandler))
+
+  # ADR-0005, the Amendment of 2026-09-26: the host's own send types, as
+  # the `%{type => module}` map the engine's constructor takes. Only the
+  # shape is checked. A built-in spelling is refused because the engine
+  # classifies it as built-in whatever the set holds, so the entry could
+  # never reach its module; the router's own type is refused because the
+  # router's handler is the one module that type names.
+  defp send_handlers(opts, send_type) do
+    given = Keyword.get(opts, :send_handlers) || %{}
+
+    cond do
+      not (is_map(given) and Enum.all?(given, &send_handler?/1)) ->
+        {:error, {:invalid_value, :send_handlers, given}}
+
+      is_binary(send_type) and Map.has_key?(given, send_type) ->
+        {:error, {:declared_send_types, send_type}}
+
+      true ->
+        {:ok, given}
+    end
+  end
+
+  defp send_handler?({type, module}) do
+    is_binary(type) and type != "" and not Target.supported_type?(type) and module?(module)
+  end
+
+  defp send_handler?(_entry), do: false
 
   # ADR-0005 decision 2's registry, and the one type string decision 6's
   # snapshot is built from. An override may change a registered route's

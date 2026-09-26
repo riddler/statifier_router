@@ -134,9 +134,11 @@ defmodule StatifierRouter.Routes do
   `Statifier.Send.Types` snapshot on this configuration's
   `:persistence_options` - the same snapshot every create and every step
   of every delivery carries, so what this pass judges is what the
-  execution will be started with (ADR-0005, decision 6). A configuration
-  carrying no snapshot is judged as "no declaration", under which every
-  non-built-in type is unsupported.
+  execution will be started with (ADR-0005, decision 6). That snapshot
+  holds the configuration's `:send_type` and every type its
+  `:send_handlers` names (ADR-0005, the Amendment of 2026-09-26). A
+  configuration carrying no snapshot is judged as "no declaration", under
+  which every non-built-in type is unsupported.
 
   It cannot see a `typeexpr`, and says so in its own `@doc`; that half is
   `unregistered/2`'s `:unchecked` list.
