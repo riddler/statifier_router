@@ -633,7 +633,7 @@ and each holds:
 
 ## Amendment (2026-09-24, sr-a7e): a live session's sends resolve in the scope the host names in `:processor_scope`
 
-Status: proposed
+Status: accepted
 
 Section 1 holds that the scope is the sender's and never a param. At the
 executor seam the scope a route override is read in is the delivery's:
@@ -691,7 +691,7 @@ separate change. This Amendment is that change. Ruled by the operator,
 
 ## Note (2026-09-24, sr-kqu): an immediate send to the execution target is delivered on the send-processor shape too
 
-Status: proposed
+Status: accepted
 
 A Note, not an amendment: it decides nothing this record had not already
 decided, and it changes no decision or amendment above it. It records a
@@ -737,3 +737,37 @@ to be a gap and not a scope rule, and the change that closes it.
   refusal or a miss to the chart on this shape is still the host's,
   through `Statifier.Session.failed_send/3`, as section 3 says. The
   record's status on line 3 is not touched.
+
+## Note (2026-09-25): the sr-a7e Amendment and the sr-kqu Note accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or note above it. The operator accepted the two together on
+2026-09-25, and the `Status:` lines of the `## Amendment (2026-09-24,
+sr-a7e)` and of the `## Note (2026-09-24, sr-kqu)` moved from `proposed`
+to `accepted`. Their code landed in PR 82 (`bc3b5f6`) and PR 83
+(`935fc68`) and shipped in statifier_router 0.5.0 (tag `v0.5.0`, at
+`9a61edc`). The record's own status on line 3 was already `accepted` and
+was not touched.
+
+**How the two are read together.** `:processor_scope` picks the scope a
+route override is read in, and nothing else. An immediate send to the
+reserved execution target reads its scope from the sender's address row,
+as the sr-kqu Note says, and the configuration's `:processor_scope` is
+not asked for it.
+
+Every claim was re-verified by anchor on `main` at `0854a99`, which
+carries 0.6.0 and no change to them:
+
+- The sr-a7e Amendment: `StatifierRouter.Config`'s moduledoc table and
+  `new/1` carry `:processor_scope`; `StatifierRouter.SendHandler`'s
+  private `processor_scope/1` answers the configured string, asks a
+  zero-arity fun, and falls back to the override-free lookup for `nil`;
+  and the processor arm of its private `resolve/3` misses an
+  unregistered target before any scope is asked.
+- The sr-kqu Note: the first clause of `StatifierRouter.SendHandler`'s
+  private `perform_send/4` takes an immediate send to the reserved
+  target, and the scope comes from
+  `StatifierRouter.Addresses.by_execution/2`.
+- The 0.5.0 section of `CHANGELOG.md` names both: the new
+  `:processor_scope` option and the execution target on the
+  send-processor shape.

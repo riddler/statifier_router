@@ -676,7 +676,7 @@ is `enqueue/5`.
 
 ## Amendment (2026-09-24, sr-mne): every `unregistered_routes` entry carries a reason, and a literal delay to a registered route on a configuration with no timer queue is one, with reason `:no_timer_queue`
 
-Status: proposed
+Status: accepted
 
 Decision 6 has `check/3` compose `Routes.unregistered/2` unchanged, so
 an entry under `unregistered_routes` is `%{route, location}` and names
@@ -793,3 +793,28 @@ delay or not.
   time for a registered route**, such as `{:no_delivery_scope, name}`.
 - **Whether the `unchecked` reasons are a closed set.** Decision 6 closes
   the finding reasons only.
+
+## Note (2026-09-25): the sr-mne Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator accepted the `## Amendment (2026-09-24,
+sr-mne)` on 2026-09-25, and its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 81 (`32e160d`) and shipped in
+statifier_router 0.5.0 (tag `v0.5.0`, at `9a61edc`). The record's own
+status on line 3 was already `accepted` and was not touched. The
+record's row in `docs/adr/README.md` still read `proposed`, a row the
+record's own acceptance left for a later change; it now reads
+`accepted`, the record's status.
+
+Every claim was re-verified by anchor on `main` at `0854a99`, which
+carries 0.6.0 and no change to them:
+
+- Decisions 1 to 4: `StatifierRouter.Contracts`'s private
+  `route_findings/3` tags the entries of `Routes.unregistered/2` and
+  merges them with those its private `unqueued/2` selects.
+- Decision 6: `t:StatifierRouter.Contracts.route_reason/0` is
+  `:unregistered | :no_timer_queue`, and
+  `t:StatifierRouter.Contracts.route_finding/0` carries `reason`.
+- The tests are in `test/statifier_router/contracts_test.exs`, in the
+  describe block `check/3's unregistered_routes (ADR-0008, the
+  2026-09-24 Amendment)`.
