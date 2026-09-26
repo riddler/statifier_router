@@ -1104,7 +1104,7 @@ followed the Amendment's first draft, and each holds:
 
 ## Amendment (2026-09-26, sr-mqzz): a host's own send types join the router's in one snapshot, through `:send_handlers`
 
-Status: proposed
+Status: accepted
 
 Decision 6 builds the `Statifier.Send.Types` snapshot "from decision 5's
 handler module and the type or types the host registers it under", and
@@ -1221,3 +1221,55 @@ configuration and is reported under `:unsupported_types` without the
 - **Whether a `:send_handlers` module must implement
   `Statifier.Send.Processor`.** The engine's constructor does not ask
   it, and neither does this key.
+
+## Note (2026-09-26): the sr-mqzz Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator's word of 2026-09-26 is to accept the
+records whose code has been published, and the `## Amendment (2026-09-26,
+sr-mqzz)` above is one: its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 98 (`98d6e3e`) and shipped in
+statifier_router 0.7.0 (tag `v0.7.0`, at `672eaa5`, published on Hex
+2026-09-26), whose `CHANGELOG.md` section adds `:send_handlers` in a minor
+release. The record's own status on line 3 was already `accepted` and was
+not touched.
+
+Every claim was re-verified by anchor at `672eaa5`, which is both the tag
+and `main` at the time of the flip. No commit after `98d6e3e` up to the tag
+touches `StatifierRouter.Config`, `StatifierRouter.Delivery` or
+`StatifierRouter.Routes`.
+
+- Decision 1: `StatifierRouter.Config`'s moduledoc table carries
+  `:send_handlers` with default `%{}`, and the struct field is there; the
+  private `send_types/2` builds the snapshot with
+  `Statifier.Send.Types.from_send_types/1` over the host's map with the
+  `:send_type` entry put to `StatifierRouter.SendHandler`, or over the
+  host's map alone when there is no `:send_type`.
+- Decision 2: the private `place_send_types/3`, called from the private
+  `persistence_options/3`, appends that one snapshot to
+  `:persistence_options`; `StatifierRouter.Delivery`'s private
+  `create_options/1` and `step_options/1` carry `:persistence_options`
+  into every create and step, and `check/3` takes no fourth argument.
+- Decision 3: the private `send_handlers/2` answers
+  `{:invalid_value, :send_handlers, value}` unless every entry is a
+  non-empty type string the engine's `Statifier.Send.Target.supported_type?/1`
+  does not classify as built-in, mapped to a module-shaped atom (the
+  private `module?/1`, which loads nothing), and
+  `{:declared_send_types, send_type}` for an entry under `:send_type`;
+  `place_send_types/3` answers
+  `{:exclusive_keys, :send_handlers, :send_types}` for a non-empty map
+  beside a host `:send_types` with no `:send_type`, and the refusal type
+  of `new/1` carries it.
+- Decision 4: a `nil` value reads as `%{}`, and with no `:send_type` and
+  an empty map `place_send_types/3` passes `:persistence_options` through
+  unchanged.
+- Decision 5: the README section "Where the send types come from" shows
+  the key.
+- The code paragraph: `98d6e3e` changes `StatifierRouter.Routes` only in
+  `unsupported_types/2`'s `@doc` prose, and the function is unchanged. The
+  tests are the describe blocks the Amendment names, in
+  `test/statifier_router/route_registry_test.exs` and
+  `test/statifier_router/contracts_test.exs`.
+
+The paragraph read at `1e72588` records the configuration before the
+Amendment, and it is the Amendment itself that changes what it describes.

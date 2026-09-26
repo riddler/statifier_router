@@ -821,7 +821,7 @@ carries 0.6.0 and no change to them:
 
 ## Amendment (2026-09-26, sr-9fud): under a bindings resolver, `check/3`'s `unchecked` list opens with one `:bindings_resolver` entry that has no location
 
-Status: proposed
+Status: accepted
 
 ADR-0001's 2026-09-25 Amendment lets a configuration answer its bindings
 per scope through a `:bindings_resolver`, keeps `bindings: []` on such a
@@ -943,3 +943,44 @@ location rule, the `:bindings_resolver` entry, whose `location` is
 `nil`. Its public anchors are `check/3`, which puts that entry first,
 and the type `t:StatifierRouter.Contracts.bindings_unchecked/0`, which
 spells it (both read at `98d6e3e`).
+
+## Note (2026-09-26): the sr-9fud Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. The operator's word of 2026-09-26 is to accept the
+records whose code has been published, and the `## Amendment (2026-09-26,
+sr-9fud)` above is one: its `Status:` line moved from `proposed` to
+`accepted`. Its code landed in PR 96 (`1e72588`) and shipped in
+statifier_router 0.7.0 (tag `v0.7.0`, at `672eaa5`, published on Hex
+2026-09-26), whose `CHANGELOG.md` section names the entry as breaking for
+a host that sets `:bindings_resolver` and reads the `:unchecked` entries.
+The record's own status on line 3 was already `accepted` and was not
+touched, and the sr-8jr7 Note above carries no status of its own; its
+"at proposed" describes the Amendment as it stood when the Note was
+written.
+
+Every claim was re-verified by anchor at `672eaa5`, which is both the tag
+and `main` at the time of the flip. No commit after `1e72588` up to the
+tag touches `StatifierRouter.Contracts`.
+
+- Decisions 1, 4 and 5: `StatifierRouter.Contracts.check/3` puts the
+  answer of the private `bindings_unchecked/1` before the located entries
+  sorted by `location.start_offset`; `bindings_unchecked/1` answers `[]`
+  for `bindings_resolver: nil` and
+  `[%{reason: :bindings_resolver, location: nil}]` otherwise, and nothing
+  in `check/3` calls the resolver or asks the lookup about it.
+- Decisions 2 and 3: `check/3` answers the same five keys, and its
+  `t:StatifierRouter.Contracts.check_report/0` admits
+  `t:StatifierRouter.Contracts.bindings_unchecked/0`, which is
+  `%{reason: :bindings_resolver, location: nil}`, beside the two located
+  shapes.
+- Decisions 6 and 7: `undeclared_binding_events` is still
+  `undeclared_binding_events/2` over `config.bindings`.
+- Decision 8: 0.7.0 is a minor release, and its `CHANGELOG.md` section
+  carries the breaking line.
+- The tests are the describe blocks the Amendment names, in
+  `test/statifier_router/contracts_test.exs` and
+  `test/statifier_router/bindings_resolver_test.exs`.
+
+The paragraph read at `89bbd28` records the check before the Amendment,
+and it is the Amendment itself that changes what it describes.
