@@ -1,0 +1,3 @@
+### Changed
+
+- **Breaking** for a host that sets `:bindings_resolver` and reads `StatifierRouter.Contracts.check/3`'s `:unchecked` entries: the list now opens with `%{reason: :bindings_resolver, location: nil}`, saying the bindings were not checked, where the report before was identical to a clean pass. It is the one entry with no location, so skip it or match its reason before reading `location`, and keep checking each scope's bindings with `StatifierRouter.Contracts.undeclared_binding_events/2`. This is the one change for a host with a resolver; a configuration without one gets the report it got before.

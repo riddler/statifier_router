@@ -165,7 +165,12 @@ execution's address row. The publish-time checks take no scope, so a host
 checks each scope's bindings with
 `StatifierRouter.Contracts.undeclared_binding_events/2`, and hands
 `StatifierRouter.Addresses.reap/3` the bindings of every scope it routes.
-Without a `:bindings_resolver`, `:bindings` is read exactly as before.
+`StatifierRouter.Contracts.check/3` never calls the resolver: its
+`:undeclared_binding_events` is empty, and its `:unchecked` list opens with
+`%{reason: :bindings_resolver, location: nil}`, the one entry with no
+location, saying the bindings were not checked. Without a
+`:bindings_resolver`, `:bindings` is read exactly as before, and `check/3`'s
+report carries no such entry.
 
 ## Routes and sinks
 

@@ -580,6 +580,64 @@ defmodule StatifierRouter.ContractsTest do
     end
   end
 
+  describe "check/3 under a bindings resolver (ADR-0008, the 2026-09-26 Amendment)" do
+    # Sabotage: bindings_unchecked/1's resolver clause answering [] leaves
+    # the report identical to a clean pass and this goes red.
+    test "puts one location-less :bindings_resolver entry first under unchecked" do
+      report =
+        Contracts.check(
+          config(bindings_resolver: fn _scope -> [] end),
+          compile!(courier_round(to_parcel("parcel.scanned"))),
+          declares_both()
+        )
+
+      assert report == %{
+               unsupported_types: [],
+               unregistered_routes: [],
+               unchecked: [%{reason: :bindings_resolver, location: nil}],
+               undeclared_events: [],
+               undeclared_binding_events: []
+             }
+    end
+
+    # Sabotage: appending the entry after the sorted list in check/3 puts
+    # it after the located entries and this goes red.
+    test "keeps the located entries after it, in document order" do
+      report =
+        Contracts.check(
+          config(bindings_resolver: fn _scope -> [] end),
+          compile!(courier_round(@mixed_sends)),
+          declares_both()
+        )
+
+      assert [
+               %{reason: :bindings_resolver, location: nil},
+               %{reason: :typeexpr},
+               %{reason: :eventexpr},
+               %{reason: :targetexpr}
+             ] = report.unchecked
+    end
+
+    # Sabotage: bindings_unchecked/1 answering the entry for every
+    # configuration adds it to a report without a resolver and this goes
+    # red.
+    test "leaves a report without a resolver as it was" do
+      config = config(bindings: [binding("depot_lost", "parcel.lost")])
+      machine = compile!(courier_round(@mixed_sends))
+      report = Contracts.check(config, machine, declares_both())
+      routes = Routes.unregistered(config, machine)
+      events = Contracts.undeclared_events(config, machine, declares_both())
+
+      assert report.unchecked ==
+               Enum.sort_by(routes.unchecked ++ events.unchecked, & &1.location.start_offset)
+
+      assert %{
+               unchecked: [%{reason: :typeexpr}, %{reason: :eventexpr}, %{reason: :targetexpr}],
+               undeclared_binding_events: [%{binding_id: "depot_lost"}]
+             } = report
+    end
+  end
+
   describe "check/3's unregistered_routes (ADR-0008, the 2026-09-24 Amendment)" do
     # Sabotage: tagging the Routes entries `:no_timer_queue` instead of
     # `:unregistered` in route_findings/3 turns this red.

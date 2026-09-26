@@ -289,20 +289,27 @@ defmodule StatifierRouter.BindingsResolverTest do
   describe "the publish-time checks under a bindings resolver" do
     # sabotage: check/3 read the resolver's answer for the scope 7c1e in
     # place of config.bindings -> the resolver was called and the join's
-    # bindings were reported, red; restored, green.
-    test "read the configuration's empty list and never call the resolver" do
+    # bindings were reported, red; restored, green. Second mutation:
+    # bindings_unchecked/1's resolver clause answered [] -> no
+    # :bindings_resolver entry, red; restored, green.
+    test "read the configuration's empty list, say so, and never call the resolver" do
       unpublished = fn _document -> {:error, :not_published} end
       machine = Map.fetch!(machines(), "parcel_route")
 
       static = config(self())
+      static_report = Contracts.check(static, machine, unpublished)
 
-      assert [_impressions, _clicks] =
-               Contracts.check(static, machine, unpublished).undeclared_binding_events
+      assert [_impressions, _clicks] = static_report.undeclared_binding_events
+      refute Enum.any?(static_report.unchecked, &match?(%{reason: :bindings_resolver}, &1))
 
       resolved =
         config(self(), bindings_resolver: join_resolver(self(), fn -> built(bindings()) end))
 
-      assert Contracts.check(resolved, machine, unpublished).undeclared_binding_events == []
+      assert %{
+               undeclared_binding_events: [],
+               unchecked: [%{reason: :bindings_resolver, location: nil} | _located]
+             } = Contracts.check(resolved, machine, unpublished)
+
       refute_received {:bindings_for, _scope}
     end
   end

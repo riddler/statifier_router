@@ -406,3 +406,25 @@ Under a resolver, `check/3` reads `bindings: []`, so its
 checked, as the reader list above says. sr-9fud makes that visible in the
 report; it lands with a later Note on this record and does not hold this
 flip.
+
+## Note (2026-09-26, sr-9fud): the spelling of the marker that `check/3` did not check the bindings
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. It is the later Note the Note above names.
+
+The operator ruled on 2026-09-25 that under a `:bindings_resolver`,
+`check/3`'s report carries an explicit marker that the binding check did
+not run, and left the spelling to a record. ADR-0008's Amendment of
+2026-09-26 decides it, at `proposed`: the first entry of `check/3`'s
+`unchecked` list is `%{reason: :bindings_resolver, location: nil}`, the
+one entry of that list with no location, typed
+`t:StatifierRouter.Contracts.bindings_unchecked/0`. A configuration with
+no resolver gets no such entry.
+
+The reader list of the 2026-09-25 Amendment stands otherwise: `check/3`
+reads `bindings: []` and never calls the resolver, its
+`:undeclared_binding_events` is empty under one, and a host checks each
+scope's answer with `undeclared_binding_events/2`. The code is
+`StatifierRouter.Contracts`'s `check/3` and its private
+`bindings_unchecked/1`, in the pull request that carries ADR-0008's
+Amendment.

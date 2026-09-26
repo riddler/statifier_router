@@ -92,6 +92,13 @@ defmodule StatifierRouter.Contracts do
   at all: `StatifierRouter.Routes.unregistered/2` reports it, and
   `check/3` carries that list once.
 
+  A configuration that gives a `:bindings_resolver` has no bindings
+  `check/3` can read, and `check/3` never calls the resolver. Its report
+  says so: the first `:unchecked` entry is
+  `%{reason: :bindings_resolver, location: nil}`, the one entry with no
+  location (see `t:bindings_unchecked/0`), so the report is never the one
+  a clean pass answers (ADR-0008's 2026-09-26 Amendment).
+
   ## An example
 
   A parcel is scanned from depot to doorstep. The `parcel` document
@@ -192,6 +199,15 @@ defmodule StatifierRouter.Contracts do
           location: Location.t()
         }
 
+  @typedoc """
+  The `:unchecked` entry `check/3` puts first when the configuration
+  gives a `:bindings_resolver`: the bindings were not checked, because
+  `check/3` takes no scope and never calls the resolver. It is the one
+  unchecked entry with no location; a host checks each scope's bindings
+  with `undeclared_binding_events/2`.
+  """
+  @type bindings_unchecked :: %{reason: :bindings_resolver, location: nil}
+
   @typedoc "What `undeclared_events/3` answers, each list in `c_index` order."
   @type report :: %{undeclared: [finding()], unchecked: [unchecked()]}
 
@@ -210,7 +226,7 @@ defmodule StatifierRouter.Contracts do
   @type check_report :: %{
           unsupported_types: [Statifier.Send.Types.unsupported_send()],
           unregistered_routes: [route_finding()],
-          unchecked: [Routes.unchecked() | unchecked()],
+          unchecked: [bindings_unchecked() | Routes.unchecked() | unchecked()],
           undeclared_events: [finding()],
           undeclared_binding_events: [binding_finding()]
         }
@@ -315,14 +331,18 @@ defmodule StatifierRouter.Contracts do
   - `:unchecked` - the unchecked entries of
     `StatifierRouter.Routes.unregistered/2` (`:typeexpr`, `:targetexpr`)
     and of `undeclared_events/3` together, in document order, ordered by
-    each `<send>` element's source offset.
+    each `<send>` element's source offset. When the configuration gives a
+    `:bindings_resolver`, `%{reason: :bindings_resolver, location: nil}`
+    comes first (see `t:bindings_unchecked/0`); without one it is absent.
   - `:undeclared_events` - the findings of `undeclared_events/3`.
   - `:undeclared_binding_events` - `undeclared_binding_events/2` over the
     configuration's `:bindings`. A configuration that gives a
     `:bindings_resolver` keeps `bindings: []`, so this key is always empty
-    for it: `check/3` takes no scope, and the host checks each scope's
-    answer with `undeclared_binding_events/2` itself (ADR-0001, the
-    Amendment of 2026-09-25).
+    for it: `check/3` takes no scope and never calls the resolver, and the
+    host checks each scope's answer with `undeclared_binding_events/2`
+    itself (ADR-0001, the Amendment of 2026-09-25). The
+    `:bindings_resolver` entry under `:unchecked` is what tells that empty
+    list from a clean pass (ADR-0008's 2026-09-26 Amendment).
 
   `StatifierRouter.Routes.unsupported_types/2` is composed unchanged, and
   so are the `:unchecked` entries of `StatifierRouter.Routes.unregistered/2`;
@@ -336,8 +356,9 @@ defmodule StatifierRouter.Contracts do
   `<send>` that writes `delay` or `delayexpr`. Every
   `:unchecked` entry is `%{reason, location}`, its reason one of
   `:typeexpr`, `:targetexpr`, `:eventexpr`, `:no_event`, `:document_expr`
-  or `:no_document`. Which finding blocks a publish is the host's
-  decision.
+  or `:no_document`, with a `<send>` element's location, except the one
+  `:bindings_resolver` entry, whose location is `nil`. Which finding
+  blocks a publish is the host's decision.
   """
   @spec check(Config.t(), Machine.t(), lookup()) :: check_report()
   def check(%Config{} = config, %Machine{} = machine, lookup) when is_function(lookup, 1) do
@@ -347,11 +368,21 @@ defmodule StatifierRouter.Contracts do
     %{
       unsupported_types: Routes.unsupported_types(config, machine),
       unregistered_routes: route_findings(config, machine, routes.unregistered),
-      unchecked: Enum.sort_by(routes.unchecked ++ events.unchecked, & &1.location.start_offset),
+      unchecked:
+        bindings_unchecked(config) ++
+          Enum.sort_by(routes.unchecked ++ events.unchecked, & &1.location.start_offset),
       undeclared_events: events.undeclared,
       undeclared_binding_events: undeclared_binding_events(config.bindings, lookup)
     }
   end
+
+  # ADR-0008's 2026-09-26 Amendment: a configuration with a bindings
+  # resolver has no bindings this check reads, and says so first, before
+  # the located entries, which the sort above orders by offset.
+  @spec bindings_unchecked(Config.t()) :: [bindings_unchecked()]
+  defp bindings_unchecked(%Config{bindings_resolver: nil}), do: []
+
+  defp bindings_unchecked(%Config{}), do: [%{reason: :bindings_resolver, location: nil}]
 
   # ADR-0008's 2026-09-24 Amendment: `Routes.unregistered/2`'s findings,
   # each tagged `:unregistered`, and the delayed route sends a host with
