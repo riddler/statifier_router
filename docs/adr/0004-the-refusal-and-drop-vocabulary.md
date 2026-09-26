@@ -485,3 +485,50 @@ drop can leave behind is that create's and its input log does not hold
 the event, are read with this drop as a second exception: it steps the
 execution, and when this delivery created the execution, that execution
 stays and its input log holds the event.
+
+## Note (2026-09-26, sr-rk1o): a delivery to a quarantined execution, and why no drop names it
+
+A Note, not an amendment: it decides nothing and changes no decision or
+Note above it. It records what the code already does when an event is
+routed to an execution that a failed migration parked in
+statifier_persistence's `:needs_migration` status (sp-ADR-0014), and why
+the vocabulary above gains no outcome for it. The operator ruled on
+2026-09-26 that this needs no router code and no new outcome. Code cites
+are read at `1b4aacd`; statifier_persistence cites are read at its
+`v0.18.0` tag (`453f630`), the version this package's `mix.lock`
+resolves.
+
+- **The refusal is `step/5`'s, and the router passes it through.**
+  `:needs_migration` is not one of the terminal statuses the router
+  reads as a finish (`StatifierRouter.Delivery`'s private `existing/5`),
+  so the delivery resolves the execution's chart and calls `step/5`,
+  which refuses the event whole with `{:error, {:needs_migration,
+  execution}}` before loading anything (sp-ADR-0014, decision 2;
+  `StatifierPersistence.Executions.step/5`). The router never names
+  `needs_migration`: the error leaves the private `step/7`'s error arm
+  unchanged, like any other `{:error, reason}` from `step/5`.
+- **It is an error, not an outcome (section 7).** The delivery rolls
+  back to its savepoint, so the dedupe row it claimed is undone, and no
+  ledger row is written. `route/3` returns the `{:error, reason}` and
+  the front does not acknowledge the message; a source that redelivers
+  hands it over again (ADR-0003, the Note of 2026-09-21 on redelivery).
+  Until the execution leaves the status, by a corrected `migrate/4` or
+  by `unpark/3`, each attempt ends the same way, and the first attempt
+  after it steps the event. A delivery that arrives while a migration
+  of the execution is in progress waits on the execution's
+  serialization, which `migrate/4` and `step/5` share.
+- **There is no `dropped: needs_migration`.** A drop is an outcome:
+  its delivery commits the dedupe row its claim wrote (section 3), and
+  `route/3` answers it inside `{:ok, outcomes}`, which a front
+  acknowledges. A drop here would therefore mark the message handled
+  while the event had reached nothing: the front would acknowledge it,
+  and a redelivery that still arrived within the horizon would be read
+  as a duplicate. The event would be lost for an execution that takes
+  events again once it leaves the status. sp-ADR-0014, decision 2
+  makes the parked refusal an error rather than a discard for the same
+  reason, and this vocabulary keeps it one. Section 1's seven outcomes, with the Note of 2026-09-25's
+  `dropped: unmatched_event`, are unchanged.
+
+What a migrated execution's next delivery steps on is ADR-0002's, and
+its Note of 2026-09-26 says it. No test in this repository exercises a
+parked execution yet; this Note is read from the code.

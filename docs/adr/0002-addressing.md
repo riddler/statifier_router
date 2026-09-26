@@ -649,3 +649,59 @@ and `main` at the time of the flip:
 The sentence "statifier_persistence's helper does not refuse a package
 column's name at the time of writing" is about that package at the time
 of writing, and this Note does not re-read it.
+
+## Note (2026-09-26, sr-rk1o): a migrated execution's next delivery
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It records what the code already does when
+statifier_persistence migrates an addressed execution onto another chart
+(`StatifierPersistence.Executions.migrate/4`, sp-ADR-0013), so that the
+next reader does not have to derive it. The operator ruled on
+2026-09-26 that this needs no router code. Code cites are read at
+`1b4aacd`; statifier_persistence cites are read at its `v0.18.0` tag
+(`453f630`), the version this package's `mix.lock` resolves.
+
+- **The address row holds no content hash, so a migration leaves it
+  alone.** Section 1's columns name the execution by its id and nothing
+  else (`StatifierRouter.Schema.Address`). `migrate/4` rewrites the
+  execution record's content hash, identity and position together and
+  touches nothing of this package's, so the row that addressed the
+  execution before the migration addresses it after, unchanged.
+- **The next delivery steps on the `to` chart.** The chart an existing
+  execution is stepped on is the one named by the content hash its
+  execution record carries, compiled through the host's
+  `:chart_resolver` (the Amendment of 2026-09-19 above;
+  `StatifierRouter.Delivery`'s private `existing/5`). After a migration
+  that record carries the `to` hash, so the next delivery asks
+  `:chart_resolver` for the `to` chart and steps on it. The resolver has
+  to answer for that hash, which it does when the host saved the `to`
+  chart under it before migrating; otherwise the delivery ends in
+  `{:error, {:chart_not_resolved, content_hash}}`, as the Amendment
+  says. The hash `:chart_resolver` is asked for is the recorded one, as
+  the Note of 2026-09-20 on the hash an execution is recorded under
+  says; `migrate/4` records the `to` machine's own hash, so that Note's
+  equality holds after a migration as it does after a create.
+- **A delivery during a migration waits, and one that read the record
+  first is retried.** `migrate/4` and `step/5` both run under the
+  execution's serialization, so a delivery whose `step/5` reaches the
+  lock while a migration holds it waits for the migration to finish.
+  The router reads the execution record, and so picks the chart, before
+  `step/5` takes that lock; a delivery that read the record before the
+  migration committed hands `step/5` the `from` chart, and `step/5`'s
+  load refuses it with `{:error, {:identity_mismatch, stored,
+  supplied}}`. That is an error, not an outcome (ADR-0004, section 7):
+  the delivery rolls back, and when the source hands the event over
+  again (ADR-0003, the Note of 2026-09-21 on redelivery), that attempt
+  reads the `to` hash.
+- **Retiring the `from` chart stays safe.** `StatifierRouter.PinSource`'s
+  `count/2` counts the address rows naming the executions the retire
+  call hands it, which are the `:active` executions on the hash being
+  retired; it reads no content hash. An execution migrated off the
+  `from` chart is no longer among them, so its unchanged row no longer
+  pins the `from` chart, and a row naming an execution still on that
+  chart still does.
+
+What a delivery to an execution a migration parked answers is
+ADR-0004's, and its Note of 2026-09-26 says it. No test in this
+repository exercises a migrated or a parked execution yet; this Note is
+read from the code.
