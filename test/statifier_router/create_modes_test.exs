@@ -390,7 +390,9 @@ defmodule StatifierRouter.CreateModesTest do
     end
 
     # sabotage: options/1 dropped reject_unknown -> the unknown option was
-    # accepted, red; restored, green.
+    # accepted, red; restored, green. Second mutation: examine/3 dropped
+    # its rescue -> the "r1" cursor raised DBConnection.EncodeError, red;
+    # restored, green.
     test "refuses malformed options" do
       config = config(self())
 
@@ -398,6 +400,13 @@ defmodule StatifierRouter.CreateModesTest do
       assert Addresses.reap(config, [], [:now]) == {:error, {:invalid_opts, [:now]}}
       assert Addresses.reap(config, [], limit: 0) == {:error, {:invalid_value, :limit, 0}}
       assert Addresses.reap(config, [], after: -1) == {:error, {:invalid_value, :after, -1}}
+      assert Addresses.reap(config, [], after: "") == {:error, {:invalid_value, :after, ""}}
+
+      # A string cursor the default bigserial id cannot hold is refused as
+      # before the primary key option existed, and the host's transaction
+      # carries on: the refusal is raised before the query is sent.
+      assert Addresses.reap(config, [], after: "r1") == {:error, {:invalid_value, :after, "r1"}}
+      assert Addresses.reap(config, [], after: "5") == {:error, {:invalid_value, :after, "5"}}
 
       assert Addresses.reap(config, [], now: ~N[2026-09-19 08:00:00]) ==
                {:error, {:invalid_value, :now, ~N[2026-09-19 08:00:00]}}

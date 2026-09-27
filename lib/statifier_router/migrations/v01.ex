@@ -61,6 +61,11 @@ defmodule StatifierRouter.Migrations.V01 do
   follow them on the two tables that have one, and `:column_collations`
   declares each named text column with its collation wherever a table
   here has it.
+
+  The `id` above is the host repo's implicit primary key, a `bigserial`
+  unless the repo's `:migration_primary_key` says otherwise. Under the
+  `StatifierRouter.Migrations` `:primary_key` option it is instead an `id`
+  of the type and default the option names, on all three tables.
   """
 
   use Ecto.Migration
@@ -73,7 +78,8 @@ defmodule StatifierRouter.Migrations.V01 do
           required(:prefix) => String.t() | nil,
           optional(:leading_columns) => [{atom(), {term(), keyword()}}],
           optional(:timestamps_position) => :trailing | :leading,
-          optional(:column_collations) => [{atom(), String.t()}]
+          optional(:column_collations) => [{atom(), String.t()}],
+          optional(:primary_key) => keyword() | nil
         }
 
   @doc "Creates the V01 tables and their indexes."
@@ -85,7 +91,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
     addresses = Config.table_name(table_prefix, :addresses)
 
-    create table(addresses, prefix: prefix) do
+    create table(addresses, table_opts(storage)) do
       add_leading_columns(storage)
       add_inserted_at(storage, :leading)
       add(:scope, :text, collated(storage, :scope, null: false))
@@ -109,7 +115,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
     dedupe = Config.table_name(table_prefix, :dedupe)
 
-    create table(dedupe, prefix: prefix) do
+    create table(dedupe, table_opts(storage)) do
       add_leading_columns(storage)
       add(:binding_id, :text, collated(storage, :binding_id, null: false))
       add(:message_id, :text, collated(storage, :message_id, null: false))
@@ -127,7 +133,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
     ledger = Config.table_name(table_prefix, :routing_ledger)
 
-    create table(ledger, prefix: prefix) do
+    create table(ledger, table_opts(storage)) do
       add_leading_columns(storage)
       add_inserted_at(storage, :leading)
       add(:binding_id, :text, collated(storage, :binding_id, null: false))
@@ -148,6 +154,17 @@ defmodule StatifierRouter.Migrations.V01 do
     )
 
     :ok
+  end
+
+  # The table/2 opts: the Postgres schema, and the host's primary key when
+  # :primary_key names one. Without it they are the opts this version
+  # passed before the option existed, and the repo's :migration_primary_key
+  # decides the key, as it always has.
+  defp table_opts(%{prefix: prefix} = storage) do
+    case Map.get(storage, :primary_key) do
+      nil -> [prefix: prefix]
+      primary_key -> [prefix: prefix, primary_key: [name: :id] ++ primary_key]
+    end
   end
 
   # Called first inside a `create table` block, right after the implicit

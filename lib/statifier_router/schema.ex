@@ -16,5 +16,10 @@ defmodule StatifierRouter.Schema do
   through `StatifierRouter.Config.put_meta/2` for a row it writes and
   `StatifierRouter.Config.queryable/2` for a query, which read the same
   configuration the migrations were given.
+
+  Each schema's `id` is a `StatifierRouter.Schema.Id`: the database fills
+  it in on insert and the schema reads it back as the column holds it, an
+  integer under the repo's default `bigserial` key, a string under a text
+  key the `:primary_key` option of `StatifierRouter.Migrations` built.
   """
 end

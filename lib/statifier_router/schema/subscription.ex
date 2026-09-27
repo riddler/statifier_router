@@ -12,8 +12,10 @@ defmodule StatifierRouter.Schema.Subscription do
 
   use Ecto.Schema
 
+  @primary_key {:id, StatifierRouter.Schema.Id, autogenerate: true}
+
   @type t :: %__MODULE__{
-          id: pos_integer() | nil,
+          id: StatifierRouter.Schema.Id.t() | nil,
           binding_id: String.t() | nil,
           execution_id: String.t() | nil,
           invoke_id: String.t() | nil,

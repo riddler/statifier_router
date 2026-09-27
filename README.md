@@ -624,6 +624,77 @@ nothing again:
 database, so the new body only ever runs on a fresh one, where it
 builds what the comparison proved identical.
 
+## A primary key of the host's own
+
+Every table the versions create has an `id` primary key, and by default
+it is the one the host repo's `:migration_primary_key` gives every
+table: a `bigserial` unless the repo says otherwise. A host whose tables
+follow another id convention - a sortable string id, say - passes
+`:primary_key` with the id's type and the default the database fills it
+in with:
+
+```elixir
+defmodule MyApp.Repo.Migrations.AddStatifierRouter do
+  use Ecto.Migration
+
+  def up, do: StatifierRouter.Migrations.up(opts())
+  def down, do: StatifierRouter.Migrations.down(opts())
+
+  defp opts do
+    [primary_key: [type: :text, default: fragment("gen_random_uuid()::text")]]
+  end
+end
+```
+
+The option takes `:type`, required, and `:default`, optional, each what
+`Ecto.Migration.add/3` takes, and builds the `id` of every table a
+version creates - V01's address, dedupe and routing ledger tables and
+V02's subscription table - with them, in place of the repo's key for
+these tables alone. The column is always named `id`.
+
+- **The database fills the id in.** The package inserts no id of its
+  own, so the key needs a default: a function, a sequence, or an
+  identity column's own. A key with no default fails every insert the
+  package makes.
+- **The schemas read it back as the column holds it.** The schemas in
+  `StatifierRouter.Schema` take the id through
+  `StatifierRouter.Schema.Id`: an integer from an integer column, a
+  string from a text one. A string that spells an integer, `"42"`, is
+  cast to `42` as Ecto's own `:id` type casts it, so a host whose text
+  ids can be all digits reads such a row back through a query of its
+  own rather than a cast; the package's own reads never cast an id.
+- **The address sweep follows the id's order.**
+  `StatifierRouter.Addresses.reap/2` pages through the address table in
+  the id column's order, and its `next` cursor is an id as the table
+  holds it - a string under a text key, which the next call passes back
+  as `after:`. A sortable id sweeps roughly in insertion order; any id
+  sweeps the whole table.
+- **It applies to a fresh create.** Like the layout options above, it
+  types the key of the tables a version creates and re-types no table
+  that already exists: a host that ran V01 under the repo's key and sets
+  it for V02 gets the new key on the subscription table alone. Decide
+  the key before the first migration. Left out, every table is built
+  exactly as before the option existed.
+
+With the option set, the package declares `id` itself, so a
+`:leading_columns` entry named `id` raises `ArgumentError`.
+
+A
+sub!(s, <<'A', <<'B', "readme upgrade")
+with the same `:table_prefix` and `:prefix` its earlier migrations pass.
+Nothing is rebuilt, and on a database where the index already carries its
+new name the migration does nothing. `StatifierRouter.Migrations` says what
+a long `:table_prefix` does to the index names.
+A
+with the same `:table_prefix` and `:prefix` its earlier migrations pass.
+Nothing is rebuilt, and on a database where the index already carries its
+new name the migration does nothing. A first migration that calls `up/1`
+with no `version:`, as the examples above do, runs every version this
+package knows, so on a fresh database it runs V03 too; the migration above
+is still needed for every database that ran the first one before V03
+existed, and on a fresh one it finds the index already renamed.
+`StatifierRouter.Migrations` says what a long `:table_prefix` does to the
+index names.
 ## Upgrading the tables
 
 A package release that adds a migration version needs one more migration

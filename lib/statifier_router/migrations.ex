@@ -15,8 +15,8 @@ defmodule StatifierRouter.Migrations do
 
   The options are the two storage options of `StatifierRouter.Config`,
   `:table_prefix` and `:prefix`, resolved the same way, `:from` and
-  `:version`, and the three layout options statifier_persistence's
-  migrations helper takes, under the same spellings:
+  `:version`, the three layout options statifier_persistence's
+  migrations helper takes, under the same spellings, and `:primary_key`:
 
     * `:table_prefix` - a string prefixed to every table name, default
       `"statifier_router_"`. Pass the same value the host's
@@ -45,9 +45,12 @@ defmodule StatifierRouter.Migrations do
       runs, where Postgres would otherwise refuse the `CREATE TABLE` with a
       duplicate column. A name only a table the call does not create
       declares is a host column like any other: `up(from: 2)` may lead
-      with `expires_at`, which only V01's dedupe table has. The primary
-      key is the repo's `:migration_primary_key` and is not checked: a
-      repo that sets it to `false` may lead with an `id` of its own.
+      with `expires_at`, which only V01's dedupe table has. Without
+      `:primary_key`, the primary key is the repo's
+      `:migration_primary_key` and is not checked: a repo that sets it to
+      `false` may lead with an `id` of its own. With `:primary_key` set,
+      the package declares `id` itself, and a leading `id` raises like any
+      other package column.
     * `:timestamps_position` - where `inserted_at` goes in every table a
       version creates that has one (the address table, the routing ledger
       and the subscription table; the dedupe table has none): `:trailing`
@@ -67,15 +70,34 @@ defmodule StatifierRouter.Migrations do
       `message_id`, `outcome`, `reason` and `invoke_id` - and the
       collation must be one the database knows; a host column takes its
       collation in its own `:leading_columns` opts instead.
+    * `:primary_key` - the type and default of the `id` primary key of
+      every table a version creates, in place of the repo's
+      `:migration_primary_key`, default: not set. A keyword list with a
+      `:type`, required, and a `:default`, optional, each what
+      `Ecto.Migration.add/3` takes: `primary_key: [type: :text, default:
+      fragment("gen_random_uuid()::text")]` builds `id` as a text primary
+      key the database fills in, on all four tables. The column is always
+      named `id`, the name the schemas in `StatifierRouter.Schema` read.
+      The package inserts no id of its own, so the column needs a default
+      the database fills in (a `bigserial` or an identity column has one
+      already); a key without one fails every insert the package makes.
+      The schemas read the id back as the database holds it, an integer or
+      a string (`StatifierRouter.Schema.Id`), and
+      `StatifierRouter.Addresses.reap/2` sweeps in the id column's own
+      order. Left out, every table takes the repo's primary key, exactly as
+      before the option existed.
 
-  The three layout options apply to a fresh create only. Each table is
-  laid out by the version that creates it - V01 the address table, the
-  dedupe table and the routing ledger, V02 the subscription table - and
-  no version re-places a column in a table that already exists, so
-  adding an option later changes nothing in the tables already built.
-  Left out, every version builds exactly the tables it built before the
-  options existed. `down/1` accepts them too, so one options list serves
-  both directions, and ignores them.
+  The three layout options and `:primary_key` apply to a fresh create
+  only. Each table is laid out by the version that creates it - V01 the
+  address table, the dedupe table and the routing ledger, V02 the
+  subscription table - and no version re-places a column or re-types a
+  key in a table that already exists, so adding an option later changes
+  nothing in the tables already built: a host that ran V01 under the
+  repo's key and sets `:primary_key` for V02 gets the new key on the
+  subscription table alone, and each table keeps the key it was built
+  with. Left out, every version builds exactly the tables it built before
+  the options existed. `down/1` accepts them too, so one options list
+  serves both directions, and ignores them.
 
   A host already running an older version writes its next migration with
   `from:` set to the first version it has not run, rather than re-running
@@ -155,7 +177,8 @@ defmodule StatifierRouter.Migrations do
   # refuses a duplicate column name. The primary key is left out: whether
   # a table gets one, and its name, is the repo's :migration_primary_key,
   # which Ecto reads inside the migration runner, and a repo that turns it
-  # off may lead with an `id` of its own.
+  # off may lead with an `id` of its own. Under :primary_key the package
+  # declares `id` itself, and up/1 adds it to every set.
   @package_columns %{
     1 => [
       addresses: [:scope, :document, :key, :execution_id, :inserted_at, :terminal_seen_at],
@@ -197,7 +220,7 @@ defmodule StatifierRouter.Migrations do
     validate_version!(from, "from")
     {storage, target} = parse!(opts, @current_version)
     span = span!(from, target, :up)
-    refuse_package_column_names!(storage.leading_columns, span)
+    refuse_package_column_names!(storage.leading_columns, span, storage.primary_key)
 
     Enum.each(span, fn version -> Map.fetch!(@migrations, version).up(storage) end)
   end
@@ -252,11 +275,13 @@ defmodule StatifierRouter.Migrations do
     {leading_columns, opts} = Keyword.pop(opts, :leading_columns, [])
     {timestamps_position, opts} = Keyword.pop(opts, :timestamps_position, :trailing)
     {column_collations, opts} = Keyword.pop(opts, :column_collations, [])
+    {primary_key, opts} = pop_primary_key(opts)
 
     layout = %{
       leading_columns: validate_leading_columns!(leading_columns),
       timestamps_position: validate_timestamps_position!(timestamps_position),
-      column_collations: validate_column_collations!(column_collations)
+      column_collations: validate_column_collations!(column_collations),
+      primary_key: primary_key
     }
 
     {layout, opts}
@@ -305,8 +330,10 @@ defmodule StatifierRouter.Migrations do
   # Checked in up/1 only, against the tables the span creates: down/1
   # creates no table and ignores the layout options, and a name only a
   # table outside the span declares is a host column like any other.
-  defp refuse_package_column_names!(leading_columns, span) do
-    tables = Enum.flat_map(span, &Map.fetch!(@package_columns, &1))
+  defp refuse_package_column_names!(leading_columns, span, primary_key) do
+    tables =
+      for {table, columns} <- Enum.flat_map(span, &Map.fetch!(@package_columns, &1)),
+          do: {table, if(primary_key, do: [:id | columns], else: columns)}
 
     collisions =
       for {name, _column} <- leading_columns,
@@ -322,6 +349,51 @@ defmodule StatifierRouter.Migrations do
     end
 
     :ok
+  end
+
+  # The primary key option, validated and popped with the layout options.
+  # Left out it is nil, and every version calls table/2 exactly as it did
+  # before the option existed.
+  defp pop_primary_key(opts) do
+    case Keyword.pop(opts, :primary_key) do
+      {nil, opts} -> {nil, opts}
+      {primary_key, opts} -> {validate_primary_key!(primary_key), opts}
+    end
+  end
+
+  defp validate_primary_key!(primary_key) when is_list(primary_key) and primary_key != [] do
+    if not Keyword.keyword?(primary_key) do
+      raise ArgumentError,
+            "the :primary_key option must be a keyword list of type: and default:, " <>
+              "got: #{inspect(primary_key)}"
+    end
+
+    case Enum.reject(Keyword.keys(primary_key), &(&1 in [:type, :default])) do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "the :primary_key option takes only :type and :default, got: #{inspect(unknown)}"
+    end
+
+    if Keyword.keys(primary_key) != Enum.uniq(Keyword.keys(primary_key)) do
+      raise ArgumentError,
+            "the :primary_key option names a key more than once: #{inspect(primary_key)}"
+    end
+
+    if not Keyword.has_key?(primary_key, :type) do
+      raise ArgumentError,
+            "the :primary_key option needs a :type, got: #{inspect(primary_key)}"
+    end
+
+    primary_key
+  end
+
+  defp validate_primary_key!(other) do
+    raise ArgumentError,
+          "the :primary_key option must be a keyword list of type: and default:, " <>
+            "got: #{inspect(other)}"
   end
 
   defp validate_timestamps_position!(position) when position in @timestamps_positions,

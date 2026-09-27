@@ -11,8 +11,10 @@ defmodule StatifierRouter.Schema.Dedupe do
 
   use Ecto.Schema
 
+  @primary_key {:id, StatifierRouter.Schema.Id, autogenerate: true}
+
   @type t :: %__MODULE__{
-          id: pos_integer() | nil,
+          id: StatifierRouter.Schema.Id.t() | nil,
           binding_id: String.t() | nil,
           message_id: String.t() | nil,
           expires_at: DateTime.t() | nil

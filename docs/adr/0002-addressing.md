@@ -730,3 +730,93 @@ schema. Code cites are read at `d426c1c`.
   its columns", in `test/statifier_router/migrations_test.exs`, reads the
   address table's indexes back from the database and expects this one
   on `execution_id` beside the primary key and the unique index.
+
+## Amendment (2026-09-26, sr-w58a): a primary key of the host's type
+
+Status: proposed
+
+Section 1 leaves the migrations that create the address table to the
+code half, and the sr-cgw Note gives a host three options that place
+its columns after `id` on all four tables. `id` itself stayed the host
+repo's `:migration_primary_key`, and the schemas read it as an integer,
+so a host whose tables follow another id convention - a sortable
+string id, say - could not fit the router's tables to it. The operator
+ruled on 2026-09-26 to build a primary key option. This Amendment
+decides its shape.
+
+- **One option, on the migration.** `StatifierRouter.Migrations.up/1`
+  takes `:primary_key`, a keyword list with a `:type`, required, and a
+  `:default`, optional, each what `Ecto.Migration.add/3` takes. It
+  builds the `id` of every table a version creates - V01's address,
+  dedupe and routing ledger tables and V02's subscription table - with
+  that type and default, in place of the repo's
+  `:migration_primary_key`, for these tables alone. The column is
+  always named `id`. Any other key, a key given twice, a missing
+  `:type` and a value that is neither `nil`, which is the same as
+  leaving the option out, nor a non-empty keyword list raise
+  `ArgumentError` before any DDL. `down/1` accepts it and ignores it,
+  as it does the layout options. It is an option of the migration,
+  never a key of `StatifierRouter.Config`.
+- **Absent is today, byte for byte.** Left out, every version calls
+  `table/2` with exactly the options it passed before, and sends
+  exactly the DDL it sent before: V01, V02 and V03 as published.
+- **A fresh create only.** Like the layout options, it types the key of
+  the tables a version creates and re-types none that already exists.
+- **The database fills the id in.** The package inserts no id of its
+  own, so the key needs a default the database supplies.
+- **A leading `id` is refused under the option.** With `:primary_key`
+  set the package declares `id` itself, and a `:leading_columns` entry
+  named `id` raises like any other package column. This narrows the
+  sr-3o5z Amendment's "the primary key is not in the set" to a call
+  that leaves `:primary_key` out; such a call is unchanged.
+- **The schemas take the id through one type.** The four schemas in
+  `StatifierRouter.Schema` declare `id` as `StatifierRouter.Schema.Id`,
+  a new public module the option forces: a schema's key type is fixed
+  when it compiles, and one type has to read an integer from an
+  integer column and a string from a text one. Its base type is `:id`,
+  so Ecto still leaves the column to the database on insert and reads
+  it back. It loads and dumps an integer or a string unchanged, and
+  casts an integer, and a string that spells one, as Ecto's own `:id`
+  type does, and any other string to itself, so a cast that worked
+  under the default key still gives the same integer.
+- **The package never casts an id it binds.** The address sweep's
+  cursor, the ids it stamps and deletes, and the row a delivery stamps
+  terminal are bound as the table or the host handed them over, so a
+  text id made of digits alone stays a string.
+- **The sweep follows the id column's order.**
+  `StatifierRouter.Addresses.reap/2` pages through the address table in
+  the id column's order, as section 6 and the Note of 2026-09-20 on
+  what one reap is called with describe it; under a text key that is
+  the column's collation order. `next` is an id as the table holds it,
+  an integer or a string, and `after:` takes either back: `nil`, a
+  positive integer or a non-empty string. A cursor the id column cannot
+  hold is refused as `{:invalid_value, :after, value}`, as a string
+  cursor was before. With no cursor the read starts at the table's
+  first row, where it started at the first id above zero, which is the
+  same row under a `bigserial` key.
+
+**Where the code is.** In the pull request that carries this
+Amendment: `StatifierRouter.Migrations`, whose private `layout!/1`
+reads the option through the private `pop_primary_key/1` and
+`validate_primary_key!/1`, and whose private
+`refuse_package_column_names!/3` adds `id` to every set under it; the
+private `table_opts/1` of `StatifierRouter.Migrations.V01` and of
+`StatifierRouter.Migrations.V02`, which hand `table/2` the key;
+`StatifierRouter.Schema.Id`; the `@primary_key` of
+`StatifierRouter.Schema.Address`, `StatifierRouter.Schema.Dedupe`,
+`StatifierRouter.Schema.Ledger` and `StatifierRouter.Schema.Subscription`;
+the private `examine/3`, `stamp/3`, `delete/2` and `after_id/1` of
+`StatifierRouter.Addresses`; and the private `stamp_terminal_seen/3` of
+`StatifierRouter.Delivery`. The code this replaces - `examine/3`'s
+`a.id > ^after_id`, `after_id/1`'s `nil` as `0`, and the four schemas'
+default key - is read at `d426c1c`. In
+`test/statifier_router/primary_key_test.exs`, "every version sends
+exactly the DDL it sent before the option existed" compares the DDL a
+migration with no option logs against the DDL logged at `d426c1c`;
+"changes only the id column of every table a version creates" pins the
+option's DDL; "takes a delivery and a sweep, and a row through every
+schema" and "never casts a text id made of digits alone" route parcel
+scans and sweep the address table under a text key; and "refuses a
+cursor the id column cannot hold" pins the refusal, as the "refuses
+malformed options" test in `test/statifier_router/create_modes_test.exs`
+does under the default key.

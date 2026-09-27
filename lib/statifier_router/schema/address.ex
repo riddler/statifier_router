@@ -11,8 +11,10 @@ defmodule StatifierRouter.Schema.Address do
 
   use Ecto.Schema
 
+  @primary_key {:id, StatifierRouter.Schema.Id, autogenerate: true}
+
   @type t :: %__MODULE__{
-          id: pos_integer() | nil,
+          id: StatifierRouter.Schema.Id.t() | nil,
           scope: String.t() | nil,
           document: String.t() | nil,
           key: String.t() | nil,

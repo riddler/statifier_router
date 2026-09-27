@@ -68,6 +68,15 @@ defmodule StatifierRouter.Addresses do
   with no options examines the first `:limit` rows each time, which frees
   nothing behind them.
 
+  The rows are read in the order of their ids, and `next` is an id as the
+  table holds it: an integer under the default `bigserial` key, a string
+  under a text key a host built with the `:primary_key` option of
+  `StatifierRouter.Migrations`. "Greater" is the id column's own order,
+  so a text key sweeps in its collation's order, and a sortable id
+  sweeps roughly in insertion order. The sweep needs only that the order
+  is total and that a row keeps its id, which a primary key guarantees;
+  a row inserted during a sweep behind its cursor waits for the next one.
+
   An `{:error, reason}` from `fetch_execution/2` for any examined row ends
   the call before it writes anything, and is returned. The one exception is
   `:execution_not_found`, which the rules above make a deletion rather than
@@ -96,7 +105,7 @@ defmodule StatifierRouter.Addresses do
   @type result :: %{
           stamped: non_neg_integer(),
           deleted: non_neg_integer(),
-          next: pos_integer() | nil
+          next: StatifierRouter.Schema.Id.t() | nil
         }
 
   @doc """
@@ -139,8 +148,11 @@ defmodule StatifierRouter.Addresses do
       `DateTime.utc_now/0`.
     * `:limit` - a positive integer, the most rows this call examines.
       Defaults to 1000.
-    * `:after` - `nil` or a positive integer: examine only rows whose id
-      is greater. Defaults to `nil`, the start of the table.
+    * `:after` - `nil`, or an id of the table: examine only rows whose id
+      is greater. Defaults to `nil`, the start of the table. The id is a
+      `next` an earlier call answered: a positive integer under the
+      default key, a string under a text key. One the table's id column
+      cannot hold is refused as `{:invalid_value, :after, value}`.
 
   Returns `{:ok, result}`, `{:error, reason}` from
   `StatifierPersistence.Storage.fetch_execution/2` other than
@@ -151,7 +163,7 @@ defmodule StatifierRouter.Addresses do
   @spec reap(Config.t(), [Binding.t()], keyword()) :: {:ok, result()} | {:error, term()}
   def reap(%Config{store: %Storage{}} = config, bindings, opts \\ []) when is_list(bindings) do
     with {:ok, now, limit, after_id} <- options(opts),
-         rows = examine(config, after_id, limit),
+         {:ok, rows} <- examine(config, after_id, limit),
          {:ok, acted} <- classify_rows(config, rows, now) do
       horizons = horizons(bindings)
       {due, kept} = Enum.split_with(acted, &due?(&1, horizons, now))
@@ -165,14 +177,27 @@ defmodule StatifierRouter.Addresses do
     end
   end
 
+  # From the start of the table, or from the row after the cursor. Every
+  # id here is bound as the host or the table handed it over, never cast
+  # (a text id made of digits alone stays a string), and a cursor the id
+  # column cannot hold fails to encode before the query is sent, which is
+  # the malformed option it is.
+  defp examine(config, nil, limit) do
+    {:ok,
+     config.repo.all(from(a in Config.queryable(config, Address), order_by: a.id, limit: ^limit))}
+  end
+
   defp examine(config, after_id, limit) do
-    config.repo.all(
-      from(a in Config.queryable(config, Address),
-        where: a.id > ^after_id,
-        order_by: a.id,
-        limit: ^limit
-      )
-    )
+    {:ok,
+     config.repo.all(
+       from(a in Config.queryable(config, Address),
+         where: fragment("? > ?", a.id, ^after_id),
+         order_by: a.id,
+         limit: ^limit
+       )
+     )}
+  rescue
+    DBConnection.EncodeError -> {:error, {:invalid_value, :after, after_id}}
   end
 
   # Every examined row this reap acts on, as {row, :seen} when it was
@@ -236,7 +261,7 @@ defmodule StatifierRouter.Addresses do
   defp stamp(config, ids, now) do
     {count, _} =
       from(a in Config.queryable(config, Address),
-        where: a.id in ^ids and is_nil(a.terminal_seen_at)
+        where: fragment("? = ANY(?)", a.id, ^ids) and is_nil(a.terminal_seen_at)
       )
       |> config.repo.update_all(set: [terminal_seen_at: now])
 
@@ -247,7 +272,9 @@ defmodule StatifierRouter.Addresses do
 
   defp delete(config, ids) do
     {count, _} =
-      config.repo.delete_all(from(a in Config.queryable(config, Address), where: a.id in ^ids))
+      config.repo.delete_all(
+        from(a in Config.queryable(config, Address), where: fragment("? = ANY(?)", a.id, ^ids))
+      )
 
     count
   end
@@ -273,7 +300,8 @@ defmodule StatifierRouter.Addresses do
   defp limit(limit) when is_integer(limit) and limit > 0, do: {:ok, limit}
   defp limit(other), do: {:error, {:invalid_value, :limit, other}}
 
-  defp after_id(nil), do: {:ok, 0}
+  defp after_id(nil), do: {:ok, nil}
   defp after_id(id) when is_integer(id) and id > 0, do: {:ok, id}
+  defp after_id(id) when is_binary(id) and id != "", do: {:ok, id}
   defp after_id(other), do: {:error, {:invalid_value, :after, other}}
 end
