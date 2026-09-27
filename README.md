@@ -227,11 +227,25 @@ defmodule MyApp.OutboxRoute do
 
   @impl true
   def deliver(%{queue: queue}, event, key) do
-    MyApp.Repo.insert!(%MyApp.Outbox{queue: queue, event: event, key: key})
+    MyApp.Repo.insert!(
+      %MyApp.Outbox{
+        queue: queue,
+        key: MyApp.Outbox.key(key),
+        event: :erlang.term_to_binary(event)
+      },
+      on_conflict: :nothing,
+      conflict_target: [:queue, :key]
+    )
+
     :ok
   end
 end
 ```
+
+The outbox row carries the key under a unique index, and `on_conflict:
+:nothing` makes a re-emitted send insert once. The table, the key's
+string form and the worker that drains the rows are in "A transactional
+outbox, end to end" below.
 
 **A route is one-way.** It returns no data into the chart. A sink's result
 - accepted, rejected, an id - comes back as a new inbound event through a
@@ -251,6 +265,180 @@ process-less host calls `handle_effect/3` from its executor, a live
 `Statifier.Session` registers the module itself - and
 `StatifierRouter.TimerQueue` is the durable queue a delayed route send is
 recorded on, keyed by `{scope, send_id}`. The rules are ADR-0005's.
+
+### A transactional outbox, end to end
+
+The paragraphs above say what a route may do where it is called. This is
+the whole path a host builds around it, from the `<send>` to the sink's
+answer. The example is a parcel scanned at the depot, whose execution
+books a pickup with a carrier:
+
+```xml
+<send type="myapp:sink" target="carrier_pickup" id="book_pickup" event="pickup.requested">
+  <param name="parcel_id" expr="parcel_id"/>
+</send>
+```
+
+registered on the same `MyApp.OutboxRoute` as above:
+
+```elixir
+route_adapters: %{"carrier_pickup" => {MyApp.OutboxRoute, %{queue: "pickups"}}}
+```
+
+**The insert, inside the delivery's transaction.** The outbox is a table
+on the host's own repo, and the route's insert is the only thing the
+route does. At the executor seam that insert joins the delivery's
+transaction, so the row commits with the step that emitted the send and
+a delivery that rolls back takes the row with it: nothing is handed off
+for a step that never committed.
+
+```elixir
+create table(:outbox) do
+  add :queue, :string, null: false
+  add :key, :string, null: false
+  add :event, :binary, null: false
+  add :sent_at, :utc_datetime_usec
+  timestamps()
+end
+
+create unique_index(:outbox, [:queue, :key])
+```
+
+```elixir
+defmodule MyApp.Outbox do
+  use Ecto.Schema
+
+  schema "outbox" do
+    field :queue, :string
+    field :key, :string
+    field :event, :binary
+    field :sent_at, :utc_datetime_usec
+    timestamps()
+  end
+
+  # The router's key is a term; the unique index compares strings. Every
+  # component was fixed when the send was executed, so the same send
+  # always writes the same string.
+  def key({scope, position, ordinal}) do
+    [
+      scope,
+      position.send_id,
+      position.macrostep,
+      position.microstep,
+      position.round,
+      position.c_index,
+      position.owner,
+      ordinal
+    ]
+    |> Enum.map_join("/", &part/1)
+  end
+
+  defp part(value) when is_binary(value), do: value
+  defp part(value), do: inspect(value)
+end
+```
+
+The key is `t:StatifierRouter.Route.idempotency_key/0`: the scope half
+(the execution id at the executor seam, the session id on a live
+session), where in the step the send sat, and the ordinal, which is
+`nil` for the `:on_complete` hook. It comes from the router with the
+event; the host writes it out and invents nothing.
+
+**The unique key, with `on_conflict: :nothing`.** Effect execution is
+at-least-once: a re-driven event re-emits the same effects with the same
+deterministic fields, so a repeat of one send writes the same key, and
+the unique index with `on_conflict: :nothing` makes it one row. At the
+executor seam a delivery that rolled back left no row behind, and its
+redrive writes the row again; on a live session nothing rolls back, and
+the index is what makes a repeat insert once.
+
+**The drain, after commit.** A worker of the host's own reads rows that
+have not been sent and makes the external call. It sees only committed
+rows, so it never sends for a step that rolled back, and it runs outside
+any delivery, so the sending execution's lock is not held while the
+carrier answers. This package starts no process; the host schedules the
+drain as it schedules the reapers.
+
+```elixir
+defmodule MyApp.OutboxDrain do
+  import Ecto.Query
+
+  def drain_one(queue) do
+    MyApp.Repo.transaction(fn ->
+      row =
+        from(o in MyApp.Outbox,
+          where: o.queue == ^queue and is_nil(o.sent_at),
+          order_by: o.id,
+          limit: 1,
+          lock: "FOR UPDATE SKIP LOCKED"
+        )
+        |> MyApp.Repo.one()
+
+      if row do
+        event = :erlang.binary_to_term(row.event)
+        :ok = MyApp.Carrier.book_pickup(event.data, idempotency_key: row.key)
+        MyApp.Repo.update!(Ecto.Changeset.change(row, sent_at: DateTime.utc_now()))
+      end
+    end)
+  end
+end
+```
+
+When the job queue lives in the same database, the job row IS the outbox
+row: a route that inserts a job on the host's own repo from the calling
+process joins the delivery's transaction exactly as the insert above
+does, and the job's worker is the drain. The job's arguments carry the
+written-out key, and whatever keeps a second job for one key from being
+inserted plays the part of the unique index. That queue is the host's
+own dependency; this package depends on none.
+
+**The key carried to the sink.** The worker hands the row's key to the
+sink as the sink's own idempotency key. It was fixed when the row was
+written, and the worker never generates one: a worker can succeed at the
+carrier and crash before it marks the row sent, and the retry must be the
+same request under the same key, which a sink that dedupes on its key
+answers without booking a second pickup. A key minted per attempt makes
+every retry new work.
+
+**The live-session shape has no delivery transaction.** On a live
+`Statifier.Session`, `StatifierRouter.SendHandler`'s `perform/2` calls
+the same route with no delivery transaction open. The insert commits on
+its own rather than with the step, and `perform/2` may be called more
+than once for one send, each time with the same key. The same route
+module, the same unique index and the same conflict option serve that
+shape unchanged; there the index is the whole of what makes a repeat
+harmless.
+
+**The answer comes back as an inbound event.** `deliver/3` answers only
+`:ok` or `{:error, reason}`, and the carrier's answer never travels back
+through it. The drain, or the carrier's own webhook, routes the answer as
+a new inbound event through a binding, echoing the author-written send
+id the stored event carries in `sendid`, and deriving the message id from
+the row's key so that routing the same answer twice is a duplicate:
+
+```elixir
+%{id: "pickups_to_parcel", source: "carrier",
+  match: ~s(event.kind == "pickup_booked"), key: "event.parcel_id",
+  document: "parcel_delivery", event: "pickup.booked"}
+```
+
+```elixir
+StatifierRouter.route(config, %{
+  scope: scope,
+  source: "carrier",
+  message_id: "pickup_booked/" <> row.key,
+  data: %{
+    "kind" => "pickup_booked",
+    "parcel_id" => event.data["parcel_id"],
+    "send_id" => event.sendid,
+    "booking_id" => booking_id
+  }
+})
+```
+
+`scope` is the host's own, the scope the parcel's execution is addressed
+under. The chart waits for `pickup.booked` in the state that sent, and
+arms its own timeout as a delayed self-send.
 
 ### A finished execution reaches a sink
 

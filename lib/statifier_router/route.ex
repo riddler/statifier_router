@@ -35,6 +35,13 @@ defmodule StatifierRouter.Route do
   call it can see, and `StatifierRouter.SendHandler`'s own documentation
   says what that refusal does and does not reach.
 
+  The README's "A transactional outbox, end to end" walks the whole path:
+  the insert inside the delivery's transaction, the unique key with
+  `on_conflict: :nothing`, the drain after commit, the key carried to the
+  sink as its own idempotency key, the live-session shape that has no
+  delivery transaction, and the answer that comes back as an inbound
+  event.
+
   ## Idempotency
 
   Neither host shape supplies an idempotency key, so the router composes
