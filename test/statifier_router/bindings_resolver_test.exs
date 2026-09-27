@@ -10,6 +10,7 @@ defmodule StatifierRouter.BindingsResolverTest do
   alias StatifierRouter.Contracts
   alias StatifierRouter.RecordingDelivery
   alias StatifierRouter.Schema.Ledger
+  alias StatifierRouter.Schema.Subscription
   alias StatifierRouter.SendHandler
   alias StatifierRouter.TestRepo
 
@@ -298,6 +299,32 @@ defmodule StatifierRouter.BindingsResolverTest do
       assert_raise ArgumentError, ~r/reserved_binding_id/, fn ->
         StatifierRouter.subscribe(config, "clicks_to_join", {execution_id, "inv_1"})
       end
+    end
+
+    # Under a resolver the binding is looked for in the answer for the
+    # scope of the execution's address row, so that row is read first and
+    # an execution with none is refused as unaddressed even when the
+    # binding is unknown too - and the resolver is never asked (ADR-0001,
+    # the Amendment of 2026-09-25, as subscribe/3's doc states it). With a
+    # static list the order is the other way round (source_invoke_test.exs).
+    #
+    # sabotage: binding_and_address/3's resolver clause checked the binding
+    # in config.bindings before reading the address row -> the refusal
+    # became {:unknown_binding, "no_such_binding"}, red; restored, green.
+    test "an unknown binding for an unaddressed execution is refused as the unaddressed execution" do
+      [impressions | rest] = bindings()
+      answer = fn -> built([Map.put(impressions, :create, :always_new) | rest]) end
+      config = config(self(), bindings_resolver: join_resolver(self(), answer))
+
+      execution_id = joined_execution(config)
+      assert_received {:bindings_for, "7c1e"}
+      assert addresses(config) == []
+
+      assert StatifierRouter.subscribe(config, "no_such_binding", {execution_id, "inv_1"}) ==
+               {:error, {:unaddressed_execution, execution_id}}
+
+      refute_received {:bindings_for, _}
+      assert TestRepo.all(Config.queryable(config, Subscription)) == []
     end
   end
 
