@@ -733,7 +733,7 @@ schema. Code cites are read at `d426c1c`.
 
 ## Amendment (2026-09-26, sr-w58a): a primary key of the host's type
 
-Status: proposed
+Status: accepted
 
 Section 1 leaves the migrations that create the address table to the
 code half, and the sr-cgw Note gives a host three options that place
@@ -825,3 +825,59 @@ malformed options" test in `test/statifier_router/create_modes_test.exs`
 does under the default key; in the same file, "casts a string id as
 Ecto's :id does, as before the primary key option" pins the cast under
 the default key.
+
+## Note (2026-09-27): the sr-w58a Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. The operator's word of 2026-09-27 is to
+accept the records whose code has been published, and the `## Amendment
+(2026-09-26, sr-w58a)` above is one: its `Status:` line moved from
+`proposed` to `accepted`. Its code landed in PR 113 (`b4354b6`, with
+`95d8be9`, which made the id's cast exactly Ecto's `:id`) and shipped in
+statifier_router 0.8.0 (tag `v0.8.0`, at `bcde361`, published on Hex
+2026-09-27). The record's own status on line 3 was already `accepted`
+and was not touched, and the other records of 2026-09-26 above carry
+their own status or none.
+
+Every claim was re-verified by anchor at `bcde361`. `main` at the time of
+the flip is `8f95439`, whose one commit after the tag touches no file
+under `lib/` or `test/`:
+
+- `StatifierRouter.Migrations.up/1` reads `:primary_key` through the
+  private `layout!/1`, `pop_primary_key/1` and `validate_primary_key!/1`:
+  `nil` is the option left out, and anything but a non-empty keyword
+  list, a key other than `:type` and `:default`, a key given twice and a
+  missing `:type` raise `ArgumentError` before any version's `up` runs.
+  `down/1` parses the same options, and no version's `down` reads the
+  key; `StatifierRouter.Config` has no `:primary_key` key.
+- The private `table_opts/1` of `StatifierRouter.Migrations.V01` and of
+  `StatifierRouter.Migrations.V02` answers `[prefix: prefix]`, the
+  options each `create table` passed at `d426c1c`, when the option is
+  left out, and adds `primary_key: [name: :id] ++ primary_key` when it
+  is set. `StatifierRouter.Migrations.V03` is unchanged since `d426c1c`.
+- The private `refuse_package_column_names!/3` adds `:id` to every
+  table's set when the option is set, and leaves the sets as they were
+  when it is not.
+- `StatifierRouter.Schema.Id` has the base type `:id`, loads and dumps
+  an integer or a binary unchanged, and casts through
+  `Ecto.Type.cast(:id, id)`. The `@primary_key` of
+  `StatifierRouter.Schema.Address`, `StatifierRouter.Schema.Dedupe`,
+  `StatifierRouter.Schema.Ledger` and `StatifierRouter.Schema.Subscription`
+  is `{:id, StatifierRouter.Schema.Id, autogenerate: true}`; at `d426c1c`
+  each took Ecto's default key.
+- In `StatifierRouter.Addresses`, the private `examine/3` orders by
+  `a.id`, starts with no `where` when no cursor is given, binds a cursor
+  in `fragment("? > ?", a.id, ^after_id)`, and answers a cursor that
+  fails to encode as `{:invalid_value, :after, after_id}`; the private
+  `stamp/3` and `delete/2` bind the ids in `fragment("? = ANY(?)", a.id,
+  ^ids)`; the private `after_id/1` takes `nil`, a positive integer or a
+  non-empty binary. At `d426c1c` `examine/3` read `a.id > ^after_id` and
+  `after_id/1` answered `nil` as `0` and refused every string.
+- The private `stamp_terminal_seen/3` of `StatifierRouter.Delivery`
+  binds the row's id in `fragment("? = ?", a.id, ^id)`.
+- The tests the Amendment names are present under those names in
+  `test/statifier_router/primary_key_test.exs` and
+  `test/statifier_router/create_modes_test.exs`.
+- The 0.8.0 section of `CHANGELOG.md` names the option,
+  `StatifierRouter.Schema.Id` and the text-keyed sweep, and says that
+  the option left out changes nothing.
