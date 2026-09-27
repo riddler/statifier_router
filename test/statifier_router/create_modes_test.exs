@@ -415,6 +415,27 @@ defmodule StatifierRouter.CreateModesTest do
     end
   end
 
+  describe "a lookup by id under the default key" do
+    # sabotage: made StatifierRouter.Schema.Id.cast/1 pass a string that
+    # spells no integer through -> the changeset was valid and
+    # Repo.get raised DBConnection.EncodeError, red; restored, green.
+    test "casts a string id as Ecto's :id does, as before the primary key option" do
+      config = config(self())
+
+      assert %Ecto.Changeset{valid?: false} =
+               Ecto.Changeset.cast(%Address{}, %{id: "abc"}, [:id])
+
+      assert %Ecto.Changeset{valid?: true, changes: %{id: 42}} =
+               Ecto.Changeset.cast(%Address{}, %{id: "42"}, [:id])
+
+      assert_raise Ecto.Query.CastError, fn ->
+        TestRepo.get(Config.queryable(config, Address), "abc")
+      end
+
+      assert TestRepo.get(Config.queryable(config, Address), "42") == nil
+    end
+  end
+
   # An impression and its click routed through the default :if_absent
   # bindings: the click ends the join chart, so the execution is completed
   # and its address row is not yet stamped.

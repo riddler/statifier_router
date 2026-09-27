@@ -659,10 +659,19 @@ these tables alone. The column is always named `id`.
 - **The schemas read it back as the column holds it.** The schemas in
   `StatifierRouter.Schema` take the id through
   `StatifierRouter.Schema.Id`: an integer from an integer column, a
-  string from a text one. A string that spells an integer, `"42"`, is
-  cast to `42` as Ecto's own `:id` type casts it, so a host whose text
-  ids can be all digits reads such a row back through a query of its
-  own rather than a cast; the package's own reads never cast an id.
+  string from a text one. It casts exactly as Ecto's own `:id` type
+  does, so a text id is never cast: look a row up with a where clause
+  that binds the id uncast, not with `Repo.get/2` or a changeset cast.
+  The package's own reads never cast an id either.
+
+  ```elixir
+  import Ecto.Query
+
+  MyApp.Repo.one(
+    from a in StatifierRouter.Config.queryable(config, StatifierRouter.Schema.Address),
+      where: fragment("? = ?", a.id, ^id)
+  )
+  ```
 - **The address sweep follows the id's order.**
   `StatifierRouter.Addresses.reap/2` pages through the address table in
   the id column's order, and its `next` cursor is an id as the table

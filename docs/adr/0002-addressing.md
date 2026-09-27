@@ -776,9 +776,12 @@ decides its shape.
   integer column and a string from a text one. Its base type is `:id`,
   so Ecto still leaves the column to the database on insert and reads
   it back. It loads and dumps an integer or a string unchanged, and
-  casts an integer, and a string that spells one, as Ecto's own `:id`
-  type does, and any other string to itself, so a cast that worked
-  under the default key still gives the same integer.
+  casts exactly as Ecto's own `:id` type does: an integer, and a
+  string that spells one, to the integer, and any other string
+  refused. A cast that worked or failed under the default key works or
+  fails the same way. A text id is never cast, so a host on a text key
+  looks a row up with a where clause that binds the id uncast, not
+  with `Repo.get/2` or a changeset cast.
 - **The package never casts an id it binds.** The address sweep's
   cursor, the ids it stamps and deletes, and the row a delivery stamps
   terminal are bound as the table or the host handed them over, so a
@@ -819,4 +822,6 @@ schema" and "never casts a text id made of digits alone" route parcel
 scans and sweep the address table under a text key; and "refuses a
 cursor the id column cannot hold" pins the refusal, as the "refuses
 malformed options" test in `test/statifier_router/create_modes_test.exs`
-does under the default key.
+does under the default key; in the same file, "casts a string id as
+Ecto's :id does, as before the primary key option" pins the cast under
+the default key.

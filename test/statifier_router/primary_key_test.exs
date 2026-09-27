@@ -278,7 +278,9 @@ defmodule StatifierRouter.PrimaryKeyTest do
                  from(a in Config.queryable(config, Address), order_by: a.id, select: a.key)
                )
 
-      # The subscription table, through its schema, looked up by its id.
+      # The subscription table, through its schema, looked up by its id
+      # with a where clause that binds it uncast, as a host on a text key
+      # does: a text id is never cast.
       subscription =
         TestRepo.insert!(
           Config.put_meta(config, %Subscription{
@@ -294,9 +296,20 @@ defmodule StatifierRouter.PrimaryKeyTest do
       assert "r" <> _ = subscription.id
 
       assert %Subscription{invoke_id: "inv_1"} =
-               TestRepo.get!(Config.queryable(config, Subscription), subscription.id)
+               TestRepo.one!(
+                 from(r in Config.queryable(config, Subscription),
+                   where: fragment("? = ?", r.id, ^subscription.id)
+                 )
+               )
 
-      assert %Ledger{} = TestRepo.get!(Config.queryable(config, Ledger), hd(ledger(config)).id)
+      ledger_id = hd(ledger(config)).id
+
+      assert %Ledger{id: ^ledger_id} =
+               TestRepo.one!(
+                 from(r in Config.queryable(config, Ledger),
+                   where: fragment("? = ?", r.id, ^ledger_id)
+                 )
+               )
     end
 
     # sabotage: bound delete/2's ids with `a.id in ^ids` again -> the
@@ -359,16 +372,17 @@ defmodule StatifierRouter.PrimaryKeyTest do
   describe "StatifierRouter.Schema.Id" do
     alias StatifierRouter.Schema.Id
 
-    # sabotage: made cast/1 pass every string through -> "42" stayed a
-    # string, red; restored, green. Second mutation: made cast/1 answer
-    # :error for a string that spells no integer -> "r000000000001" was
-    # refused, red; restored, green.
-    test "casts as Ecto's :id does for an integer, and any other string to itself" do
-      assert Id.cast(42) == {:ok, 42}
+    # sabotage: made cast/1 pass a string that spells no integer
+    # through -> "r000000000001" cast to itself, red; restored, green.
+    # Second mutation: made cast/1 pass every string through -> "42"
+    # stayed a string, red; restored, green.
+    test "casts exactly as Ecto's :id does" do
+      for value <- [42, "42", "r000000000001", "", 4.2, nil] do
+        assert Id.cast(value) == Ecto.Type.cast(:id, value), inspect(value)
+      end
+
       assert Id.cast("42") == {:ok, 42}
-      assert Id.cast("r000000000001") == {:ok, "r000000000001"}
-      assert Id.cast(4.2) == :error
-      assert Id.cast(nil) == :error
+      assert Id.cast("r000000000001") == :error
     end
 
     # sabotage: made load/1 accept integers only -> the text id was
