@@ -552,6 +552,22 @@ ordinal position 2 on all four. The options are the migration's, not
 not take them. `down/1` accepts the same list and ignores it, so one
 list serves both directions.
 
+A name a table the call creates already declares is refused: a
+`:leading_columns` entry named like any column
+`StatifierRouter.Migrations.V01` lists for the address, dedupe or
+routing ledger table, or `StatifierRouter.Migrations.V02` lists for the
+subscription table, raises `ArgumentError` naming the column and the
+tables that declare it, before any DDL runs, where Postgres would
+otherwise refuse the `CREATE TABLE` with a duplicate column. A name
+only a table the call does not create declares is a host column like
+any other: `up(from: 2)` may lead with `expires_at`, which only V01's
+dedupe table has, and `up(version: 1)` with `invoke_id`, which only
+V02's subscription table has. Without `:primary_key`, the primary key
+is the repo's `:migration_primary_key` and is not checked: a repo that
+sets it to `false` may lead with an `id` of its own. With `:primary_key`
+set (below), the package declares `id` itself, and a leading `id`
+raises like any other package column.
+
 The option only places the column:
 
 - **It applies to a fresh create.** The columns exist only in tables a
