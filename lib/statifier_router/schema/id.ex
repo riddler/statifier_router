@@ -13,14 +13,14 @@ defmodule StatifierRouter.Schema.Id do
   itself and never compares one to anything but another id of the same
   table.
 
-  Casting keeps what Ecto's own `:id` type does for an integer and for a
-  string that spells one: `"42"` casts to `42`. Any other string casts to
-  itself, so a host can look a row of a text-keyed table up by its id.
-  An id made of digits alone is therefore read as an integer when it is
-  cast, and a host whose text ids can be all digits reads such a row
-  back through a query of its own rather than through a cast. The
-  package's own reads never cast an id: they bind the values the table
-  handed back.
+  Casting is exactly Ecto's own `:id` type: an integer casts to itself,
+  a string that spells one casts to that integer (`"42"` to `42`), and
+  any other string is refused, so a cast that worked or failed under
+  the default key works or fails the same way. A text id is therefore
+  never cast: a host on a text key looks a row up with a where clause
+  that binds the id uncast, `where: fragment("? = ?", a.id, ^id)`,
+  rather than with `Repo.get/2` or a changeset cast. The package's own
+  reads bind ids that way too: they never cast an id.
   """
 
   use Ecto.Type
@@ -35,16 +35,7 @@ defmodule StatifierRouter.Schema.Id do
   def type, do: :id
 
   @impl Ecto.Type
-  def cast(id) when is_integer(id), do: {:ok, id}
-
-  def cast(id) when is_binary(id) do
-    case Ecto.Type.cast(:id, id) do
-      {:ok, integer} -> {:ok, integer}
-      _not_an_integer -> {:ok, id}
-    end
-  end
-
-  def cast(_other), do: :error
+  def cast(id), do: Ecto.Type.cast(:id, id)
 
   @impl Ecto.Type
   def load(id) when is_integer(id) or is_binary(id), do: {:ok, id}
