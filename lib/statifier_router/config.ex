@@ -191,8 +191,10 @@ defmodule StatifierRouter.Config do
   `StatifierRouter.BindingsResolver` says what each caller does with a
   refusal. The publish-time checks of `StatifierRouter.Contracts.check/3`
   and the reaper `StatifierRouter.Addresses.reap/3` read no scope, so they
-  do not call it: the first reads the configuration's `bindings: []`, and
-  the second has always taken the host's bindings as its own argument.
+  do not call it: the first reads the configuration's `bindings: []` and
+  reports the bindings unchecked with the entry
+  `t:StatifierRouter.Contracts.bindings_unchecked/0`, and the second has
+  always taken the host's bindings as its own argument.
 
   ## What the checks here do and do not catch
 
