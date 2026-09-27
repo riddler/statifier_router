@@ -705,3 +705,28 @@ What a delivery to an execution a migration parked answers is
 ADR-0004's, and its Note of 2026-09-26 says it. No test in this
 repository exercises a migrated or a parked execution yet; this Note is
 read from the code.
+
+## Note (2026-09-26): the address table's execution_id index
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Section 1 decides one index, the unique one
+on `(scope, document, key)`, and says that no index beyond it is decided
+here. The code creates one more on the address table, and this Note names
+it so that the next reader does not take section 1's list for the whole
+schema. Code cites are read at `d426c1c`.
+
+- **The index is the code's.** `StatifierRouter.Migrations.V01`'s `up/1`
+  creates, beside the unique index, a non-unique index on
+  `execution_id` named `<table>_execution_id_index`, where `<table>` is
+  the address table's name under the host's table prefix. Its moduledoc
+  gives the reason: the rows naming one execution are found without a
+  scan.
+- **This record does not decide it.** Section 1's closing sentence
+  stands: the index sits with the migrations and the table prefix, which
+  section 1 leaves to the code half. The Note of 2026-09-20 on the first
+  of section 8's future readers already calls it the index "the code
+  half added"; this Note adds only its name and where it is created.
+- **A test pins it.** "names every index on every version's tables and
+  its columns", in `test/statifier_router/migrations_test.exs`, reads the
+  address table's indexes back from the database and expects this one
+  on `execution_id` beside the primary key and the unique index.
