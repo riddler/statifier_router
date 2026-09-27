@@ -42,8 +42,10 @@ defmodule StatifierRouter.Migrations.V02 do
   version creates it, on the same terms as V01's tables: the
   `:leading_columns` immediately after `id`, `inserted_at` following them
   under `timestamps_position: :leading`, and each text column
-  `:column_collations` names declared with its collation. A table V01
-  already created is not touched.
+  `:column_collations` names declared with its collation. Its `id` is the
+  host repo's implicit primary key, as V01's is, or under the
+  `:primary_key` option the type and default that option names. A table
+  V01 already created is not touched.
 
   A host that has already run V01 reaches this version with
   `StatifierRouter.Migrations.up(from: 2)`: `from:` names the first
@@ -60,7 +62,8 @@ defmodule StatifierRouter.Migrations.V02 do
           required(:prefix) => String.t() | nil,
           optional(:leading_columns) => [{atom(), {term(), keyword()}}],
           optional(:timestamps_position) => :trailing | :leading,
-          optional(:column_collations) => [{atom(), String.t()}]
+          optional(:column_collations) => [{atom(), String.t()}],
+          optional(:primary_key) => keyword() | nil
         }
 
   @doc "Creates the V02 table and its index."
@@ -72,7 +75,7 @@ defmodule StatifierRouter.Migrations.V02 do
 
     subscriptions = Config.table_name(table_prefix, :subscriptions)
 
-    create table(subscriptions, prefix: prefix) do
+    create table(subscriptions, table_opts(storage)) do
       add_leading_columns(storage)
       add_inserted_at(storage, :leading)
       add(:binding_id, :text, collated(storage, :binding_id, null: false))
@@ -91,6 +94,17 @@ defmodule StatifierRouter.Migrations.V02 do
     )
 
     :ok
+  end
+
+  # The table/2 opts: the Postgres schema, and the host's primary key when
+  # :primary_key names one. Without it they are the opts this version
+  # passed before the option existed, and the repo's :migration_primary_key
+  # decides the key, as it always has.
+  defp table_opts(%{prefix: prefix} = storage) do
+    case Map.get(storage, :primary_key) do
+      nil -> [prefix: prefix]
+      primary_key -> [prefix: prefix, primary_key: [name: :id] ++ primary_key]
+    end
   end
 
   # The same three helpers as V01's, kept per version as

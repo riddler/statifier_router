@@ -652,10 +652,11 @@ defmodule StatifierRouter.Delivery do
   end
 
   # Stamped only while empty, so the horizon counts from the first
-  # sighting (ADR-0002, section 5).
+  # sighting (ADR-0002, section 5). The id is bound as the table handed it
+  # back, never cast: a text id made of digits alone stays a string.
   defp stamp_terminal_seen(config, %Address{id: id}, now) do
     from(a in Config.queryable(config, Address),
-      where: a.id == ^id and is_nil(a.terminal_seen_at)
+      where: fragment("? = ?", a.id, ^id) and is_nil(a.terminal_seen_at)
     )
     |> config.repo.update_all(set: [terminal_seen_at: now])
   end
