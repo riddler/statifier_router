@@ -10,6 +10,20 @@ fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.8.0] 2026-09-27
+
+Feature release: a host can build the router's tables with a primary key of its own, and the subscription table's unique index gets a name that fits in a Postgres identifier under the default table prefix. `StatifierRouter.Migrations.up/1` takes `:primary_key`, which builds the `id` of every table a version creates with the host's key type and database default; the schemas read the id back through the new `StatifierRouter.Schema.Id`, and `StatifierRouter.Addresses.reap/2` sweeps a text-keyed table. The README gains a guide, "A transactional outbox, end to end".
+
+Upgrading: there is one more migration version, V03, which renames the subscription table's unique index to `<table>_invocation_index`. A host whose migration calls `StatifierRouter.Migrations.up/1` with no `version:` now runs V03 from it on a fresh database; a host that has already run V02 adds one migration calling `StatifierRouter.Migrations.up(from: 3)`. A host that matches the old truncated index name as a unique violation's constraint matches `<table>_invocation_index` once V03 has run. Left out, `:primary_key` changes nothing, and no dependency floor moves.
+
+### Added
+
+- `StatifierRouter.Migrations.up/1` takes a `:primary_key` option, `[type: ..., default: ...]`, that builds the `id` of every table a version creates with the host's own key type and database default, a text id for instance; the schemas read the id back as an integer or a string through the new `StatifierRouter.Schema.Id`, and `StatifierRouter.Addresses.reap/2` sweeps a text-keyed table, answering a string `next` cursor it takes back as `after:`. Left out, every version builds exactly the tables it built before.
+
+### Fixed
+
+- The subscription table's unique index, which V02 named past the 63 bytes Postgres keeps of an identifier so that Postgres created it under a truncated name, is renamed to `<table>_invocation_index` by a new migration version, V03; a host that has already run V02 adds one migration calling `StatifierRouter.Migrations.up(from: 3)`, and `StatifierRouter.Migrations` now says what a long `:table_prefix` does to index names; a host that matches the old truncated name as the constraint of a unique violation (an `Ecto.ConstraintError`, or a `unique_constraint/3` naming it) matches `<table>_invocation_index` instead once V03 has run.
+
 ## [0.7.0] 2026-09-26
 
 Feature release: a host that serves send types of its own can declare them, and the contract check says when it did not check a resolver's bindings. `StatifierRouter.Config.new/1` takes `:send_handlers`, merged with `:send_type` into the one `send_types:` snapshot every delivery carries, so `StatifierRouter.Contracts.check/3` stops reporting the host's own types as unsupported. Two fixes: `StatifierRouter.Migrations.up/1` refuses, before any DDL runs, a `:leading_columns` name that a table the call creates already declares, and `StatifierRouter.Broadway`'s partitioner keeps the producer up on a malformed `:bindings_resolver` answer.
