@@ -204,6 +204,38 @@ defmodule StatifierRouter.HostColumnsTest do
     List.flatten(rows)
   end
 
+  # Every column name the tables declare, read back from the catalog, to
+  # the tables that declare it (sorted, without the table prefix). `id`
+  # is the repo's primary key unless `with_id?`.
+  defp declared_in(tables, with_id?) do
+    for table <- Enum.sort(tables),
+        {column, _collation} <- columns(table),
+        with_id? or column != "id",
+        reduce: %{} do
+      acc ->
+        short = String.replace_prefix(table, "hc_router_", "")
+        Map.update(acc, column, [short], &(&1 ++ [short]))
+    end
+  end
+
+  # The tables the refusal names for `name`, from its whole message.
+  defp refused_in(message, name) do
+    prefix = "the :leading_columns option names a column the package declares: "
+    suffix = "; a host column needs a name no table this call creates declares"
+
+    assert String.starts_with?(message, prefix) and String.ends_with?(message, suffix),
+           message
+
+    listed = String.slice(message, String.length(prefix)..-(String.length(suffix) + 1)//1)
+    head = "#{inspect(name)} (in "
+
+    assert String.starts_with?(listed, head) and String.ends_with?(listed, ")"), message
+
+    listed
+    |> String.slice(String.length(head)..-2//1)
+    |> String.split(", ")
+  end
+
   @laid_out %{
     "hc_router_addresses" => [
       {"id", nil},
@@ -347,30 +379,47 @@ defmodule StatifierRouter.HostColumnsTest do
   end
 
   describe "a leading column named like a package column" do
-    # The refusal's column sets pinned to the DDL: every column the plain
-    # migrations create but the repo's primary key, read back from the
-    # catalog, is refused under the span that creates its table.
+    # The refusal's column sets pinned to the DDL, table by table: the
+    # map from each column name to the tables that declare it is built
+    # from the catalog after the plain migrations, over the tables each
+    # span creates, and compared whole with the tables the refusal names
+    # for every one of those names. The repo's primary key is left out
+    # of the map unless the call sets :primary_key, under which the
+    # package declares `id` in every table it creates.
     # sabotage: dropped :terminal_seen_at from @package_columns' address
     # entry -> red here on terminal_seen_at, which then reached the DDL.
+    # sabotage: dropped :key from @package_columns' address entry -> red
+    # here, the refusal named :key in routing_ledger alone.
+    # sabotage: declared :expires_at in @package_columns' routing_ledger
+    # entry as well -> red here, the refusal named :expires_at in dedupe
+    # and routing_ledger.
     test "is refused for every column the tables the call creates declare" do
       :ok = Migrator.up(TestRepo, @v01_version, MigrateHcV01Plain, log: false)
       :ok = Migrator.up(TestRepo, @v02_plain_version, MigrateHcV02Plain, log: false)
 
-      for {table, span} <- [
-            {"hc_router_addresses", [version: 1]},
-            {"hc_router_dedupe", [version: 1]},
-            {"hc_router_routing_ledger", [version: 1]},
-            {"hc_router_subscriptions", [from: 2]}
-          ],
-          {column, _collation} <- columns(table),
-          column != "id" do
-        name = String.to_existing_atom(column)
+      v01 = ["hc_router_addresses", "hc_router_dedupe", "hc_router_routing_ledger"]
 
-        assert_raise ArgumentError,
-                     ~r/names a column the package declares: #{inspect(name)} /,
-                     fn ->
-                       Migrations.up(span ++ [leading_columns: [{name, {:text, []}}]])
-                     end
+      for {span, tables} <- [
+            {[version: 1], v01},
+            {[from: 2], ["hc_router_subscriptions"]},
+            {[], @tables}
+          ],
+          primary_key <- [[], [primary_key: [type: :text]]] do
+        expected = declared_in(tables, primary_key != [])
+
+        refused =
+          Map.new(expected, fn {column, _tables} ->
+            name = String.to_existing_atom(column)
+
+            error =
+              assert_raise ArgumentError, fn ->
+                Migrations.up(span ++ primary_key ++ [leading_columns: [{name, {:text, []}}]])
+              end
+
+            {column, refused_in(error.message, name)}
+          end)
+
+        assert refused == expected, inspect(span ++ primary_key)
       end
     end
 
