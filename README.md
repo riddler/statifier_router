@@ -679,22 +679,6 @@ these tables alone. The column is always named `id`.
 With the option set, the package declares `id` itself, so a
 `:leading_columns` entry named `id` raises `ArgumentError`.
 
-A
-sub!(s, <<'A', <<'B', "readme upgrade")
-with the same `:table_prefix` and `:prefix` its earlier migrations pass.
-Nothing is rebuilt, and on a database where the index already carries its
-new name the migration does nothing. `StatifierRouter.Migrations` says what
-a long `:table_prefix` does to the index names.
-A
-with the same `:table_prefix` and `:prefix` its earlier migrations pass.
-Nothing is rebuilt, and on a database where the index already carries its
-new name the migration does nothing. A first migration that calls `up/1`
-with no `version:`, as the examples above do, runs every version this
-package knows, so on a fresh database it runs V03 too; the migration above
-is still needed for every database that ran the first one before V03
-existed, and on a fresh one it finds the index already renamed.
-`StatifierRouter.Migrations` says what a long `:table_prefix` does to the
-index names.
 ## Upgrading the tables
 
 A package release that adds a migration version needs one more migration
@@ -714,8 +698,13 @@ end
 
 with the same `:table_prefix` and `:prefix` its earlier migrations pass.
 Nothing is rebuilt, and on a database where the index already carries its
-new name the migration does nothing. `StatifierRouter.Migrations` says what
-a long `:table_prefix` does to the index names.
+new name the migration does nothing. A first migration that calls `up/1`
+with no `version:`, as the examples above do, runs every version this
+package knows, so on a fresh database it runs V03 too; the migration above
+is still needed for every database that ran the first one before V03
+existed, and on a fresh one it finds the index already renamed.
+`StatifierRouter.Migrations` says what a long `:table_prefix` does to the
+index names.
 
 ## A host that wraps the engine
 
