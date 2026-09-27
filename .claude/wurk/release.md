@@ -101,11 +101,17 @@ Exactly these, and a release commit that touches anything else is wrong:
 ## What a release here still is not
 
 The skill does not tag, push, open a request or publish, and this extension
-does not either. In this repo those are the operator's, in every campaign and
-outside every campaign: `CLAUDE.md`'s authority table says *a release (tag,
-`mix hex.publish`, GitHub release)* - trigger **never** - and allows a version
-bump only on an operator-authorized release bead's branch, inside a campaign
-carrying the operator's explicit consent. The bump plus step B is release
-*prep*, nothing more. `changelog.d/README.md` ends its "At release" paragraph
-with "and tag it", which is addressed to the operator, who does tag; it is not
-an instruction any agent may carry out.
+does not either. `CLAUDE.md`'s authority table allows a version bump only on
+an operator-authorized release bead's branch, inside a campaign carrying the
+operator's explicit consent, and the bump plus step B is release *prep*,
+nothing more. What follows the prep is split by that table's tagging and
+release rows and its "Release preps" paragraph. Once the prep is merged to
+`origin/main`, the conductor or the session that owns the release bead tags
+that merged commit with the new version and pushes the tag; a tag before the
+bump is on `origin/main`, or naming any other version or commit, is not
+allowed. Publishing - `mix hex.publish`, a GitHub release, a docs republish
+included - is the operator's one release step, trigger **never**, in every
+campaign, and no consent or relay delegates it. `changelog.d/README.md` ends
+its "At release" paragraph with "and tag it": that is the tag the conductor
+or the release bead's session makes on the merged prep, and it never extends
+to the publish.
