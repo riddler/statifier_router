@@ -404,7 +404,8 @@ defmodule StatifierRouter.CreateModesTest do
 
       # A string cursor the default bigserial id cannot hold is refused as
       # before the primary key option existed, and the host's transaction
-      # carries on: the refusal is raised before the query is sent.
+      # carries on: the query is prepared, and the refusal is raised
+      # before it is executed.
       assert Addresses.reap(config, [], after: "r1") == {:error, {:invalid_value, :after, "r1"}}
       assert Addresses.reap(config, [], after: "5") == {:error, {:invalid_value, :after, "5"}}
 
