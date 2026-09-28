@@ -88,6 +88,10 @@ defmodule StatifierRouter.BootstrapMigrations do
     def down, do: Migrations.down(for: StatifierRouter.TestPersistence, from: 8, version: 8)
   end
 
+  @doc "The version of every bootstrap migration, in the order applied."
+  @spec versions() :: [pos_integer()]
+  def versions, do: Enum.map(@migrations, &elem(&1, 0))
+
   @doc "Applies every bootstrap migration, tolerating `:already_up`."
   @spec up(module()) :: :ok
   def up(repo) do

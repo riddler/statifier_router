@@ -62,10 +62,15 @@ defmodule StatifierRouter.MigrationsTest do
     def down, do: StatifierRouter.Migrations.down(@opts)
   end
 
-  @version 20_260_919_000_201
-  @v01_version 20_260_922_000_202
-  @v02_version 20_260_922_000_203
-  @v03_version 20_260_926_000_204
+  # Ecto warns when it runs a migration whose version sorts below one
+  # already run, and the suite-wide bootstrap's versions are already run
+  # when this module starts. Dated far past any version the bootstrap will
+  # take, so every migration here sorts above them; the first test below
+  # holds that as the bootstrap gains versions.
+  @version 29_990_101_000_201
+  @v01_version 29_990_101_000_202
+  @v02_version 29_990_101_000_203
+  @v03_version 29_990_101_000_204
   @schema "kx_router_schema"
   @v01_tables ["kx_router_addresses", "kx_router_dedupe", "kx_router_routing_ledger"]
   @v02_tables ["kx_router_subscriptions"]
@@ -197,6 +202,15 @@ defmodule StatifierRouter.MigrationsTest do
   end
 
   defp unique_suffix, do: Integer.to_string(System.unique_integer([:positive]))
+
+  # sabotage: @version set back to 20_260_919_000_201 -> red on the
+  # comparison, and the run printed Ecto's out-of-order warning again;
+  # restored, green.
+  test "every migration here sorts above every bootstrap migration" do
+    ours = [@version, @v01_version, @v02_version, @v03_version]
+
+    assert Enum.min(ours) > Enum.max(StatifierRouter.BootstrapMigrations.versions())
+  end
 
   describe "every version through a host's delegating migration" do
     # sabotage: V01 named the ledger table "<prefix>ledger" -> red on the
