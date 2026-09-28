@@ -984,3 +984,35 @@ tag touches `StatifierRouter.Contracts`.
 
 The paragraph read at `89bbd28` records the check before the Amendment,
 and it is the Amendment itself that changes what it describes.
+
+## Note (2026-09-27, sr-infp): the anchor of the sr-9fud Amendment and of the Note accepting it is `check/3` and `t:StatifierRouter.Contracts.bindings_unchecked/0`
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It restates where two sections above point for
+their code.
+
+The `### The code` section of the `## Amendment (2026-09-26, sr-9fud)`
+above names `check/3` and its private `bindings_unchecked/1` as the code,
+and the `## Note (2026-09-26): the sr-9fud Amendment accepted` above
+verifies decisions 1, 4 and 5 against the same private function. A
+private function can be renamed or folded away with no change a host
+could see, so it is not an anchor this record keeps. The anchor is the
+public surface alone:
+
+- `StatifierRouter.Contracts.check/3`, whose `@doc` says that under a
+  `:bindings_resolver` the entry `%{reason: :bindings_resolver,
+  location: nil}` comes first under `:unchecked`, and that it is absent
+  without one.
+- The public type `t:StatifierRouter.Contracts.bindings_unchecked/0`,
+  which spells that entry and is the first member of the `:unchecked`
+  element type in `t:StatifierRouter.Contracts.check_report/0`.
+
+ADR-0001's last Note, of 2026-09-26, makes the same restatement for
+that record's sr-9fud Note, and the sr-8jr7 Note above already
+names these two anchors for decision 3's exception. The tests are the
+describe blocks the Amendment names, in
+`test/statifier_router/contracts_test.exs` and
+`test/statifier_router/bindings_resolver_test.exs`.
+
+Every claim was verified by anchor at `769e9bc`, `main` when this Note
+was written. No line above this Note was edited.
