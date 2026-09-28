@@ -77,6 +77,16 @@ defmodule StatifierRouter.Addresses do
   is total and that a row keeps its id, which a primary key guarantees;
   a row inserted during a sweep behind its cursor waits for the next one.
 
+  A cursor the id column cannot hold (a string under the default
+  `bigserial` key, an integer under a text key) is refused as
+  `{:invalid_value, :after, value}` only once the repo has prepared the
+  query and failed to bind it, so the repo's query telemetry event
+  (`[..., :query]` under the repo's telemetry prefix) fires for that
+  call with an error result; releases before 0.8.0 refused a string
+  cursor before any query and emitted no event for it. A cursor that is
+  neither a positive integer nor a non-empty string is refused before
+  the repo is called, and no query event fires for it.
+
   An `{:error, reason}` from `fetch_execution/2` for any examined row ends
   the call before it writes anything, and is returned. The one exception is
   `:execution_not_found`, which the rules above make a deletion rather than
@@ -180,8 +190,8 @@ defmodule StatifierRouter.Addresses do
   # From the start of the table, or from the row after the cursor. Every
   # id here is bound as the host or the table handed it over, never cast
   # (a text id made of digits alone stays a string), and a cursor the id
-  # column cannot hold fails to encode before the query is sent, which is
-  # the malformed option it is.
+  # column cannot hold fails to encode when the prepared statement is
+  # bound, before it is executed, which is the malformed option it is.
   defp examine(config, nil, limit) do
     {:ok,
      config.repo.all(from(a in Config.queryable(config, Address), order_by: a.id, limit: ^limit))}

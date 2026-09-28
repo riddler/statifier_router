@@ -367,6 +367,28 @@ defmodule StatifierRouter.PrimaryKeyTest do
 
       assert Addresses.reap(config, [], after: 5) == {:error, {:invalid_value, :after, 5}}
     end
+
+    # sabotage: dropped examine/3's nil clause, so `after: nil` fell
+    # through to the `> ^after_id` clause -> no id is greater than NULL,
+    # the call read no rows and answered next: nil, red; restored, green.
+    test "reap/2 with after: nil reads from the first row" do
+      :ok = Migrator.up(TestRepo, @text_version, MigrateText, log: false)
+      config = routing_config()
+
+      for {message_id, parcel_id} <- [{"depot/3/1", "pcl_7001"}, {"depot/3/2", "pcl_7002"}] do
+        {:ok, [{:created_and_delivered, _, _}, _]} =
+          StatifierRouter.route(config, scan(message_id, "loaded", parcel_id), now: @now)
+      end
+
+      assert [%Address{id: first} | _] =
+               TestRepo.all(from(a in Config.queryable(config, Address), order_by: a.id))
+
+      assert Addresses.reap(config, [], now: @now, limit: 1, after: nil) ==
+               {:ok, %{stamped: 0, deleted: 0, next: first}}
+
+      assert Addresses.reap(config, [], now: @now, limit: 1) ==
+               {:ok, %{stamped: 0, deleted: 0, next: first}}
+    end
   end
 
   describe "StatifierRouter.Schema.Id" do
