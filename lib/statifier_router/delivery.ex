@@ -152,6 +152,13 @@ defmodule StatifierRouter.Delivery do
   nothing. A route that calls
   `StatifierPersistence.Executions.step/5` directly reaches past this
   door; the record forbids that call and this package has no guard for it.
+  statifier_persistence 0.21.0 and later refuse it themselves: every door
+  of `StatifierPersistence.Executions` that takes an execution id answers
+  `{:error, {:reentrant_step, execution_id}}` when called for an
+  execution whose executor is running in the calling process, as the
+  sending execution's is here, before it reads or writes anything (that
+  package's ADR-0004 Amendment of 2026-09-26). On an earlier
+  statifier_persistence nothing refuses the call.
 
   The scope a delivery runs under is also set for the length of the call,
   because the executor seam's context carries an execution id and a

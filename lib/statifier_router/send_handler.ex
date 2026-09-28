@@ -149,9 +149,13 @@ defmodule StatifierRouter.SendHandler do
   as its Amendment of 2026-09-23 has it). On the send-processor shape
   nothing is marked, because no delivery transaction is open there. That
   refusal reaches this package's own door only. A route that
-  calls `StatifierPersistence.Executions.step/5` directly reaches past it,
-  and no reentrancy guard exists there; the record forbids that call, and
-  this package cannot enforce it.
+  calls `StatifierPersistence.Executions.step/5` directly reaches past it.
+  The record forbids that call, and this package cannot enforce it;
+  statifier_persistence 0.21.0 and later refuse it themselves, answering
+  `{:error, {:reentrant_step, execution_id}}` from every door of
+  `StatifierPersistence.Executions` that takes the sending execution's id
+  (that package's ADR-0004 Amendment of 2026-09-26). On an earlier
+  statifier_persistence no reentrancy guard exists there.
 
   ## The execution target
 

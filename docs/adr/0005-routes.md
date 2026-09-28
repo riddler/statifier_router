@@ -1273,3 +1273,39 @@ touches `StatifierRouter.Config`, `StatifierRouter.Delivery` or
 
 The paragraph read at `1e72588` records the configuration before the
 Amendment, and it is the Amendment itself that changes what it describes.
+
+## Note (2026-09-27, sr-cpf7): statifier_persistence now refuses a door called from inside its own executor
+
+A Note, not an amendment: it decides nothing and changes no decision or
+amendment above it. Decision 5 says "No reentrancy guard exists today" for
+a route that calls a door of the sending execution from inside
+`execute/2`. That was true of statifier_persistence when this record was
+written, and it is no longer true of that package's current releases.
+
+- statifier_persistence 0.21.0 (tag `v0.21.0`, at `78aedd7`, published on
+  Hex 2026-09-27) refuses the call. Every public door of
+  `StatifierPersistence.Executions` that takes an execution id answers
+  `{:error, {:reentrant_step, execution_id}}` when it is called for an
+  execution whose executor is running in the calling process, before it
+  reads or writes anything: the private `not_in_step/1` in
+  `lib/statifier_persistence/executions.ex`, read at `78aedd7`. The rule
+  is that package's ADR-0004 Amendment of 2026-09-26, accepted there by
+  its Note of 2026-09-27, and its `CHANGELOG.md` section 0.21.0 lists it
+  under Added.
+- The refusal holds for a host on statifier_persistence 0.21.0 or later
+  only. This package requires `~> 0.18` (`mix.exs`, the
+  `:statifier_persistence` dependency, read at `800c8c9`), and no floor
+  moves with this Note; on an earlier release nothing refuses the call.
+- This package's own refusal is unchanged: `StatifierRouter.Delivery.deliver/4`
+  still answers `{:error, {:reentrant_route, execution_id}}` while
+  `StatifierRouter.SendHandler.sending_execution/0` names an execution
+  (the `sending_execution/0` case in `deliver/4`, read at `800c8c9`).
+- The rule decision 5 states stands: a route called at the executor seam
+  must never call back into the sending execution. The persistence
+  refusal turns a lost update into an answered error; it does not make the
+  call serve anything.
+- The moduledocs of `StatifierRouter.Delivery` ("What a route may not do
+  while a delivery runs") and `StatifierRouter.SendHandler` ("What a route
+  may not do from the executor seam") said the same thing as decision 5
+  and now name the refusal and its version, in the change that adds this
+  Note.
