@@ -331,9 +331,7 @@ defmodule StatifierRouter.Migrations do
   # creates no table and ignores the layout options, and a name only a
   # table outside the span declares is a host column like any other.
   defp refuse_package_column_names!(leading_columns, span, primary_key) do
-    tables =
-      for {table, columns} <- Enum.flat_map(span, &Map.fetch!(@package_columns, &1)),
-          do: {table, if(primary_key, do: [:id | columns], else: columns)}
+    tables = package_columns(span, primary_key)
 
     collisions =
       for {name, _column} <- leading_columns,
@@ -349,6 +347,17 @@ defmodule StatifierRouter.Migrations do
     end
 
     :ok
+  end
+
+  # The columns the refusal consults: each table the span creates, in the
+  # span's order, with the names @package_columns declares for it, and
+  # `id` first when the call sets :primary_key. Public only so the host
+  # columns test can compare the whole name set with the catalog's.
+  @doc false
+  @spec package_columns(Enumerable.t(), term()) :: [{atom(), [atom()]}]
+  def package_columns(span, primary_key) do
+    for {table, columns} <- Enum.flat_map(span, &Map.fetch!(@package_columns, &1)),
+        do: {table, if(primary_key, do: [:id | columns], else: columns)}
   end
 
   # The primary key option, validated and popped with the layout options.
