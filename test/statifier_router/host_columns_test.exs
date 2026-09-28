@@ -423,6 +423,49 @@ defmodule StatifierRouter.HostColumnsTest do
       end
     end
 
+    # The other direction: every name the refusal consults is one the
+    # catalog has in a table the span creates, so the package's list
+    # carries no name the DDL never declares. The refusal reads its sets
+    # through Migrations.package_columns/2; each set is compared with the
+    # catalog's, names first and then name to tables.
+    # sabotage: added :shelf_mark to @package_columns' address entry ->
+    # red here, the refusal's name set had shelf_mark and the catalog's
+    # did not.
+    test "names only columns the tables the call creates declare" do
+      :ok = Migrator.up(TestRepo, @v01_version, MigrateHcV01Plain, log: false)
+      :ok = Migrator.up(TestRepo, @v02_plain_version, MigrateHcV02Plain, log: false)
+
+      v01 = ["hc_router_addresses", "hc_router_dedupe", "hc_router_routing_ledger"]
+
+      # The spans of up(version: 1), up(from: 2) and up/1.
+      for {versions, tables} <- [
+            {1..1//1, v01},
+            {2..3//1, ["hc_router_subscriptions"]},
+            {1..3//1, @tables}
+          ],
+          primary_key? <- [false, true] do
+        expected = declared_in(tables, primary_key?)
+
+        refused =
+          for {table, columns} <- Migrations.package_columns(versions, primary_key?),
+              column <- columns,
+              reduce: %{} do
+            acc ->
+              Map.update(
+                acc,
+                Atom.to_string(column),
+                [to_string(table)],
+                &(&1 ++ [to_string(table)])
+              )
+          end
+
+        label = inspect({versions, primary_key: primary_key?})
+
+        assert MapSet.new(Map.keys(refused)) == MapSet.new(Map.keys(expected)), label
+        assert refused == expected, label
+      end
+    end
+
     # sabotage: made refuse_package_column_names!/2 check every version's
     # tables rather than the span's -> red here, invoke_id refused under
     # version: 1.
