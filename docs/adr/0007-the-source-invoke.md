@@ -339,3 +339,39 @@ that Amendment has to name first is the **outcome** an unsubscribed
 delivery gets - what `StatifierRouter.route/3` returns for an event whose
 execution has no live subscription. Nothing in this record fixes that
 outcome, so nothing here may be read as reserving it.
+
+## Note (2026-09-27, sr-lyym): V03 renames the subscription index
+
+Section 6 says the subscription table's migration is "the next router
+migration version; no other bead adds one", and the Note of 2026-09-22
+(sr-q8p) says that one version is `StatifierRouter.Migrations.V02`. A
+later version now touches that table: `StatifierRouter.Migrations.V03`,
+first shipped in statifier_router 0.8.0, renames the unique index V02
+builds on it. This Note records that. It decides nothing, and no line
+above it was edited.
+
+What V03 does, read at `4f76546`: `StatifierRouter.Migrations.V03.up/1`
+renames the index V02 names `<table>_execution_id_binding_id_invoke_id_index`
+(70 bytes under the default table prefix, which Postgres keeps as its
+first 63) to `<table>_invocation_index`, with `ALTER INDEX IF EXISTS`,
+and `down/1` renames it back. It creates no table and no column, and
+nothing is rebuilt: the index's columns `(execution_id, binding_id,
+invoke_id)`, their order and its uniqueness are the ones
+`StatifierRouter.Migrations.V02.up/1` creates. V02's DDL is left as it
+shipped.
+
+Nothing section 6 fixes changes:
+
+- **The table is new, and it is V02's.** The subscription table and
+  every one of its columns are still created by
+  `StatifierRouter.Migrations.V02.up/1` alone; V03 adds no table and no
+  column to it, so the table still has the one migration section 6 names.
+- **What the row distinguishes.** Two invocations of the same binding in
+  one execution are still told apart by the unique index on
+  `(execution_id, binding_id, invoke_id)`; only its name differs.
+  `StatifierRouter.subscribe/3` names that triple by its columns in its
+  `conflict_target`, not by the index's name.
+- **Where the key comes from.** V03 touches neither the address table nor
+  V01's `<table>_execution_id_index`
+  (`StatifierRouter.Migrations.V01`), the index section 6 names for
+  reading the execution's address row by execution id alone.
