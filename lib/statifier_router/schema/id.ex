@@ -21,6 +21,14 @@ defmodule StatifierRouter.Schema.Id do
   that binds the id uncast, `where: fragment("? = ?", a.id, ^id)`,
   rather than with `Repo.get/2` or a changeset cast. The package's own
   reads bind ids that way too: they never cast an id.
+
+  A refused cast names this type rather than `:id`, as it has since
+  0.8.0 put the four schemas on it. A changeset error's metadata reads
+  `type: StatifierRouter.Schema.Id` where it read `type: :id`, and an
+  `Ecto.Query.CastError` says the value "cannot be cast to type
+  StatifierRouter.Schema.Id" where it said "cannot be cast to type :id".
+  The values refused are the same; only a host that matches on the
+  metadata's `:type` or on the message text sees the difference.
   """
 
   use Ecto.Type
