@@ -52,10 +52,9 @@ for changes visible to someone calling the public API. That file's two lists
 are the whole test, and this section deliberately does not restate them: read
 them there rather than inferring the answer from the size of the diff.
 
-The package is not yet released, and the decision is still the
-released-package one in every case, so that the first release's changelog is
-complete: a change on that README's "write a fragment for" side carries one, a
-change on its "do not" side carries none, and no fragment is the expected
+The package is released, so the decision is the released-package one in
+every case: a change on that README's "write a fragment for" side carries one,
+a change on its "do not" side carries none, and no fragment is the expected
 outcome there, not a step you skipped. Fragments accumulate in `changelog.d/`
 until a release bead's prep promotes them into `CHANGELOG.md` and deletes them
 - see `.claude/wurk/release.md`, and `CLAUDE.md`'s version-bump row for what a
@@ -63,14 +62,15 @@ release bead is.
 
 ## Version bump: never
 
-`mix.exs` holds the last released version (`0.0.0` until the first release)
-until a release bead says otherwise. `CLAUDE.md`'s authority table is the
-authority on when that happens and this section does not restate it: a release
-(`mix hex.publish`, GitHub release) is never an agent's, the version-bump row
-allows the bump only on an operator-authorized release bead's branch, inside a
-campaign carrying the operator's explicit consent, and once that prep is merged
-to `origin/main` the conductor or the session that owns the release bead tags
-the merged commit (the tagging row and the "Release preps" paragraph). Read the
+`mix.exs` holds the last released version until a release bead says
+otherwise. `CLAUDE.md`'s authority table is the authority on when that happens
+and this section does not restate it: a release (`mix hex.publish`, GitHub
+release) is never an agent's, the version-bump row allows the bump only on the
+branch of a release bead the operator has named (in the campaign plan or their
+own words), the family norm and not a grant a campaign consent has to name,
+and once that prep is merged to `origin/main` the conductor or the session
+that owns the release bead tags the merged commit (the tagging row and the
+"Release preps" paragraph). Read the
 row rather than a version quoted here, which goes stale at every release.
 Never edit the version field as part of an ordinary commit.
 
