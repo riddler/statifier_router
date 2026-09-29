@@ -466,7 +466,7 @@ defmodule StatifierRouter.HostColumnsTest do
       end
     end
 
-    # sabotage: made refuse_package_column_names!/2 check every version's
+    # sabotage: made refuse_package_column_names!/3 check every version's
     # tables rather than the span's -> red here, invoke_id refused under
     # version: 1.
     test "is a host column when only a table outside the call declares it" do
@@ -561,7 +561,7 @@ defmodule StatifierRouter.HostColumnsTest do
     # ledger table alone and the subscription table alone; then the
     # address and ledger tables under version: 1. None of these reaches
     # the DDL, so the call needs no migration runner.
-    # sabotage: made up/1 skip refuse_package_column_names!/2 -> red here,
+    # sabotage: made up/1 skip refuse_package_column_names!/3 -> red here,
     # the first name reached V01's DDL outside a migration runner.
     # sabotage: dropped :expires_at from @package_columns' dedupe entry ->
     # red here on :expires_at.
