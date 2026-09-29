@@ -7,9 +7,9 @@ override, and nothing below rewrites a step the skill already performs.
 
 Read this together with `.claude/wurk.json`'s `release` block. Between them
 they name every file a release commit here touches, and no others. The shape
-is copied from statifier_persistence's own `.claude/wurk/release.md`; once
-this repo has a release, the reference for every shape below is **the most
-recent release-prep commit on `main`**, found with:
+was copied from statifier_persistence's own `.claude/wurk/release.md`; the
+reference for every shape below is **the most recent release-prep commit on
+`main`**, found with:
 
 ```bash
 git log --oneline --no-patch -L '/@version/,+1:mix.exs'
@@ -18,15 +18,6 @@ git log --oneline --no-patch -L '/@version/,+1:mix.exs'
 Where this file and that commit disagree, the commit is the evidence and this
 file is the defect. This file names no SHA and no version on purpose: either
 goes stale at the next release.
-
-## The first release
-
-`mix.exs` carries `0.0.0` until the first release. The skill's `kind: "hex"`
-recipe refuses a version that is not strictly greater than the current one
-and reads for unreleased work the way the next section describes, so the
-first release may not fit its preconditions. When it does not, the first
-release follows `changelog.d/README.md`'s "At release" paragraph by hand,
-with the steps below, and the prep commit says so in its body.
 
 ## Why the recipe names no changelog
 
@@ -57,9 +48,9 @@ it.
 1. Read every `changelog.d/*.md` fragment except `README.md`. Each is a Keep a
    Changelog section heading followed by its bullets.
 2. Insert a new `## [X.Y.Z] YYYY-MM-DD` section into `CHANGELOG.md` directly
-   below the header (above the previous version's section, once there is
-   one): the bracketed version, a single space, then the date, **with no `-`
-   separator between them**, matching statifier_persistence's changelog. The
+   below the header (above the previous version's section): the bracketed
+   version, a single space, then the date, **with no `-` separator between
+   them**, matching statifier_persistence's changelog. The
    date is the LOCAL date of the machine cutting the prep, the one `date +%F`
    prints there at the moment you write the heading.
 3. Write a short lead paragraph between the heading and the first `### `
@@ -119,11 +110,11 @@ Exactly these, and a release commit that touches anything else is wrong:
 
 The skill does not tag, push, open a request or publish, and this extension
 does not either. `CLAUDE.md`'s authority table allows a version bump only on
-an operator-authorized release bead's branch, inside a campaign carrying the
-operator's explicit consent, and the bump plus step B is release *prep*,
-nothing more. What follows the prep is split by that table's tagging and
-release rows and its "Release preps" paragraph. Once the prep is merged to
-`origin/main`, the conductor or the session that owns the release bead tags
+the branch of a release bead the operator has named (in the campaign plan or
+their own words) - the family norm, not a grant a campaign consent has to
+name - and the bump plus step B is release *prep*, nothing more. What follows
+the prep is split by that table's tagging and release rows and its "Release
+preps" paragraph. Once the prep is merged to `origin/main`, the conductor or the session that owns the release bead tags
 that merged commit with the new version and pushes the tag; a tag before the
 bump is on `origin/main`, or naming any other version or commit, is not
 allowed. Publishing - `mix hex.publish`, a GitHub release, a docs republish
