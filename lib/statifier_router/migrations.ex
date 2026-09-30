@@ -131,7 +131,9 @@ defmodule StatifierRouter.Migrations do
   migration calls `up/1` with no `version:` gets V03 from it on a fresh
   database, and still writes the migration above for the databases that
   ran the first one before V03 existed: on a fresh database the second
-  run finds the index already renamed and does nothing.
+  run finds the index already renamed and does nothing. On SQLite, which
+  never cut V02's name, V03 does nothing in either direction and the index
+  keeps V02's name (`StatifierRouter.Migrations.V03`).
 
   ## The location table, V04, is opt-in
 
