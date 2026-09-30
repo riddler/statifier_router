@@ -48,6 +48,14 @@ defmodule StatifierRouter.Webhook do
   and the SHA-256 of an empty body is a well-defined, constant id rather
   than a failure.
 
+  **A body-hash id is scope-free.** The dedupe key is the binding and the
+  message id (`StatifierRouter.Dedupe.claim/4`), and a binding carries no
+  scope, so the same body under two scopes through one shared binding is
+  one message: the second is a duplicate, and nothing reaches the second
+  scope's execution. A host that routes several scopes through one front
+  therefore either gives each scope its own binding or uses a provider that
+  sends an event id.
+
   ## The answer and the status
 
   `handle/3` answers exactly as `StatifierRouter.route/3` does,
