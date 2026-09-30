@@ -6,9 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.8.0/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.0/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.9.0] 2026-09-30
+
+Feature release: a durable execution can take events at an HTTP location of its own, through the W3C Basic HTTP Event I/O Processor. A configuration that sets the new `:basichttp` key gives each execution created under a new address row a location the router mints, `StatifierRouter.BasicHTTP` reads and rotates it, and `StatifierRouter.BasicHTTP.Front` decodes a POST at it and delivers the event through the existing delivery path. A location is a bearer capability. A configuration without the key behaves exactly as before.
+
+Upgrading: the statifier floor moves from `~> 2.9` to `~> 2.10`, the release that ships the processor and its decoder, so a host still on statifier 2.9 upgrades statifier to take this release, whether or not it sets `:basichttp`. A host that does not set `:basichttp` changes nothing else: no migration version is added, and `StatifierRouter.Migrations.up/1` and `down/1` behave exactly as before. A host that wants the front sets `:basichttp` and adds one migration of its own calling `StatifierRouter.Migrations.up_locations/1`, with `down_locations/1` on rollback, which creates the location table `StatifierRouter.Migrations.V04` describes; the README's "Upgrading the tables" and "A BasicHTTP front" show both. The statifier_persistence floor does not move.
+
+### Added
+
+- `StatifierRouter.BasicHTTP`, the W3C Basic HTTP Event I/O Processor for durable executions: a configuration that sets the new `:basichttp` key (`base_url:` required, `transport:` optional) registers it under the processor's URI and `basichttp`, and each execution created under a new address row gets a location, the base URL and a 43-character token the router mints, never the execution id, which the chart reads in `_ioprocessors`.
+- `StatifierRouter.BasicHTTP.location/2` reads an execution's current location and `StatifierRouter.BasicHTTP.rotate_location/2` replaces its token, after which the old location answers 404; the chart's own `_ioprocessors` keeps the location it started with.
+- `StatifierRouter.BasicHTTP.Front`, a Plug-shaped front: `handle/3` decodes a POST at a location with statifier's decoder and delivers it through the existing delivery path, deduplicating per execution on the `scxml-send-key` header, and `response/1` answers 204, 404, 405 with `Allow: POST`, 400 or 500. A location is a bearer capability: the front authenticates nothing beyond possession of it.
+- `StatifierRouter.Migrations.up_locations/1` and `down_locations/1` create and drop the location table (`StatifierRouter.Migrations.V04`, `<prefix>locations`), which only a host that sets `:basichttp` needs; it is opt-in and outside the version walk, so `up/1` and `down/1` behave exactly as before. On a configuration with `:basichttp`, a binding whose `id` is `basichttp` is refused as reserved.
+- statifier is required at `~> 2.10`, the release that ships the Basic HTTP processor and its decoder.
 
 ## [0.8.0] 2026-09-27
 
