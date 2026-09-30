@@ -119,7 +119,10 @@ defmodule StatifierRouter.MixProject do
       # Test-only: a host brings its own database driver, and this package
       # needs one only to test itself (the rule sp-ADR-0005 records for
       # statifier_persistence).
-      {:postgrex, "~> 0.22", only: :test}
+      {:postgrex, "~> 0.22", only: :test},
+      # Test-only, like postgrex: the SQLite repo the migration tests run
+      # the versions against, since a host may migrate on SQLite.
+      {:ecto_sqlite3, "~> 0.22", only: :test}
     ]
   end
 end

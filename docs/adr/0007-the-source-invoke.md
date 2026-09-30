@@ -375,3 +375,26 @@ Nothing section 6 fixes changes:
   V01's `<table>_execution_id_index`
   (`StatifierRouter.Migrations.V01`), the index section 6 names for
   reading the execution's address row by execution id alone.
+
+## Note (2026-09-30, sr-zb9m): V03 does nothing on SQLite
+
+The Note of 2026-09-27 (sr-lyym) says what V03 does, read at `4f76546`:
+it renames the subscription index with `ALTER INDEX IF EXISTS`, in both
+directions. That was true on every adapter up to `127f2e7`, and on
+SQLite the statement is a syntax error, so a host on SQLite whose router
+migration walks through V03 failed to migrate from statifier_router
+0.8.0 on. This Note records the change that answers it. It decides
+nothing, and no line above it was edited.
+
+On `Ecto.Adapters.SQLite3`, `StatifierRouter.Migrations.V03.up/1` and
+`down/1` now do nothing (the private `rename_index/3`). SQLite keeps an
+identifier whole, so there V02 already left the index under the whole
+name it gave it, with nothing cut to repair; the index keeps that name.
+On every other adapter V03 runs the rename exactly as before. The test
+`StatifierRouter.SQLiteMigrationsTest` walks the versions on SQLite and
+reads the index name back.
+
+Nothing section 6 fixes changes, for the reasons the Note of 2026-09-27
+gives: the index's columns, their order and its uniqueness are V02's on
+every adapter, and `StatifierRouter.subscribe/3` names the triple by its
+columns, not by the index's name.

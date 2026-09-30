@@ -32,6 +32,13 @@ defmodule StatifierRouter.Migrations.V03 do
   one that already walked through V03 on a fresh database: the second run
   finds the index already renamed and leaves it.
 
+  On SQLite (`Ecto.Adapters.SQLite3`) both directions do nothing. SQLite
+  keeps an identifier whole, so V02's index there already holds the name
+  V02 gave it, with nothing cut to repair, and SQLite has no
+  `ALTER INDEX`. The index keeps V02's name on SQLite; the package's
+  queries name its columns, never its name. Every other adapter runs the
+  rename above.
+
   A host already running V02 reaches this version with
   `StatifierRouter.Migrations.up(from: 3)`: `from:` names the first
   version the host has **not** run and the walk includes it.
@@ -51,14 +58,14 @@ defmodule StatifierRouter.Migrations.V03 do
           optional(atom()) => term()
         }
 
-  @doc "Renames V02's subscription index to `<table>_invocation_index`."
+  @doc "Renames V02's subscription index to `<table>_invocation_index`; on SQLite, nothing."
   @spec up(storage()) :: :ok
   def up(storage) do
     {v02_name, v03_name} = names(storage)
     rename_index(storage, v02_name, v03_name)
   end
 
-  @doc "Renames the subscription index back to the name V02 left it under."
+  @doc "Renames the subscription index back to the name V02 left it under; on SQLite, nothing."
   @spec down(storage()) :: :ok
   def down(storage) do
     {v02_name, v03_name} = names(storage)
@@ -74,8 +81,12 @@ defmodule StatifierRouter.Migrations.V03 do
      as_stored("#{subscriptions}_invocation_index")}
   end
 
+  # SQLite never cut V02's name, so there is nothing to rename, and it has
+  # no ALTER INDEX to rename with.
   defp rename_index(%{prefix: prefix}, from, to) do
-    execute("ALTER INDEX IF EXISTS #{qualified(prefix, from)} RENAME TO #{quoted(to)}")
+    if repo().__adapter__() != Ecto.Adapters.SQLite3 do
+      execute("ALTER INDEX IF EXISTS #{qualified(prefix, from)} RENAME TO #{quoted(to)}")
+    end
 
     :ok
   end
