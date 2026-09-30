@@ -1217,3 +1217,68 @@ reservation; `StatifierRouter.Delivery` for the mint on the winning
 insert and the create's snapshot; `StatifierRouter.Migrations` for the
 new version; and `mix.exs`, which requires statifier at the published
 version that ships the decoder, never a git or path pin.
+
+## Amendment (2026-09-30, sr-xgi8): the location table is opt-in, outside the version walk
+
+Status: proposed (2026-09-30)
+
+The Amendment of 2026-09-30 above on the BasicHTTP location stores each
+token in a table "created by a new migration version,
+`StatifierRouter.Migrations.V04`" (its decision 1, "Where it is
+stored"), says "a host that does not use BasicHTTP needs no migration"
+(decision 1, "Why a table and not a column on the address row") and "a
+host that never sets the key does not need V04" ("Absent is today"),
+and places the code in "`StatifierRouter.Migrations` for the new
+version" ("Where the code is"). It does not say how a host runs that
+version. Made the fourth member of the walk `from:` and `version:` span
+(the sr-3o5z Amendment's "Only the tables the call creates"), it would
+change what `StatifierRouter.Migrations.up/1` and `down/1` answer for
+every host that never sets the key: an uncapped `down/1` on a database
+migrated before it would drop a table that was never created, an
+uncapped `up(from: 2)` or `up(from: 3)` would build a table with a
+reference to the address table that a later capped rollback leaves in
+place, and an uncapped `up/1` would refuse leading-column names it
+accepted before. This Amendment decides that it does not, and amends
+those four sentences in part: V04 is still the migration that creates
+the table, and it is not a version of the walk.
+
+- **Outside the walk.** `StatifierRouter.Migrations.up/1` and `down/1`,
+  capped or not, never create, drop or require the location table, and
+  refuse no leading-column name they accepted before; the versions they
+  walk are V01 to V03, as on `main` at `8600d6f`
+  (`StatifierRouter.Migrations`' private `@migrations`), and a version
+  of 4 stays an unknown version. A host that never sets `:basichttp`
+  sees no migration answer differently.
+- **Two calls a host makes.** A host that sets `:basichttp` creates and
+  drops the table with `StatifierRouter.Migrations.up_locations/1` and
+  `StatifierRouter.Migrations.down_locations/1`, in a migration of its
+  own written after the ones it already has.
+- **Their options.** The storage options (`:table_prefix`, `:prefix`),
+  the three layout options and `:primary_key`, each read as `up/1` reads
+  it. The host passes the values its earlier migrations passed: the
+  table's `address_id` references the address table's `id` and takes the
+  key type `:primary_key` names.
+- **Their refusals.** `:from`, `:version` and any other key raise
+  `ArgumentError` before any DDL, as does a `:leading_columns` entry
+  named like one of the location table's own columns (`address_id`,
+  `token`, `inserted_at`, and `id` under `:primary_key`).
+- **Tolerant in both directions.** `up_locations/1` creates the table
+  and its two indexes only where they do not exist, and
+  `down_locations/1` drops the table only if it is there, as V03 renames
+  only the index it finds.
+- **The rollback order.** The table references the address table, so it
+  goes before V01's tables. The host's opt-in migration is newer than the
+  one that created them, and Ecto's rollback undoes the newest migration
+  first, so that order is the one a rollback takes. V01's `down` is
+  unchanged.
+
+**Where the code is.** In the pull request that implements the
+Amendment of 2026-09-30 above and this one, which cites both:
+`StatifierRouter.Migrations`, whose `up_locations/1` and
+`down_locations/1` run `StatifierRouter.Migrations.V04` outside
+`@migrations`, and whose "The location table, V04, is opt-in" section
+says how a host writes its migration; and `StatifierRouter.Migrations.V04`,
+whose `down/1` drops the table only if it exists. The existing migration
+tests are unchanged from `main` and pass against that code, and a test
+module of its own covers a pre-V04 rollback, the opt-in migration's full
+rollback and a host that opts in from one migration.
