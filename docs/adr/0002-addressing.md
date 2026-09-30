@@ -1433,3 +1433,24 @@ creates the table, and it is run outside the version walk.
 
 The 0.9.0 section of `CHANGELOG.md` names the key, the processor, the
 front, the two calls and the opt-in table.
+
+## Note (2026-09-30, sr-1rgb): the address sweep's writes run on SQLite
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. The Note of 2026-09-27 accepting the sr-w58a
+Amendment says the private `stamp/3` and `delete/2` of
+`StatifierRouter.Addresses` bind the ids in `fragment("? = ANY(?)",
+a.id, ^ids)`. That form is Postgres's own; on SQLite the statement fails
+with "no such function: ANY", so a host on SQLite could not reap its
+address table from statifier_router 0.8.0 on.
+
+Both functions now name their rows in `fragment("? IN (?)", a.id,
+splice(^batch))`: an `IN` list with one bound parameter per id, which
+Postgres and SQLite both take, written in batches of at most 500 ids a
+statement (the private `in_batches/2` and `@ids_per_statement`), under
+SQLite's smallest limit on bound parameters. Each id is still bound as
+the table handed it over, so the Amendment's rule that the package
+never casts an id it binds holds as before, and a reap answers the same
+counts on Postgres as it did. The tests
+`StatifierRouter.SQLiteReapTest` reap on SQLite under the default
+integer key, under a text key of digits, and past one batch.

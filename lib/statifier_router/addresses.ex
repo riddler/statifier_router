@@ -106,6 +106,7 @@ defmodule StatifierRouter.Addresses do
 
   @terminal [:completed, :failed, :cancelled]
   @default_limit 1_000
+  @ids_per_statement 500
 
   @typedoc """
   What one reap did: how many rows it stamped `terminal_seen_at` on, how
@@ -266,27 +267,40 @@ defmodule StatifierRouter.Addresses do
     DateTime.compare(DateTime.add(seen_at, horizon_ms, :millisecond), now) != :gt
   end
 
-  defp stamp(_config, [], _now), do: 0
-
+  # Both writes name their rows in an IN list of one bound parameter per
+  # id, which Postgres and SQLite both take, each id bound uncast as the
+  # rest of this module binds them. A list longer than
+  # @ids_per_statement is written in batches of that many, one statement
+  # each, which keeps every statement under SQLite's smallest limit on
+  # bound parameters (999) with room for the stamp's own time.
   defp stamp(config, ids, now) do
-    {count, _} =
+    in_batches(ids, fn batch ->
       from(a in Config.queryable(config, Address),
-        where: fragment("? = ANY(?)", a.id, ^ids) and is_nil(a.terminal_seen_at)
+        where: fragment("? IN (?)", a.id, splice(^batch)) and is_nil(a.terminal_seen_at)
       )
       |> config.repo.update_all(set: [terminal_seen_at: now])
-
-    count
+    end)
   end
 
-  defp delete(_config, []), do: 0
-
   defp delete(config, ids) do
-    {count, _} =
+    in_batches(ids, fn batch ->
       config.repo.delete_all(
-        from(a in Config.queryable(config, Address), where: fragment("? = ANY(?)", a.id, ^ids))
+        from(a in Config.queryable(config, Address),
+          where: fragment("? IN (?)", a.id, splice(^batch))
+        )
       )
+    end)
+  end
 
-    count
+  # The rows `write` counts over every batch of `ids`; no statement for
+  # no ids.
+  defp in_batches(ids, write) do
+    ids
+    |> Enum.chunk_every(@ids_per_statement)
+    |> Enum.reduce(0, fn batch, total ->
+      {count, _} = write.(batch)
+      total + count
+    end)
   end
 
   defp next(rows, limit) when length(rows) == limit, do: List.last(rows).id
