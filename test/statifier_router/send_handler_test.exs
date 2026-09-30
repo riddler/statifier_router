@@ -773,6 +773,71 @@ defmodule StatifierRouter.SendHandlerTest do
       assert RecordingTimerQueue.entries() == []
     end
 
+    # sabotage: processor_scope/1's clause for a nil :processor_scope
+    # answered {:ok, nil} instead of the held scope -> the send reached the
+    # registered sink, red; restored, green.
+    test "with no scope configured, the scope the calling process holds applies" do
+      :ok = SendHandler.put_config(handler_config(route_overrides: @staging))
+      :ok = SendHandler.put_delivery_scope("staging")
+      on_exit(&SendHandler.delete_delivery_scope/0)
+
+      assert perform_send(send_effect()) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
+    end
+
+    # sabotage: processor_scope/1's clause for a static scope answered the
+    # held scope ahead of it -> the send reached the held scope's sink,
+    # red; restored, green. sabotage: the fun clause answered the held
+    # scope ahead of the fun's answer -> the second send reached the held
+    # scope's sink, red; restored, green.
+    test "a configured scope wins over the scope the calling process holds" do
+      overrides = Map.put(@staging, "preview", %{"joined_records" => %{sink: "preview_sink"}})
+      :ok = SendHandler.put_delivery_scope("preview")
+      on_exit(&SendHandler.delete_delivery_scope/0)
+
+      :ok =
+        SendHandler.put_config(
+          handler_config(route_overrides: overrides, processor_scope: "staging")
+        )
+
+      assert perform_send(send_effect()) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
+
+      :ok =
+        SendHandler.put_config(
+          handler_config(route_overrides: overrides, processor_scope: fn -> "staging" end)
+        )
+
+      assert perform_send(send_effect(send_id: "send_2")) == :ok
+      assert_received {:routed, %{sink: "staging_sink"}, _event, _key}
+    end
+
+    # sabotage: processor_scope/1's fun clause dropped its empty-string
+    # guard -> "" reached Config.route/3 as a scope and the send went to
+    # the registered sink, red; restored, green.
+    test "a fun that answers an empty string is a miss, and nothing is routed or queued" do
+      :ok = SendHandler.put_delivery_scope("staging")
+      on_exit(&SendHandler.delete_delivery_scope/0)
+
+      :ok =
+        SendHandler.put_config(
+          handler_config(
+            route_overrides: @staging,
+            processor_scope: fn -> "" end,
+            timer_queue: {RecordingTimerQueue, %{}}
+          )
+        )
+
+      assert perform_send(send_effect()) ==
+               {:error, {:invalid_value, :processor_scope, ""}}
+
+      assert perform_send(delayed_effect()) ==
+               {:error, {:invalid_value, :processor_scope, ""}}
+
+      refute_received {:routed, _config, _event, _key}
+      assert RecordingTimerQueue.entries() == []
+    end
+
     # sabotage: resolve/3's processor arm called processor_scope/1 before
     # asking whether the name is registered -> the fun was called for a
     # send that could only miss, red; restored, green.
