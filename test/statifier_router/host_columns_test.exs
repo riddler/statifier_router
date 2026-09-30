@@ -12,7 +12,7 @@ defmodule StatifierRouter.HostColumnsTest do
   alias Ecto.Migrator
   alias StatifierRouter.Config
   alias StatifierRouter.Migrations
-  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Location, Subscription}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Subscription}
   alias StatifierRouter.TestRepo
 
   # statifier_persistence's fixture shape: a leading text column of the
@@ -65,7 +65,7 @@ defmodule StatifierRouter.HostColumnsTest do
     ]
 
     def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
-    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 4, version: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
   # A leading column named like a package column that only a table outside
@@ -96,7 +96,7 @@ defmodule StatifierRouter.HostColumnsTest do
     ]
 
     def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
-    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 4, version: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
   defmodule MigrateHcV02Plain do
@@ -106,7 +106,7 @@ defmodule StatifierRouter.HostColumnsTest do
     @opts [table_prefix: "hc_router_", prefix: "hc_router_schema"]
 
     def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 2])
-    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 4, version: 2])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
   # A repo with its implicit primary key turned off leads with one of its
@@ -133,11 +133,9 @@ defmodule StatifierRouter.HostColumnsTest do
   @v02_plain_version 20_260_925_000_306
   @own_id_version 20_260_925_000_307
   @schema "hc_router_schema"
-  # In the catalog's name order, which tables_present/0 reads them in.
   @tables [
     "hc_router_addresses",
     "hc_router_dedupe",
-    "hc_router_locations",
     "hc_router_routing_ledger",
     "hc_router_subscriptions"
   ]
@@ -155,9 +153,8 @@ defmodule StatifierRouter.HostColumnsTest do
     :ok
   end
 
-  # The location table first: it references the address table.
   defp clear do
-    for table <- ["hc_router_locations" | @tables -- ["hc_router_locations"]] do
+    for table <- @tables do
       SQL.query!(TestRepo, ~s(DROP TABLE IF EXISTS "#{@schema}"."#{table}"), [])
     end
 
@@ -193,15 +190,6 @@ defmodule StatifierRouter.HostColumnsTest do
       )
 
     Enum.map(rows, fn [name, collation] -> {name, collation} end)
-  end
-
-  defp assert_host_column_empty(table, id) do
-    assert %{rows: [[nil]]} =
-             SQL.query!(
-               TestRepo,
-               ~s(SELECT branch_id FROM "#{@schema}"."#{table}" WHERE id = $1),
-               [id]
-             )
   end
 
   defp tables_present do
@@ -266,13 +254,6 @@ defmodule StatifierRouter.HostColumnsTest do
       {"message_id", nil},
       {"expires_at", nil}
     ],
-    "hc_router_locations" => [
-      {"id", nil},
-      {"branch_id", nil},
-      {"inserted_at", nil},
-      {"address_id", nil},
-      {"token", nil}
-    ],
     "hc_router_routing_ledger" => [
       {"id", nil},
       {"branch_id", nil},
@@ -304,7 +285,7 @@ defmodule StatifierRouter.HostColumnsTest do
     # trailing) -> red on hc_router_subscriptions, inserted_at came back
     # last. sabotage: made V01's collated/3 return opts unchanged -> red on
     # hc_router_addresses, execution_id came back with no collation.
-    test "place a leading column, the timestamp and a collation on all five tables" do
+    test "place a leading column, the timestamp and a collation on all four tables" do
       :ok = Migrator.up(TestRepo, @version, MigrateHc, log: false)
 
       for table <- @tables do
@@ -351,19 +332,16 @@ defmodule StatifierRouter.HostColumnsTest do
         }
       ]
 
-      # The location row references the address row inserted first.
-      rows
-      |> Enum.zip(@tables -- ["hc_router_locations"])
-      |> Enum.reduce(nil, fn {row, table}, address_id ->
+      for {row, table} <- Enum.zip(rows, @tables) do
         inserted = TestRepo.insert!(Config.put_meta(config, row))
-        assert_host_column_empty(table, inserted.id)
-        address_id || inserted.id
-      end)
-      |> then(fn address_id ->
-        location = %Location{address_id: address_id, token: "tok_hc1", inserted_at: now}
-        inserted = TestRepo.insert!(Config.put_meta(config, location))
-        assert_host_column_empty("hc_router_locations", inserted.id)
-      end)
+
+        assert %{rows: [[nil]]} =
+                 SQL.query!(
+                   TestRepo,
+                   ~s(SELECT branch_id FROM "#{@schema}"."#{table}" WHERE id = $1),
+                   [inserted.id]
+                 )
+      end
     end
 
     # sabotage: made V02.up/1 read the layout off a hardcoded empty map ->
@@ -423,7 +401,7 @@ defmodule StatifierRouter.HostColumnsTest do
 
       for {span, tables} <- [
             {[version: 1], v01},
-            {[from: 2], ["hc_router_locations", "hc_router_subscriptions"]},
+            {[from: 2], ["hc_router_subscriptions"]},
             {[], @tables}
           ],
           primary_key <- [[], [primary_key: [type: :text]]] do
@@ -438,9 +416,7 @@ defmodule StatifierRouter.HostColumnsTest do
                 Migrations.up(span ++ primary_key ++ [leading_columns: [{name, {:text, []}}]])
               end
 
-            # The refusal lists the tables in span order, the catalog in
-            # name order.
-            {column, Enum.sort(refused_in(error.message, name))}
+            {column, refused_in(error.message, name)}
           end)
 
         assert refused == expected, inspect(span ++ primary_key)
@@ -464,17 +440,14 @@ defmodule StatifierRouter.HostColumnsTest do
       # The spans of up(version: 1), up(from: 2) and up/1.
       for {versions, tables} <- [
             {1..1//1, v01},
-            {2..4//1, ["hc_router_locations", "hc_router_subscriptions"]},
-            {1..4//1, @tables}
+            {2..3//1, ["hc_router_subscriptions"]},
+            {1..3//1, @tables}
           ],
           primary_key? <- [false, true] do
         expected = declared_in(tables, primary_key?)
 
-        # The package lists the tables in span order, the catalog in name
-        # order.
         refused =
-          for {table, columns} <-
-                Enum.sort(Migrations.package_columns(versions, primary_key?)),
+          for {table, columns} <- Migrations.package_columns(versions, primary_key?),
               column <- columns,
               reduce: %{} do
             acc ->
@@ -601,9 +574,7 @@ defmodule StatifierRouter.HostColumnsTest do
             expires_at: "dedupe",
             reason: "routing_ledger",
             invoke_id: "subscriptions",
-            address_id: "locations",
-            token: "locations",
-            inserted_at: "addresses, routing_ledger, subscriptions, locations"
+            inserted_at: "addresses, routing_ledger, subscriptions"
           ] do
         message =
           "the :leading_columns option names a column the package declares: " <>

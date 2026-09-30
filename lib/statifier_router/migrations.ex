@@ -35,13 +35,12 @@ defmodule StatifierRouter.Migrations do
       `[]`. A keyword list of `name: {type, opts}`, where `type` and `opts`
       are what `Ecto.Migration.add/3` takes:
       `leading_columns: [branch_id: {:text, null: true}]` puts a nullable
-      `branch_id` at ordinal position 2 on every table. The package's
+      `branch_id` at ordinal position 2 on all four tables. The package's
       schemas do not declare the column, so the package never reads or
       writes it; a default or a `NOT NULL` belongs to a later migration of
       the host's own. A name a table the call creates already declares -
-      any column `StatifierRouter.Migrations.V01`,
-      `StatifierRouter.Migrations.V02` or `StatifierRouter.Migrations.V04`
-      lists for it - raises
+      any column `StatifierRouter.Migrations.V01` or
+      `StatifierRouter.Migrations.V02` lists for it - raises
       `ArgumentError` naming the column and those tables, before any DDL
       runs, where Postgres would otherwise refuse the `CREATE TABLE` with a
       duplicate column. A name only a table the call does not create
@@ -53,9 +52,8 @@ defmodule StatifierRouter.Migrations do
       the package declares `id` itself, and a leading `id` raises like any
       other package column.
     * `:timestamps_position` - where `inserted_at` goes in every table a
-      version creates that has one (the address table, the routing ledger,
-      the subscription table and the location table; the dedupe table has
-      none): `:trailing`
+      version creates that has one (the address table, the routing ledger
+      and the subscription table; the dedupe table has none): `:trailing`
       (default: the layout `StatifierRouter.Migrations.V01` and
       `StatifierRouter.Migrations.V02` document) or `:leading`
       (immediately after `id` and the `:leading_columns`). The address
@@ -78,7 +76,7 @@ defmodule StatifierRouter.Migrations do
       `:type`, required, and a `:default`, optional, each what
       `Ecto.Migration.add/3` takes: `primary_key: [type: :text, default:
       fragment("gen_random_uuid()::text")]` builds `id` as a text primary
-      key the database fills in, on every table. The column is always
+      key the database fills in, on all four tables. The column is always
       named `id`, the name the schemas in `StatifierRouter.Schema` read.
       The package inserts no id of its own, so the column needs a default
       the database fills in (a `bigserial` or an identity column has one
@@ -111,9 +109,8 @@ defmodule StatifierRouter.Migrations do
   to hand an `{:error, reason}` to.
 
   `StatifierRouter.Migrations.V01` records what the first version creates,
-  `StatifierRouter.Migrations.V02` what the second adds,
-  `StatifierRouter.Migrations.V03` what the third renames, and
-  `StatifierRouter.Migrations.V04` what the fourth adds.
+  `StatifierRouter.Migrations.V02` what the second adds, and
+  `StatifierRouter.Migrations.V03` what the third renames.
 
   `:from` is **inclusive**: `up(from: 2)` runs V02, and a host already on
   V01 that writes it gets the subscription table without V01's
@@ -136,23 +133,31 @@ defmodule StatifierRouter.Migrations do
   ran the first one before V03 existed: on a fresh database the second
   run finds the index already renamed and does nothing.
 
-  ## Upgrading to V04
+  ## The location table, V04, is opt-in
 
-  V04 creates the location table a configuration with `:basichttp`
-  keeps each address row's BasicHTTP location token in (ADR-0002, the
-  Amendment of 2026-09-30). It is needed only by a host that sets that
-  key; one that does not may leave it unrun, and the package never reads
-  or writes the table for it. A host that has already run V03 and wants
-  it runs one more version, in a new migration of its own:
+  A configuration that sets `:basichttp` keeps each address row's
+  BasicHTTP location token in a table of its own, which
+  `StatifierRouter.Migrations.V04` creates (ADR-0002, the Amendment of
+  2026-09-30). A host that never sets the key does not need it, so V04
+  is not in the version walk: `up/1` and `down/1`, capped or not, never
+  create, drop or require it, and every call above answers as it did
+  before V04 existed. A host that sets the key runs it with its own two
+  calls, `up_locations/1` and `down_locations/1`, in a migration of its
+  own after the ones it already has:
 
-      def up, do: StatifierRouter.Migrations.up(from: 4)
-      def down, do: StatifierRouter.Migrations.down(from: 4, version: 4)
+      def up, do: StatifierRouter.Migrations.up_locations(prefix: "routing")
+      def down, do: StatifierRouter.Migrations.down_locations(prefix: "routing")
 
-  with the same `:table_prefix`, `:prefix` and `:primary_key` as its
-  earlier migrations: the table's `address_id` references the address
-  table's `id`, and takes the key type `:primary_key` names. A host whose
-  first migration calls `up/1` with no `version:` gets V04 from it on a
-  fresh database, an empty table nothing reads until the key is set.
+  They take `:table_prefix`, `:prefix`, the three layout options and
+  `:primary_key`, and neither `:from` nor `:version`. Pass the same
+  values as the earlier migrations: the table's `address_id` references
+  the address table's `id` and takes the key type `:primary_key` names.
+  `up_locations/1` creates only what is missing, and `down_locations/1`
+  drops the table only if it is there. Because the table references the
+  address table, the migration that runs `up_locations/1` must roll back
+  before the one that created V01's tables: a host that writes it as a
+  later migration gets that order from Ecto's rollback, which undoes the
+  newest migration first.
 
   ## Index names and a long `:table_prefix`
 
@@ -174,6 +179,7 @@ defmodule StatifierRouter.Migrations do
   """
 
   alias StatifierRouter.Config
+  alias StatifierRouter.Migrations.V04
 
   @initial_version 1
 
@@ -218,15 +224,13 @@ defmodule StatifierRouter.Migrations do
     2 => [
       subscriptions: [:binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
     ],
-    3 => [],
-    4 => [locations: [:address_id, :token, :inserted_at]]
+    3 => []
   }
 
   @migrations %{
     1 => StatifierRouter.Migrations.V01,
     2 => StatifierRouter.Migrations.V02,
-    3 => StatifierRouter.Migrations.V03,
-    4 => StatifierRouter.Migrations.V04
+    3 => StatifierRouter.Migrations.V03
   }
 
   # Read off the map rather than written beside it, so the default target
@@ -262,6 +266,61 @@ defmodule StatifierRouter.Migrations do
     from
     |> span!(target, :down)
     |> Enum.each(fn version -> Map.fetch!(@migrations, version).down(storage) end)
+  end
+
+  # The columns V04 declares in the location table, which a leading column
+  # of `up_locations/1` may not reuse, `id` included under :primary_key.
+  @location_columns [:address_id, :token, :inserted_at]
+
+  @doc """
+  Creates the location table `StatifierRouter.Migrations.V04` describes,
+  outside the version walk (see "The location table, V04, is opt-in").
+  Takes the storage options, the layout options and `:primary_key`; a
+  `:from`, a `:version` or any other key raises `ArgumentError`, as a
+  leading column named like one of the table's own columns does, before
+  any DDL.
+  """
+  @spec up_locations(keyword()) :: :ok
+  def up_locations(opts \\ []) when is_list(opts) do
+    storage = parse_locations!(opts)
+    refuse_location_column_names!(storage.leading_columns, storage.primary_key)
+    V04.up(storage)
+  end
+
+  @doc """
+  Drops the location table if it is there, and nothing else. Takes the
+  options `up_locations/1` takes and ignores the layout options.
+  """
+  @spec down_locations(keyword()) :: :ok
+  def down_locations(opts \\ []) when is_list(opts) do
+    V04.down(parse_locations!(opts))
+  end
+
+  defp parse_locations!(opts) do
+    {layout, opts} = layout!(opts)
+
+    with :ok <- Config.reject_unknown(opts, Config.storage_keys()),
+         {:ok, storage} <- Config.storage(opts) do
+      storage |> Map.new() |> Map.merge(layout)
+    else
+      {:error, reason} ->
+        raise ArgumentError, "invalid migration options: #{inspect(reason)}"
+    end
+  end
+
+  defp refuse_location_column_names!(leading_columns, primary_key) do
+    columns = if primary_key, do: [:id | @location_columns], else: @location_columns
+
+    case for({name, _column} <- leading_columns, name in columns, do: inspect(name)) do
+      [] ->
+        :ok
+
+      names ->
+        raise ArgumentError,
+              "the :leading_columns option names a column the package declares: " <>
+                Enum.map_join(names, "; ", &(&1 <> " (in locations)")) <>
+                "; a host column needs a name no table this call creates declares"
+    end
   end
 
   # The versions a call walks, in the order it walks them. A span that runs

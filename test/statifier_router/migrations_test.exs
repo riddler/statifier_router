@@ -13,7 +13,7 @@ defmodule StatifierRouter.MigrationsTest do
   alias Ecto.Migrator
   alias StatifierRouter.Config
   alias StatifierRouter.Migrations
-  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Location, Subscription}
+  alias StatifierRouter.Schema.{Address, Dedupe, Ledger, Subscription}
   alias StatifierRouter.TestRepo
 
   # A host's one-line delegating migration, under a table prefix and a
@@ -42,9 +42,7 @@ defmodule StatifierRouter.MigrationsTest do
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 2, version: 2])
   end
 
-  # And what the same host writes for V03, uncapped, as the V03 upgrade in
-  # StatifierRouter.Migrations reads: on a database V01 and V02 built it
-  # walks V03 and V04 both.
+  # And what the same host writes for V03.
   defmodule MigrateKxV03 do
     @moduledoc false
     use Ecto.Migration
@@ -53,19 +51,6 @@ defmodule StatifierRouter.MigrationsTest do
 
     def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 3])
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 3, version: 3])
-  end
-
-  # And what it writes for V04. After MigrateKxV03's uncapped walk the
-  # table is already there, and V04 changes nothing; its down is what drops
-  # the table before the earlier versions roll back.
-  defmodule MigrateKxV04 do
-    @moduledoc false
-    use Ecto.Migration
-
-    @opts [table_prefix: "kx_router_", prefix: "kx_router_schema"]
-
-    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 4])
-    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 4, version: 4])
   end
 
   defmodule MigrateKx do
@@ -86,12 +71,10 @@ defmodule StatifierRouter.MigrationsTest do
   @v01_version 29_990_101_000_202
   @v02_version 29_990_101_000_203
   @v03_version 29_990_101_000_204
-  @v04_version 29_990_101_000_205
   @schema "kx_router_schema"
   @v01_tables ["kx_router_addresses", "kx_router_dedupe", "kx_router_routing_ledger"]
   @v02_tables ["kx_router_subscriptions"]
-  @v04_tables ["kx_router_locations"]
-  @tables Enum.sort(@v01_tables ++ @v02_tables ++ @v04_tables)
+  @tables Enum.sort(@v01_tables ++ @v02_tables)
   @v02_index "kx_router_subscriptions_execution_id_binding_id_invoke_id_index"
   @v03_index "kx_router_subscriptions_invocation_index"
 
@@ -138,13 +121,12 @@ defmodule StatifierRouter.MigrationsTest do
   # is called with no `:prefix`, so that row is in the repo's default
   # schema rather than under @schema.
   defp clear_leftovers do
-    # The location table first: it references the address table.
-    for table <- @v04_tables ++ (@tables -- @v04_tables) do
+    for table <- @tables do
       SQL.query!(TestRepo, ~s(DROP TABLE IF EXISTS "#{@schema}"."#{table}"), [])
     end
 
     SQL.query!(TestRepo, "DELETE FROM schema_migrations WHERE version = ANY($1)", [
-      [@version, @v01_version, @v02_version, @v03_version, @v04_version]
+      [@version, @v01_version, @v02_version, @v03_version]
     ])
 
     :ok
@@ -225,7 +207,7 @@ defmodule StatifierRouter.MigrationsTest do
   # comparison, and the run printed Ecto's out-of-order warning again;
   # restored, green.
   test "every migration here sorts above every bootstrap migration" do
-    ours = [@version, @v01_version, @v02_version, @v03_version, @v04_version]
+    ours = [@version, @v01_version, @v02_version, @v03_version]
 
     assert Enum.min(ours) > Enum.max(StatifierRouter.BootstrapMigrations.versions())
   end
@@ -270,12 +252,6 @@ defmodule StatifierRouter.MigrationsTest do
                  "binding_id",
                  "invoke_id"
                ]
-             }
-
-      assert index_columns("kx_router_locations") == %{
-               "kx_router_locations_pkey" => ["id"],
-               "kx_router_locations_address_id_index" => ["address_id"],
-               "kx_router_locations_token_index" => ["token"]
              }
     end
 
@@ -322,13 +298,6 @@ defmodule StatifierRouter.MigrationsTest do
                {"invoke_id", nil},
                {"scope", nil},
                {"key", nil},
-               {"inserted_at", nil}
-             ]
-
-      assert column_layout("kx_router_locations") == [
-               {"id", nil},
-               {"address_id", nil},
-               {"token", nil},
                {"inserted_at", nil}
              ]
     end
@@ -392,74 +361,6 @@ defmodule StatifierRouter.MigrationsTest do
 
       assert %Subscription{binding_id: "clicks_to_join", scope: "7c1e"} =
                TestRepo.get!(Config.queryable(config, Subscription), subscription.id)
-
-      location =
-        TestRepo.insert!(
-          Config.put_meta(config, %Location{
-            address_id: address.id,
-            token: "tok_" <> suffix,
-            inserted_at: now
-          })
-        )
-
-      assert %Location{token: "tok_" <> ^suffix} =
-               TestRepo.get!(Config.queryable(config, Location), location.id)
-    end
-
-    # sabotage: V04's address_id made a plain bigint with no reference ->
-    # the location outlived its address row, red; restored, green.
-    test "deletes an address row's location with it", %{config: config} do
-      suffix = unique_suffix()
-
-      address =
-        TestRepo.insert!(
-          Config.put_meta(config, %Address{
-            scope: "7c1e",
-            document: "parcel_route",
-            key: "pcl_" <> suffix,
-            execution_id: "ex_" <> suffix
-          })
-        )
-
-      location =
-        TestRepo.insert!(
-          Config.put_meta(config, %Location{address_id: address.id, token: "tok_" <> suffix})
-        )
-
-      TestRepo.delete!(Config.put_meta(config, address))
-
-      assert TestRepo.get(Config.queryable(config, Location), location.id) == nil
-    end
-
-    # sabotage: V04's token index made a plain index -> the second insert
-    # succeeded, red; restored, green.
-    test "refuses a second location with one token", %{config: config} do
-      suffix = unique_suffix()
-
-      [first, second] =
-        for key <- ["pcl_a_" <> suffix, "pcl_b_" <> suffix] do
-          TestRepo.insert!(
-            Config.put_meta(config, %Address{
-              scope: "7c1e",
-              document: "parcel_route",
-              key: key,
-              execution_id: "ex_" <> key
-            })
-          )
-        end
-
-      TestRepo.insert!(
-        Config.put_meta(config, %Location{address_id: first.id, token: "tok_" <> suffix})
-      )
-
-      error =
-        assert_raise Ecto.ConstraintError, fn ->
-          TestRepo.insert!(
-            Config.put_meta(config, %Location{address_id: second.id, token: "tok_" <> suffix})
-          )
-        end
-
-      assert error.constraint == "kx_router_locations_token_index"
     end
 
     # sabotage: V01's addresses unique index made a plain index -> the
@@ -552,20 +453,12 @@ defmodule StatifierRouter.MigrationsTest do
       # Inclusive of `from`: this call runs V02 itself, and only V02 - a
       # walk that included V01 would raise on the tables already there.
       :ok = migrate_step(:up, @v02_version, MigrateKxV02)
-      assert tables_present() == Enum.sort(@v01_tables ++ @v02_tables)
+      assert tables_present() == @tables
 
       :ok = migrate_step(:up, @v03_version, MigrateKxV03)
       assert Map.has_key?(index_columns("kx_router_subscriptions"), @v03_index)
-      assert tables_present() == @tables
-
-      # V04 was walked already; running it again changes nothing.
-      :ok = migrate_step(:up, @v04_version, MigrateKxV04)
-      assert tables_present() == @tables
 
       # And back down the same way, one version at a time.
-      :ok = migrate_step(:down, @v04_version, MigrateKxV04)
-      assert tables_present() == Enum.sort(@v01_tables ++ @v02_tables)
-
       :ok = migrate_step(:down, @v03_version, MigrateKxV03)
       assert Map.has_key?(index_columns("kx_router_subscriptions"), @v02_index)
 
@@ -617,8 +510,8 @@ defmodule StatifierRouter.MigrationsTest do
     # sabotage: validate_version! accepted any integer -> the call reached
     # the DDL and raised RuntimeError, red; restored, green.
     test "a version this package does not know raises" do
-      assert_raise ArgumentError, ~r/unknown migration version 5/, fn ->
-        Migrations.up(version: 5)
+      assert_raise ArgumentError, ~r/unknown migration version 4/, fn ->
+        Migrations.up(version: 4)
       end
 
       assert_raise ArgumentError, ~r/unknown migration from 0/, fn -> Migrations.down(from: 0) end
