@@ -574,6 +574,75 @@ event id. The example above assumes the second remedy, a provider that
 sends an event id: it passes the provider's `x-provider-event-id` header
 as `provider_id`, so the body hash is only its fallback.
 
+## A form-post front
+
+A host's own web form reaches the same `handle/3`. The shape is the webhook
+front's with three differences: the host verifies its own post rather than
+a provider's signature, the scope comes from the host rather than from
+anything posted, and there is no provider event id.
+
+**The host verifies its own post.** Its session, its CSRF token, whatever
+its framework checks: this package verifies nothing here either. Below, a
+library's patron registration form posts to the host's controller:
+
+```elixir
+def create(conn, %{"patron" => fields}) do
+  with :ok <- MyApp.Forms.verify(conn) do
+    answer =
+      StatifierRouter.Webhook.handle(MyApp.Router.config(), %{
+        # The host's session or route, never the posted body.
+        scope: conn.assigns.scope,
+        source: "patron_registration_form",
+        raw_body: conn.assigns.raw_body,
+        data: fields
+      })
+
+    case StatifierRouter.Webhook.status(answer) do
+      200 -> redirect(conn, to: ~p"/registration/thanks")
+      500 -> conn |> put_status(500) |> text("Please try again.")
+    end
+  else
+    {:error, _reason} -> conn |> put_status(403) |> text("Forbidden")
+  end
+end
+```
+
+A post that fails the host's check never reaches the router: the `else`
+answers `403` and nothing is routed.
+
+**The scope is the host's.** A scope read from the posted body is a scope
+the browser chose; the scope comes from the host's session or route.
+
+**`raw_body` is the bytes as posted.** A form post has usually been parsed
+before the action runs, so the body is already read; a host keeps the bytes
+with `Plug.Parsers`' `:body_reader` option. An empty `raw_body` hashes to
+one constant id, so every submission would be the same message.
+
+**`provider_id` is absent, so the message id is the lowercase hex SHA-256
+of the raw body.** Two identical submissions are one message within one
+binding for that binding's dedupe horizon: a double-clicked submit is
+routed once, and the second's outcome is `{:duplicate, binding_id}`. The
+hash covers every posted byte, a CSRF token field included when the form
+carries one, so whether a later resubmission is a new message depends on
+whether the form it came from posted the same bytes. The body hash is also
+scope-free, as the webhook
+front warns: the same body posted under two scopes through one shared
+binding is one message, and nothing reaches the second scope's execution.
+A form has no provider event id to fall back on, so the remedy is the
+other one: each scope gets its own binding, through a `:bindings_resolver`
+(see "Bindings that differ by scope") that answers a binding `id` of the
+scope's own.
+
+**`status/1` is read for a browser, not for a provider's retry.** It
+answers `200` for every recorded outcome and `500` for an `{:error, _}`,
+nothing else. `200` is a redirect or a thank-you page; it says the post
+was recorded, not that an execution received it, since a duplicate, a
+drop, a refusal and a no-match are `200` too, and a host that tells the
+patron more reads the outcomes in `answer` itself. `500` is an error page:
+the attempt did not settle, and the patron may post again. The failed
+verification is the host's own answer (`403` above), never a status from
+this package.
+
 ## Resolving a document to its chart
 
 This package keeps no publish store, so which chart a new execution of a
