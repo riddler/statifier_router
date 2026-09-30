@@ -138,8 +138,10 @@ defmodule StatifierRouter.Migrations do
   A configuration that sets `:basichttp` keeps each address row's
   BasicHTTP location token in a table of its own, which
   `StatifierRouter.Migrations.V04` creates (ADR-0002, the Amendment of
-  2026-09-30). A host that never sets the key does not need it, so V04
-  is not in the version walk: `up/1` and `down/1`, capped or not, never
+  2026-09-30 on the BasicHTTP location, decision 1). A host that never
+  sets the key does not need it, so V04 is not in the version walk
+  (ADR-0002, the Amendment of 2026-09-30 "the location table is opt-in,
+  outside the version walk"): `up/1` and `down/1`, capped or not, never
   create, drop or require it, and every call above answers as it did
   before V04 existed. A host that sets the key runs it with its own two
   calls, `up_locations/1` and `down_locations/1`, in a migration of its
@@ -274,7 +276,9 @@ defmodule StatifierRouter.Migrations do
 
   @doc """
   Creates the location table `StatifierRouter.Migrations.V04` describes,
-  outside the version walk (see "The location table, V04, is opt-in").
+  outside the version walk (see "The location table, V04, is opt-in",
+  and ADR-0002, the Amendment of 2026-09-30 "the location table is
+  opt-in, outside the version walk").
   Takes the storage options, the layout options and `:primary_key`; a
   `:from`, a `:version` or any other key raises `ArgumentError`, as a
   leading column named like one of the table's own columns does, before

@@ -43,7 +43,9 @@ defmodule StatifierRouter.Migrations.V04 do
   `:basichttp` sees every migration answer as before V04 existed. A host
   that sets the key runs it through `StatifierRouter.Migrations.up_locations/1`
   and `StatifierRouter.Migrations.down_locations/1` (that module's "The
-  location table, V04, is opt-in").
+  location table, V04, is opt-in"), as ADR-0002, the Amendment of
+  2026-09-30 "the location table is opt-in, outside the version walk",
+  decides.
 
   `up/1` creates the table and its indexes only where they do not exist
   yet, and `down/1` drops the table only if it is there, as V03 renames

@@ -1121,8 +1121,9 @@ existed, and on a fresh one it finds the index already renamed.
 index names.
 
 V04, the location table a configuration with `:basichttp` keeps its
-tokens in (see "A BasicHTTP front"), is opt-in: it is not in the version
-walk, so `up/1` and `down/1`, capped or not, never create, drop or
+tokens in (see "A BasicHTTP front"), is opt-in (ADR-0002, the Amendment
+of 2026-09-30 "the location table is opt-in, outside the version walk"):
+it is not in the version walk, so `up/1` and `down/1`, capped or not, never create, drop or
 require it, and every migration above behaves exactly as it did before
 V04 existed. A host that does not set the key needs nothing. One that
 does adds a migration of its own after the ones it has:
