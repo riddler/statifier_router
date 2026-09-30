@@ -3,8 +3,9 @@ defmodule StatifierRouter.SQLiteReapTest do
   # against a database file of each test's own, under the default key and
   # under a text key built with the :primary_key option. The execution
   # statuses come from StatifierRouter.StatusStore: the repo holds only the
-  # router's tables.
-  use ExUnit.Case, async: true
+  # router's tables. In the :sqlite_repo group with
+  # StatifierRouter.SQLiteMigrationsTest: both start the one repo process.
+  use ExUnit.Case, async: true, group: :sqlite_repo
 
   import Ecto.Query, only: [from: 2]
 
