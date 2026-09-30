@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.0/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.1/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.9.1] 2026-09-30
+
+Patch release: the package's migrations run on SQLite again. Migration V03, which renames the subscription index on Postgres, now does nothing on SQLite, where the index already holds the name V02 gave it; before this release its `ALTER INDEX` failed the migration of a SQLite host on 0.8.0 and later. A Postgres host changes nothing, and no public function, option or migration version is added or changed.
+
+### Fixed
+
+- Migration V03 runs on SQLite, where it now does nothing: SQLite never
+  shortened the subscription index name V03 renames on Postgres. V03's
+  `ALTER INDEX`, which SQLite does not have, failed the migration of a
+  SQLite host on 0.8.0 and later.
 
 ## [0.9.0] 2026-09-30
 
