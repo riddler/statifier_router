@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.1/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.2/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.9.2] 2026-09-30
+
+Patch release: `StatifierRouter.Addresses.reap/3` runs on SQLite. Its stamp and delete name their rows in an IN list both adapters take, in place of Postgres's `= ANY(...)`, and a stamp or delete of more than 500 rows is written in batches of 500, one statement each. A Postgres host sees the same counts, and no public function, option or migration version is added or changed.
+
+### Fixed
+
+- `StatifierRouter.Addresses.reap/3` runs on SQLite: its stamp and delete
+  no longer use Postgres's `= ANY(...)`, which failed any reap of a SQLite
+  host on 0.8.0 and later that found a row to stamp or delete, under an
+  integer or a text key; a reap with nothing to write sent no statement.
 
 ## [0.9.1] 2026-09-30
 
