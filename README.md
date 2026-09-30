@@ -565,6 +565,15 @@ included - so the provider stops retrying, and `500` for an `{:error, _}`,
 so it retries. The request's `selector` is carried for the host's own front
 and is never read here: bindings are chosen by source alone.
 
+A body-hash id is scope-free: the dedupe key is the binding and the message
+id, and a binding carries no scope, so the same body under two scopes
+through one shared binding is one message, and nothing reaches the second
+scope's execution. A host that routes several scopes through one front
+either gives each scope its own binding or uses a provider that sends an
+event id. The example above assumes the second remedy, a provider that
+sends an event id: it passes the provider's `x-provider-event-id` header
+as `provider_id`, so the body hash is only its fallback.
+
 ## Resolving a document to its chart
 
 This package keeps no publish store, so which chart a new execution of a
