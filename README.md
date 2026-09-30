@@ -716,6 +716,48 @@ With neither set, the delivery calls statifier_persistence itself.
 `StatifierRouter.Config`'s documentation says what each receives and what an
 error from it rolls back.
 
+A host that wraps every step in a tenancy context of its own (process state
+that its repo and its rows read) can set that context in the hook's body. It
+then covers the create or the step and what they write through the
+configuration's repo, and nothing else the delivery does. The delivery's
+transaction on the configuration's repo and its savepoint are open before
+either hook is called (`StatifierRouter.Delivery.deliver/4`), and these run
+in the router's own context, outside the hook's body:
+
+- the dedupe claim (`StatifierRouter.Dedupe.claim/4`);
+- the address row's read, and its insert under `create: :if_absent`, with
+  the `:execution_id` call that mints the new id;
+- the read of an existing execution's status
+  (`StatifierPersistence.Storage.fetch_execution/2`);
+- the `:resolver` and `:chart_resolver` calls;
+- the `:on_complete` route's delivery of a finished execution's donedata;
+- the update that stamps the address row's `terminal_seen_at` once its
+  execution has finished;
+- the ledger row.
+
+`StatifierRouter.route/3` also asks the `:bindings_resolver` for the
+bindings and writes a `key_refused` ledger row with no delivery transaction
+open at all. So a context held in the process reaches the create and the
+step only; a transaction-local database setting made inside the hook
+reaches the writes that come after it in the same transaction but never the
+claim or the address row before it; and a session-level setting outlives
+the delivery on the pooled connection.
+
+Two existing seams reach further. The configuration's `:delivery` option
+names a module whose `deliver/4` can set the context and then call
+`StatifierRouter.Delivery.deliver/4`, which wraps one binding's delivery
+whole, claim to ledger row. And a host that calls `StatifierRouter.route/3`
+or `StatifierRouter.Webhook.handle/3` itself can wrap the call in its own
+transaction on the configuration's repo: the delivery's transaction nests
+into it. Neither reaches every door. `StatifierRouter.Broadway` calls
+`route/3` itself, so a pipeline has no host transaction around it, and its
+partitioner asks the `:bindings_resolver` too; the `key_refused` row is
+written by `route/3`, outside the `:delivery` module; and a send to an
+execution target is delivered by `StatifierRouter.Delivery.deliver_event/4`
+inside the sending step, never through the `:delivery` module, whichever
+scope the target is in. There is no one seam today that wraps a whole
+delivery on every door; that gap is open, left for a later decision.
+
 ### Minting the execution id
 
 By default every execution the router creates gets a UXID with the prefix
