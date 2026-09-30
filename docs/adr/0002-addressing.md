@@ -881,3 +881,339 @@ under `lib/` or `test/`:
 - The 0.8.0 section of `CHANGELOG.md` names the option,
   `StatifierRouter.Schema.Id` and the text-keyed sweep, and says that
   the option left out changes nothing.
+
+## Amendment (2026-09-30, sr-xgi8): a durable execution's BasicHTTP location is a rotatable token the router mints, and the front that answers at it
+
+Status: proposed
+
+statifier 2.10.0 ships the W3C Basic HTTP Event I/O Processor,
+`Statifier.Send.BasicHTTP`, with a pure inbound decoder, and its record
+places the front that delivers to a persisted execution in this package
+(st-ADR-0075, `docs/adr/0075-basichttp-event-io-processor.md` in
+statifier-ex, decision 1, read at its `v2.10.0` tag). That record leaves
+two things to this package's own record: "Whether a durable execution's
+location carries more than its id, and whether a front authenticates the
+POST" (its decision 3). Both were ruled by the operator, 2026-09-30:
+
+> the location of a durable execution carries an unguessable, rotatable
+> per-execution token minted by the router, never the bare execution id;
+> the front authenticates nothing beyond possession of the location, and
+> the docs say plainly that a location is a bearer capability.
+
+Resolving a location to an execution is an address-table read, so the
+decision is this record's. This Amendment decides what the ruling leaves
+open: how the token is minted, stored, rotated and resolved, how an
+execution's `_ioprocessors` entry comes to carry it, and what the front
+is. Code cites in this package are read at `bb292c8`; statifier cites at
+its `v2.10.0` tag; statifier_persistence cites at 0.18.0, the version
+this package's `mix.lock` resolves.
+
+**What bounds it.**
+
+- **The stock processor writes the session id into the location.**
+  `Statifier.Send.BasicHTTP.ioprocessors_entry/2` answers `%{"location"
+  => base_url <> "/" <> session_id}` from the registration's `:base_url`
+  and the entry context's `session_id`.
+- **The entry is written once, when the execution starts.**
+  `Statifier.Evaluator.SystemVariables`' moduledoc: the entries "are
+  written here, once, when the session starts, and nowhere else"; a
+  persisted position carries them, and `MachineState.put_send_types/2`,
+  the re-stamp on every later drive, "does not rewrite `_ioprocessors`".
+  ADR-0005, section 6 already says the create-side snapshot must travel
+  inside `initialize:` for the same reason.
+- **An execution this package creates has no session id of its own
+  choosing.** `StatifierRouter.Delivery`'s private `create_options/1`
+  hands `create/4` the configuration's `:persistence_options` under
+  `initialize:` and nothing else;
+  `StatifierPersistence.Executions.create/4` passes `initialize:` to
+  `Statifier.Interpreter.initialize/2`, which passes it straight to
+  `Statifier.MachineState.new/2`, whose `:session_id` defaults to a
+  freshly generated `sess_` id. The stock location therefore names an id
+  the address table does not hold, so the stock registration cannot
+  serve a durable execution whatever the ruling said.
+- **The decoder and its status rule.** `Statifier.Send.BasicHTTP.decode/1`
+  takes `:method`, `:content_type`, `:body`, `:query` and an optional
+  `:send_key` and answers `{:ok, %Statifier.Event{}}` or `{:error,
+  reason}`. st-ADR-0075, decision 5 gives the statuses: 204 once the
+  event is enqueued, 405 with `Allow: POST` for
+  `{:method_not_allowed, method}`, 400 for any other decode error, and
+  404, the front's own, for a location that reaches nothing. Its
+  Amendment of 2026-09-30 puts the send's key in the `scxml-send-key`
+  header, makes delivery at-least-once, and says this package's durable
+  front "is the one that will" deduplicate on it.
+- **A delivery of a prebuilt event already has a door.**
+  `StatifierRouter.Delivery.deliver_event/4` takes a plan, a key and an
+  envelope carrying the event, and settles it in the one transaction
+  ADR-0003, section 1 describes: the dedupe claim, the address lookup,
+  `step/5`, the ledger row (ADR-0006, section 2).
+- **Every address read selects every declared column.**
+  `StatifierRouter.Schema.Address` declares section 1's columns, and an
+  Ecto query over it selects each of them.
+
+### 1. The token: minted by the router, stored in a table of its own, one per address row
+
+- **What it is.** 32 bytes from `:crypto.strong_rand_bytes/1`, written as
+  unpadded URL-safe base64: 43 characters from `A-Z a-z 0-9 - _`, 256
+  bits, a single path segment with nothing to escape. It is derived from
+  nothing: not the address, not the execution id, not the scope. Two
+  tokens, for one execution or two, are unrelated, as two execution ids
+  are under section 3.
+- **Where it is stored.** A new table, `locations` under the host's table
+  prefix, created by a new migration version, `StatifierRouter.Migrations.V04`.
+  Its columns are the implicit `id` (typed by the `:primary_key` option
+  as V01's tables are), `address_id`, a reference to the address row's
+  `id` with `ON DELETE CASCADE`, `token` and `inserted_at`. `address_id`
+  and `token` each carry a unique index. The layout options of the sr-cgw
+  Note and the `:primary_key` option of the sr-w58a Amendment apply to it
+  on V01's terms; the reference column takes the address table's key
+  type, so a host that built V01 with `:primary_key` passes the same
+  option to V04.
+- **Why a table and not a column on the address row.** A column would be
+  declared on `StatifierRouter.Schema.Address`, so every address read -
+  every delivery - would select it, and a host that took this release
+  without running V04 would fail on every delivery. A table of its own is
+  read and written only when the configuration sets the key of decision
+  4, so a host that does not use BasicHTTP needs no migration.
+- **It is stored as minted.** The location is already in the execution's
+  own datamodel (`_ioprocessors`, decision 4), which statifier_persistence
+  keeps in the same database, so a hashed column would hide nothing from a
+  reader of that database and would leave `location/2` (decision 2)
+  nothing to answer.
+- **When it is minted.** Inside the delivery's transaction, when an
+  `:if_absent` insert of an address row is the insert that wrote the row
+  (the private `insert_or_existing/4` of `StatifierRouter.Delivery`), and
+  only when the configuration sets decision 4's key: the location row is
+  inserted beside it, before `create/4`. A delivery that loses the race
+  for the address mints a token that is never written, as its execution
+  id is never written (the sr-1b2 Amendment's "A mint that is not used").
+  A delivery that rolls back to its savepoint takes the location row with
+  the address row. This covers every path that creates under an address:
+  a binding's delivery and an execution-to-execution send (ADR-0006,
+  section 2) alike.
+- **An `always_new` execution has no location.** It has no address row
+  (section 7), so it has nothing a location row can reference, and the
+  front delivers only through an address (decision 3). Its `_ioprocessors`
+  entry carries no `"location"` key (decision 4). Section 7's closing
+  sentence stands undecided.
+- **A row with no location.** An address row written before this release,
+  or while the key was unset, has no location row, and its execution's
+  `_ioprocessors` has no BasicHTTP entry at all, since the entries were
+  written at its start. Decision 2's rotation gives such a row a location
+  the front resolves; the execution's own `_ioprocessors` stays as it
+  started.
+
+### 2. Rotation: a plain function the host calls, after which the old token reaches nothing
+
+- **The function.** `StatifierRouter.BasicHTTP.rotate_location/2` takes the
+  configuration and an execution id, reads that execution's address row
+  (`StatifierRouter.Addresses.by_execution/2`), mints a new token as
+  decision 1 does, and writes it in one statement that inserts the row's
+  location or replaces its token. It answers `{:ok, location}`, the new
+  location string, or `{:error, {:no_address, execution_id}}` when no
+  address row names the execution, which is what an `always_new`
+  execution answers. `StatifierRouter.BasicHTTP.location/2` reads the
+  current location the same way and answers `{:ok, location}` or
+  `{:error, :no_location}`.
+- **What an old token answers.** Once the rotation commits, the old token
+  resolves nothing, and a POST to it is answered as an unknown location:
+  404 (decision 5).
+- **What rotation does not reach.** The execution's own `_ioprocessors`
+  entry was written when it started and is never rewritten (the
+  SystemVariables moduledoc, quoted above: "and nowhere else"). After
+  a rotation the chart still reads the location it started with, which
+  now answers 404. A host that
+  rotates hands the location `rotate_location/2` answers to whoever
+  should hold it; a chart that sends its own location to a peer after a
+  rotation sends a dead one. Changing that needs a statifier change and
+  is not assumed here.
+- **The same stands for a moved base URL.** `location/2` and
+  `rotate_location/2` build the location from the configuration's current
+  base URL; the chart keeps the one it started with, as st-ADR-0075's
+  decision 9 table notes for a live session.
+- **No process.** Nothing rotates on a schedule; the host calls it, as it
+  schedules `reap/2` (section 6).
+
+### 3. Resolution: the token names an address row, and delivery is the door that already exists
+
+- **The read.** The front reads the location row whose `token` equals the
+  request's token, with the address row it references. The address row
+  gives the `(scope, document, key)` and the `execution_id`. A token with
+  no row, or a string that is not 43 characters of the token's alphabet,
+  is an unknown location. So is an address row whose `terminal_seen_at` is
+  set: the execution is terminal, the front delivers nothing and writes
+  nothing, and a retry of a POST that found it terminal is answered as the
+  first answer was (decision 5).
+- **The delivery.** The event is delivered through
+  `StatifierRouter.Delivery.deliver_event/4` with the plan `%{id:
+  "basichttp", document: row.document, create: :never, dedupe: %{by:
+  :message_id, horizon_ms: 259_200_000}}`, the row's `key`, and an
+  envelope whose `scope` is the row's. That is the same transaction, the
+  same address lookup, the same dedupe claim and the same ledger row every
+  delivery uses; the front has no write path of its own to the address,
+  dedupe or ledger tables. `create: :never` because a location reaches an
+  execution that exists and never makes one. The horizon is ADR-0001,
+  section 1's default, the one ADR-0006, section 2 takes for the same
+  reason: no binding supplies one.
+- **The name `basichttp` on the ledger and the dedupe claim.** It is the
+  plan's `id`, so the ledger row's `binding_id` and the dedupe row's
+  claimant are `basichttp`, which tells a front row from a binding's and
+  from an execution-to-execution send's (`execution`, ADR-0006, section
+  2). It is reserved on ADR-0006, section 2's terms, but only on a
+  configuration that sets decision 4's key: there, a binding whose `id`
+  is `basichttp`, given or resolved, is refused as
+  `{:reserved_binding_id, "basichttp"}`. `StatifierRouter.Config.new/1`
+  refuses every key it does not know as `{:unknown_key, name}`, so a
+  configuration carrying the new key was refused before this release, and
+  no configuration it accepted before is refused after it.
+- **Never a route.** The front is reached by an inbound HTTP request, not
+  by a `<send>`: it consults no route registry, and ADR-0005, decision 1
+  is unchanged - a route's `target` is a route name, and a URL there stays
+  refused. BasicHTTP's outbound half is the send type of decision 4, not a
+  route. ADR-0006, section 1's reserved name `execution` is neither used
+  nor changed.
+- **The scope a route sees.** The step runs with the row's scope set as
+  a binding's delivery sets it, so a route override a step's route reads
+  is the addressed execution's scope's.
+
+### 4. The location string: a processor this package owns, registered by the configuration
+
+- **The processor.** `StatifierRouter.BasicHTTP` implements
+  `Statifier.Send.Processor`. Its `ioprocessors_entry/2`, the optional
+  callback statifier 2.10.0 asks when a module exports it, answers
+  `%{"location" => base_url <> "/" <> token}` from the registration's
+  `:base_url` and `:location_token` options, and `%{}`, an entry with no
+  `"location"`, when no token is in the options. Its `deliver/3`,
+  `cancel/2` and `perform/2` hand each call to `Statifier.Send.BasicHTTP`
+  unchanged, so the outbound half is statifier's processor as that record
+  decides it.
+- **The configuration key.** `StatifierRouter.Config` takes one optional
+  key, `:basichttp`, a keyword list with `:base_url`, a non-empty string,
+  required, and `:transport`, a module, optional, both handed to the
+  registration as statifier's processor reads them. When it is set, the
+  snapshot the configuration builds (ADR-0005, section 6 and its sr-mqzz
+  Amendment of 2026-09-26) registers `StatifierRouter.BasicHTTP` under the
+  processor's URI, `http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor`,
+  and its short form `basichttp` (st-ADR-0075, decision 2), with those
+  options. A `:send_handlers` entry under either string is refused as
+  `{:declared_send_types, type}`, and the key beside a `:send_types` of
+  the host's own in `:persistence_options` is refused as `{:exclusive_keys,
+  :basichttp, :send_types}`: the token can be added only to a snapshot
+  this package builds.
+- **How the token reaches the entry.** On the create of decision 1, the
+  snapshot handed to `create/4` inside `initialize:` is built with
+  `Statifier.Send.Types.from_send_types/1` from the same registrations,
+  with `location_token:` added to `StatifierRouter.BasicHTTP`'s options.
+  Every step carries the configuration's own snapshot, without the token.
+  Both register the same type strings to the same modules; the one option
+  they differ in is read only by `ioprocessors_entry/2`, which statifier
+  calls only when the execution starts. Only statifier 2.10.0's public
+  surface is used: `from_send_types/1` with a `{module, opts}` value and
+  the optional `ioprocessors_entry/2` callback.
+- **A host that registers statifier's processor itself** in a `:send_types`
+  of its own gets statifier's location, the base URL and the session id.
+  The front never resolves a session id or an execution id, so a POST
+  there is answered 404.
+- **What is not decided here.** What an outbound BasicHTTP send from a
+  durable execution does at the executor seam, and whether its delayed
+  POST survives a resume, is statifier's processor and the executor's,
+  and is left to a later record.
+
+### 5. The front: a plain function beside the webhook helper
+
+`StatifierRouter.BasicHTTP.Front` is Plug-shaped and not a Plug, as
+`StatifierRouter.Webhook` is: no dependency on Plug or Phoenix, and no
+process. `handle/3` takes the configuration, a request map and the
+options `deliver_event/4`'s caller passes (`:now`), and answers `{:ok,
+outcome}` or `{:error, reason}`; `response/1` maps that answer to a status
+and the headers to send with it.
+
+- **The request.** `:token`, the path segment after the base URL, which
+  the host cuts from the request path; and `:method`, `:content_type`,
+  `:body`, `:query` and `:send_key`, the value of the `scxml-send-key`
+  header or `nil`, handed to `decode/1` as they are. A request missing a
+  key or carrying one of the wrong type is `{:error, {:invalid_request,
+  keys}}`, naming the keys and never the token.
+- **The order.** The request is checked, then the token is resolved
+  (decision 3), then the request is decoded, then the event is delivered.
+  A request that fails before the delivery writes nothing, and no ledger
+  row records it: before the token resolves there is no scope, and the
+  ledger's `scope` is `NOT NULL` (ADR-0006, section 6 meets the same
+  gap). While a route is running in the calling process the front refuses
+  with `{:error, {:reentrant_route, execution_id}}` before it resolves
+  anything, as `StatifierRouter.Delivery.deliver/4` does.
+- **Deduplication.** With a send key, the dedupe claim's message id is
+  the execution id, `/`, and the key. The key is exactly eight
+  `/`-separated fields (the decoder refuses any other), so the split is
+  unambiguous whatever the execution id holds, and a key is deduplicated
+  per execution: the same key POSTed to two executions is two messages. A
+  request already enqueued within the horizon is a duplicate, answered 204
+  with nothing enqueued, which is what st-ADR-0075's Amendment asks of
+  this front. Without a send key, the message id is minted fresh for the
+  request, so every such POST is delivered. The key is the sender's
+  claim, trusted as far as the location is: a holder of the location who
+  sends a key another sender will use suppresses that sender's event to
+  the same execution, and nothing else.
+- **The statuses.**
+
+| `handle/3` answers | status | headers |
+|---|---|---|
+| `{:ok, {:delivered, "basichttp", execution_id}}` | 204 | none |
+| `{:ok, {:duplicate, "basichttp"}}` | 204 | none |
+| `{:ok, {:dropped, "basichttp", :finished}}` | 404 | none |
+| `{:ok, {:dropped, "basichttp", :no_execution}}` | 404 | none |
+| `{:error, :unknown_location}` | 404 | none |
+| `{:error, {:method_not_allowed, method}}` | 405 | `allow: POST` |
+| any other decode error | 400 | none |
+| any other `{:error, reason}` | 500 | none |
+
+  `deliver_event/4` does not take `dropped: unmatched_event`
+  (`StatifierRouter.Delivery`'s moduledoc), so an event the execution
+  selects no transition for is delivered and answered 204, which is
+  C.2.1's "after it adds the received
+  message to the appropriate event queue". `dropped: finished` commits its
+  dedupe row and stamps `terminal_seen_at`, so a retry of that POST is
+  resolved as an unknown location by decision 3's terminal rule and
+  answered 404 again, not 204 as a duplicate. `dropped: no_execution` is
+  an address row reaped between the read and the delivery; its location
+  row went with it by the cascade. `created_and_delivered` cannot occur
+  under `create: :never`. A 500 is a delivery that did not settle, and a
+  sender may retry it.
+- **The token is not repeated.** No ledger row, dedupe row or error the
+  front returns carries the token.
+
+### 6. A location is a bearer capability
+
+The docs of `StatifierRouter.BasicHTTP`, `StatifierRouter.BasicHTTP.Front`
+and the README say, in these words or plainer: a location is a bearer
+capability. Anyone who holds it can post events to that execution, and
+the router authenticates nothing beyond possession of the location, as
+ruled by the operator, 2026-09-30. Hand a location only to the parties
+that should reach the execution, keep it out of logs and URLs shown to
+others, serve the base URL over TLS, and rotate it with
+`rotate_location/2` when it may have leaked.
+
+### What sections 1 to 8 still say
+
+- The address table's columns, its unique index, and its two writers
+  (section 8) are unchanged. The location table is written by the
+  delivery's create (decision 1) and by `rotate_location/2`, and its rows
+  are deleted by the cascade when `reap/2` deletes the address row they
+  reference; `reap/2`'s code and its answer are unchanged, and its
+  `deleted` counts address rows only. It is read by the front and by
+  `location/2`.
+- Section 3's execution id and the sr-1b2 Amendment's host mint are
+  unchanged: the token is minted beside the id and never replaces it.
+- **Absent is today.** With `:basichttp` left out, no location row is
+  written, the snapshot is built exactly as before, no binding id is
+  refused that was accepted before, and nothing reads or writes the
+  location table, so a host that never sets the key does not need V04.
+
+**Where the code is.** In the pull request that implements this
+Amendment, which cites it: `StatifierRouter.BasicHTTP`,
+`StatifierRouter.BasicHTTP.Front`, the location schema and
+`StatifierRouter.Migrations.V04` as new modules;
+`StatifierRouter.Config` for the key, its refusals and the conditional
+reservation; `StatifierRouter.Delivery` for the mint on the winning
+insert and the create's snapshot; `StatifierRouter.Migrations` for the
+new version; and `mix.exs`, which requires statifier at the published
+version that ships the decoder, never a git or path pin.
