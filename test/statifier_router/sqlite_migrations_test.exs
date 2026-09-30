@@ -1,8 +1,9 @@
 defmodule StatifierRouter.SQLiteMigrationsTest do
   # The version walk on SQLite, through ecto_sqlite3, against a database
-  # file of each test's own: no Postgres, no SQL sandbox, nothing shared
-  # with the rest of the suite.
-  use ExUnit.Case, async: true
+  # file of each test's own: no Postgres, no SQL sandbox. The one repo
+  # process runs under the module's name, so every module that starts it
+  # is in the :sqlite_repo group, whose modules never run at once.
+  use ExUnit.Case, async: true, group: :sqlite_repo
 
   alias Ecto.Adapters.SQL
   alias Ecto.Migrator
