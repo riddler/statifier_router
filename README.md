@@ -934,7 +934,9 @@ tables and V02's subscription table - so `branch_id` above sits at
 ordinal position 2 on all four. The options are the migration's, not
 `StatifierRouter.Config`'s: the configuration a host routes with does
 not take them. `down/1` accepts the same list and ignores it, so one
-list serves both directions.
+list serves both directions. The opt-in location table (V04, "Upgrading
+the tables" below) is outside that walk: `up_locations/1` takes the same
+list and places the columns there the same way.
 
 A name a table the call creates already declares is refused: a
 `:leading_columns` entry named like any column
@@ -1050,7 +1052,10 @@ The option takes `:type`, required, and `:default`, optional, each what
 `Ecto.Migration.add/3` takes, and builds the `id` of every table a
 version creates - V01's address, dedupe and routing ledger tables and
 V02's subscription table - with them, in place of the repo's key for
-these tables alone. The column is always named `id`.
+these tables alone. The column is always named `id`. The opt-in location
+table is outside the version walk; `up_locations/1` takes the same
+option, and a host that sets it for V01 passes it there too, since the
+location table's `address_id` takes the address table's key type.
 
 - **The database fills the id in.** The package inserts no id of its
   own, so the key needs a default: a function, a sequence, or an
@@ -1115,27 +1120,29 @@ existed, and on a fresh one it finds the index already renamed.
 `StatifierRouter.Migrations` says what a long `:table_prefix` does to the
 index names.
 
-V04 creates the location table a configuration with `:basichttp` keeps
-its tokens in (see "A BasicHTTP front"). A host that does not set the key
-never reads or writes it and does not need the migration; one that does
-adds:
+V04, the location table a configuration with `:basichttp` keeps its
+tokens in (see "A BasicHTTP front"), is opt-in: it is not in the version
+walk, so `up/1` and `down/1`, capped or not, never create, drop or
+require it, and every migration above behaves exactly as it did before
+V04 existed. A host that does not set the key needs nothing. One that
+does adds a migration of its own after the ones it has:
 
 ```elixir
 defmodule MyApp.Repo.Migrations.AddStatifierRouterLocations do
   use Ecto.Migration
 
-  def up, do: StatifierRouter.Migrations.up(from: 4)
-  def down, do: StatifierRouter.Migrations.down(from: 4, version: 4)
+  def up, do: StatifierRouter.Migrations.up_locations()
+  def down, do: StatifierRouter.Migrations.down_locations()
 end
 ```
 
-with the same `:table_prefix`, `:prefix` and `:primary_key` its earlier
-migrations pass. A first migration with no `version:` builds V04 on a
-fresh database too, an empty table until the key is set. V04 creates
-only what is missing, so the V03 migration above, which walks every later
-version, and this one both run cleanly on a fresh database. The table
-references the address table, so a rollback that drops the earlier
-versions' tables runs this migration's `down` first.
+with the same `:table_prefix`, `:prefix`, layout options and
+`:primary_key` its earlier migrations pass; the two calls take no
+`:from` or `:version`. `up_locations/1` creates only what is missing and
+`down_locations/1` drops the table only if it is there. The table
+references the address table, so it has to go before V01's tables do:
+as a later migration, this one is rolled back first, which is the order
+Ecto's rollback takes.
 
 ## A host that wraps the engine
 

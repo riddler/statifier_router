@@ -67,10 +67,10 @@ defmodule StatifierRouter.BootstrapMigrations do
 
     alias StatifierRouter.Migrations
 
-    # What a host already at V03 writes for V04: the location table a
-    # configuration with `:basichttp` keeps its tokens in.
-    def up, do: Migrations.up(from: 4, version: 4)
-    def down, do: Migrations.down(from: 4, version: 4)
+    # What a host that sets `:basichttp` writes for the opt-in location
+    # table, V04, after the migrations it already has.
+    def up, do: Migrations.up_locations()
+    def down, do: Migrations.down_locations()
   end
 
   defmodule PersistenceTables do

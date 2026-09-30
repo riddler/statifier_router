@@ -38,18 +38,18 @@ defmodule StatifierRouter.Migrations.V04 do
   foreign key type, which matches the address table's `id` when V01 was
   built without the option too.
 
-  A host already running V03 reaches this version with
-  `StatifierRouter.Migrations.up(from: 4)`: `from:` names the first
-  version the host has **not** run and the walk includes it.
+  **V04 is opt-in, outside the version walk.** `StatifierRouter.Migrations.up/1`
+  and `down/1` never run it, capped or not, so a host that never sets
+  `:basichttp` sees every migration answer as before V04 existed. A host
+  that sets the key runs it through `StatifierRouter.Migrations.up_locations/1`
+  and `StatifierRouter.Migrations.down_locations/1` (that module's "The
+  location table, V04, is opt-in").
 
   `up/1` creates the table and its indexes only where they do not exist
-  yet, so a second walk through V04 changes nothing. That is what keeps a
-  host's earlier migration written without `version:` - `up(from: 3)`,
-  the V03 upgrade `StatifierRouter.Migrations` documents - from failing on
-  a fresh database, where the first migration's walk has already built
-  the table. Because the table references the address table, a rollback
-  that drops V01's tables has to reach V04 first: a `down/1` that stops
-  above it leaves the reference in place and Postgres refuses the drop.
+  yet, and `down/1` drops the table only if it is there, as V03 renames
+  only what it finds. Because the table references the address table, it
+  has to be dropped before V01's tables are: a host's migration that runs
+  `up_locations/1` rolls back before the migration that created them.
   """
 
   use Ecto.Migration
@@ -98,10 +98,10 @@ defmodule StatifierRouter.Migrations.V04 do
     :ok
   end
 
-  @doc "Drops the V04 table; the Postgres schema and the earlier tables stay."
+  @doc "Drops the V04 table if it is there; the Postgres schema and the earlier tables stay."
   @spec down(storage()) :: :ok
   def down(%{table_prefix: table_prefix, prefix: prefix}) do
-    drop(table(Config.table_name(table_prefix, :locations), prefix: prefix))
+    drop_if_exists(table(Config.table_name(table_prefix, :locations), prefix: prefix))
 
     :ok
   end

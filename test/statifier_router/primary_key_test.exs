@@ -89,10 +89,7 @@ defmodule StatifierRouter.PrimaryKeyTest do
   @text_version 20_260_926_000_402
   @digits_version 20_260_926_000_403
   @versions [@plain_version, @text_version, @digits_version]
-  # The location table first: it references the address table, so it is
-  # dropped before it.
   @tables [
-    "pk_router_locations",
     "pk_router_addresses",
     "pk_router_dedupe",
     "pk_router_routing_ledger",
@@ -116,16 +113,6 @@ defmodule StatifierRouter.PrimaryKeyTest do
     ~s|CREATE TABLE "pk_router_schema"."pk_router_subscriptions" ("id" bigserial, "binding_id" text NOT NULL, "execution_id" text NOT NULL, "invoke_id" text NOT NULL, "scope" text NOT NULL, "key" text NOT NULL, "inserted_at" timestamp NOT NULL, PRIMARY KEY ("id"))|,
     ~s|CREATE UNIQUE INDEX "pk_router_subscriptions_execution_id_binding_id_invoke_id_index" ON "pk_router_schema"."pk_router_subscriptions" ("execution_id", "binding_id", "invoke_id")|,
     ~s|ALTER INDEX IF EXISTS "pk_router_schema"."pk_router_subscriptions_execution_id_binding_id_invoke_id_index" RENAME TO "pk_router_subscriptions_invocation_index"|
-  ]
-
-  # What V04, which came after the option, sends for MigratePlain: the
-  # location table, its reference to the address table's id under the
-  # repo's own foreign key type, and its two unique indexes.
-  @plain_v04_ddl [
-    ~s|CREATE SCHEMA IF NOT EXISTS "pk_router_schema"|,
-    ~s|CREATE TABLE IF NOT EXISTS "pk_router_schema"."pk_router_locations" ("id" bigserial, "address_id" bigint NOT NULL, CONSTRAINT "pk_router_locations_address_id_fkey" FOREIGN KEY ("address_id") REFERENCES "pk_router_schema"."pk_router_addresses"("id") ON DELETE CASCADE, "token" text NOT NULL, "inserted_at" timestamp NOT NULL, PRIMARY KEY ("id"))|,
-    ~s|CREATE UNIQUE INDEX IF NOT EXISTS "pk_router_locations_address_id_index" ON "pk_router_schema"."pk_router_locations" ("address_id")|,
-    ~s|CREATE UNIQUE INDEX IF NOT EXISTS "pk_router_locations_token_index" ON "pk_router_schema"."pk_router_locations" ("token")|
   ]
 
   setup do
@@ -206,10 +193,8 @@ defmodule StatifierRouter.PrimaryKeyTest do
     # sabotage: made V01's table_opts/1 hand table/2 primary_key: [name:
     # :id, type: :bigint] when the option is nil -> V01's CREATE TABLEs
     # came back with "id" bigint, red; restored, green.
-    # V04 came after the option, so only V01 to V03 are compared with the
-    # log taken before it; V04's own statements follow them.
     test "every version sends exactly the DDL it sent before the option existed" do
-      assert ddl(@plain_version, MigratePlain) == @plain_ddl ++ @plain_v04_ddl
+      assert ddl(@plain_version, MigratePlain) == @plain_ddl
     end
   end
 
@@ -220,14 +205,8 @@ defmodule StatifierRouter.PrimaryKeyTest do
       default =
         ~s|DEFAULT 'r' \|\| lpad(nextval('"pk_router_schema"."pk_router_ids"')::text, 12, '0')|
 
-      # V04's reference to the address table's id takes the option's type.
       expected =
-        Enum.map(
-          @plain_ddl ++ @plain_v04_ddl,
-          &(&1
-            |> String.replace(~s("id" bigserial), ~s("id" text #{default}))
-            |> String.replace(~s("address_id" bigint), ~s("address_id" text)))
-        )
+        Enum.map(@plain_ddl, &String.replace(&1, ~s("id" bigserial), ~s("id" text #{default})))
 
       assert ddl(@text_version, MigrateText) == expected
 
