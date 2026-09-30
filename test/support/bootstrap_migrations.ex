@@ -16,7 +16,8 @@ defmodule StatifierRouter.BootstrapMigrations do
     {20_260_919_000_102, __MODULE__.PersistenceTables},
     {20_260_919_000_103, __MODULE__.SubscriptionsTable},
     {20_260_925_000_104, __MODULE__.PersistenceEndedAt},
-    {20_260_925_000_105, __MODULE__.SubscriptionIndexName}
+    {20_260_925_000_105, __MODULE__.SubscriptionIndexName},
+    {20_260_930_160_106, __MODULE__.LocationsTable}
   ]
 
   defmodule DefaultTables do
@@ -58,6 +59,18 @@ defmodule StatifierRouter.BootstrapMigrations do
     # step renames it the way it would a host's.
     def up, do: Migrations.up(from: 3, version: 3)
     def down, do: Migrations.down(from: 3, version: 3)
+  end
+
+  defmodule LocationsTable do
+    @moduledoc false
+    use Ecto.Migration
+
+    alias StatifierRouter.Migrations
+
+    # What a host already at V03 writes for V04: the location table a
+    # configuration with `:basichttp` keeps its tokens in.
+    def up, do: Migrations.up(from: 4, version: 4)
+    def down, do: Migrations.down(from: 4, version: 4)
   end
 
   defmodule PersistenceTables do

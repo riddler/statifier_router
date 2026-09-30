@@ -26,6 +26,7 @@ defmodule StatifierRouter.Config do
   | `:route_overrides` | a map from scope to a map from route name to a configuration, merged over that route's registered configuration in that scope | `%{}` |
   | `:send_type` | the one `<send>` type string `StatifierRouter.SendHandler` answers to | `nil` |
   | `:send_handlers` | the host's own `<send>` processors served beside the router's handler, a map from a non-empty type string to the processor module, merged with `:send_type` into the one `send_types:` snapshot (see below) | `%{}` |
+  | `:basichttp` | the W3C Basic HTTP Event I/O Processor for durable executions: a keyword list with a `:base_url`, a non-empty string, required, and a `:transport` module, optional, registering `StatifierRouter.BasicHTTP` in the `send_types:` snapshot and giving each execution created under a new address row a location (see below) | `nil` |
   | `:processor_scope` | the scope a live session's sends resolve their routes in on the send-processor shape: a non-empty string, or a zero-arity fun answering one or `nil` (see below) | `nil` |
   | `:on_complete` | the name of a registered route an execution's donedata is handed to on the delivery that finishes it; an `{:error, _}` from that route rolls the delivery back, finishing step included, so a route that never succeeds keeps the execution from finishing (see below) | `nil` |
   | `:timer_queue` | `{module, config}` where the module implements `StatifierRouter.TimerQueue` | `nil` |
@@ -119,6 +120,31 @@ defmodule StatifierRouter.Config do
   attempts is bounded only by the source's own redelivery policy (the
   producer's contract, `StatifierRouter.Broadway`'s "Redelivery is the
   producer's contract").
+
+  ## BasicHTTP locations
+
+  `:basichttp` is for a host that serves the W3C Basic HTTP Event I/O
+  Processor for its durable executions (ADR-0002, the Amendment of
+  2026-09-30). Given, it is a keyword list with `:base_url`, a non-empty
+  string, and optionally `:transport`, a module; any other shape is
+  refused with `{:invalid_value, :basichttp, value}`. The snapshot this
+  configuration builds then registers `StatifierRouter.BasicHTTP` under
+  the processor's URI and its short form `basichttp`, with those options,
+  beside `:send_type`'s handler and `:send_handlers`; a `:send_handlers`
+  entry or a `:send_type` under either string is refused with
+  `{:declared_send_types, type}`, and the key beside a `:send_types` of
+  the host's own in `:persistence_options` with
+  `{:exclusive_keys, :basichttp, :send_types}`, because the location
+  token can be added only to a snapshot this configuration builds.
+
+  On such a configuration the plan name the front delivers under,
+  `basichttp`, is reserved: a binding whose `id` is `basichttp`, given or
+  answered by a `:bindings_resolver`, is refused with
+  `{:reserved_binding_id, "basichttp"}`, as `execution` is on every
+  configuration. Without the key nothing is reserved beyond `execution`.
+  `StatifierRouter.BasicHTTP` says what a location is, and
+  `StatifierRouter.BasicHTTP.Front` how a POST at one is delivered. The
+  key needs the location table `StatifierRouter.Migrations.V04` creates.
 
   ## Wrapping the create and step calls
 
@@ -239,10 +265,12 @@ defmodule StatifierRouter.Config do
   the list as a whole, the reserved `id` and the duplicated `id`, apply to
   it all the same.
 
-  The four tables are the address table of ADR-0002 (`addresses`), the
+  The five tables are the address table of ADR-0002 (`addresses`), the
   dedupe table of ADR-0003 (`dedupe`), the ledger of ADR-0004
-  (`routing_ledger`) and the subscription table of ADR-0007
-  (`subscriptions`); `table/2` names each one under a configuration.
+  (`routing_ledger`), the subscription table of ADR-0007
+  (`subscriptions`) and the location table of ADR-0002's Amendment of
+  2026-09-30 (`locations`); `table/2` names each one under a
+  configuration.
   `StatifierRouter.Migrations` creates them from the same two storage
   options, and `put_meta/2` and `queryable/2` point the schemas in
   `StatifierRouter.Schema` at them, so the DDL and the rows cannot
@@ -287,6 +315,7 @@ defmodule StatifierRouter.Config do
     :on_step,
     :execution_id,
     :bindings_resolver,
+    :basichttp,
     bindings: [],
     persistence_options: [],
     send_handlers: %{},
@@ -369,12 +398,13 @@ defmodule StatifierRouter.Config do
           on_create: on_create() | nil,
           on_step: on_step() | nil,
           execution_id: execution_id() | nil,
+          basichttp: keyword() | nil,
           table_prefix: String.t(),
           prefix: String.t() | nil
         }
 
-  @typedoc "One of the four tables this package owns."
-  @type table :: :addresses | :dedupe | :routing_ledger | :subscriptions
+  @typedoc "One of the five tables this package owns."
+  @type table :: :addresses | :dedupe | :routing_ledger | :subscriptions | :locations
 
   @typedoc "Why `new/1` refused a configuration."
   @type new_error ::
@@ -391,8 +421,9 @@ defmodule StatifierRouter.Config do
           | {:reserved_binding_id, String.t()}
           | {:exclusive_keys, :bindings, :bindings_resolver}
           | {:exclusive_keys, :send_handlers, :send_types}
+          | {:exclusive_keys, :basichttp, :send_types}
 
-  @tables [:addresses, :dedupe, :routing_ledger, :subscriptions]
+  @tables [:addresses, :dedupe, :routing_ledger, :subscriptions, :locations]
   @storage_keys [:table_prefix, :prefix]
   @delivery_keys [:store, :executor, :resolver, :chart_resolver]
   @persistence_option_keys [:routes, :invoke_types, :send_types]
@@ -416,7 +447,8 @@ defmodule StatifierRouter.Config do
     :bindings,
     :bindings_resolver,
     :persistence_options,
-    :send_handlers
+    :send_handlers,
+    :basichttp
     | @delivery_keys ++
         @storage_keys ++
         @route_keys ++
@@ -428,7 +460,8 @@ defmodule StatifierRouter.Config do
     Schema.Address => :addresses,
     Schema.Dedupe => :dedupe,
     Schema.Ledger => :routing_ledger,
-    Schema.Subscription => :subscriptions
+    Schema.Subscription => :subscriptions,
+    Schema.Location => :locations
   }
 
   @doc """
@@ -473,12 +506,13 @@ defmodule StatifierRouter.Config do
          :ok <- same_repo(needs[:store], repo),
          {:ok, routes} <- routes(opts),
          {:ok, send_handlers} <- send_handlers(opts, routes[:send_type]),
+         {:ok, basichttp} <- basichttp(opts, routes[:send_type], send_handlers),
          {:ok, persistence_options} <-
-           persistence_options(opts, routes[:send_type], send_handlers),
+           persistence_options(opts, routes[:send_type], send_handlers, basichttp),
          {:ok, hooks} <- hooks(opts, @hooks),
          {:ok, minter} <- hooks(opts, @minter),
          {:ok, storage} <- storage(opts),
-         {:ok, bindings} <- binding_source(opts) do
+         {:ok, bindings} <- binding_source(opts, basichttp) do
       {:ok,
        struct!(
          __MODULE__,
@@ -486,7 +520,8 @@ defmodule StatifierRouter.Config do
            {:repo, repo},
            {:delivery, delivery},
            {:persistence_options, persistence_options},
-           {:send_handlers, send_handlers}
+           {:send_handlers, send_handlers},
+           {:basichttp, basichttp}
            | bindings ++ needs ++ storage ++ routes ++ hooks ++ minter
          ]
        )}
@@ -508,10 +543,10 @@ defmodule StatifierRouter.Config do
   def bindings_for(%__MODULE__{bindings_resolver: nil, bindings: bindings}, _scope),
     do: {:ok, bindings}
 
-  def bindings_for(%__MODULE__{bindings_resolver: resolver}, scope) do
+  def bindings_for(%__MODULE__{bindings_resolver: resolver, basichttp: basichttp}, scope) do
     bindings = BindingsResolver.call(resolver, scope)
 
-    with :ok <- refuse_reserved_id(bindings),
+    with :ok <- refuse_reserved_id(bindings, basichttp),
          :ok <- refuse_duplicate_ids(bindings) do
       {:ok, bindings}
     end
@@ -681,11 +716,11 @@ defmodule StatifierRouter.Config do
   # place are accepted: `:initialize` and `:metadata` are per-execution
   # host data rather than a standing snapshot, and `:executor` is the
   # configuration's own option.
-  defp persistence_options(opts, send_type, send_handlers) do
+  defp persistence_options(opts, send_type, send_handlers, basichttp) do
     given = Keyword.get(opts, :persistence_options, [])
 
     if snapshot?(given),
-      do: place_send_types(given, send_type, send_handlers),
+      do: place_send_types(given, send_type, send_handlers, basichttp),
       else: {:error, {:invalid_value, :persistence_options, given}}
   end
 
@@ -693,21 +728,29 @@ defmodule StatifierRouter.Config do
   # or the one this configuration builds from `:send_type` and
   # `:send_handlers`, never both (ADR-0005, decision 6 and the Amendment of
   # 2026-09-26). With neither key given, `given` passes through unchanged.
-  defp place_send_types(given, send_type, send_handlers) do
-    declared? = Keyword.has_key?(given, :send_types)
-
+  defp place_send_types(given, send_type, send_handlers, basichttp) do
     cond do
-      declared? and is_binary(send_type) ->
-        {:error, {:declared_send_types, send_type}}
+      Keyword.has_key?(given, :send_types) ->
+        declared_send_types(given, send_type, send_handlers, basichttp)
 
-      declared? and send_handlers != %{} ->
-        {:error, {:exclusive_keys, :send_handlers, :send_types}}
-
-      is_nil(send_type) and send_handlers == %{} ->
+      is_nil(send_type) and send_handlers == %{} and is_nil(basichttp) ->
         {:ok, given}
 
       true ->
-        {:ok, given ++ [send_types: send_types(send_type, send_handlers)]}
+        {:ok,
+         given ++
+           [send_types: Types.from_send_types(registrations(send_type, send_handlers, basichttp))]}
+    end
+  end
+
+  # A `:send_types` of the host's own, which none of the keys that build
+  # the snapshot may sit beside.
+  defp declared_send_types(given, send_type, send_handlers, basichttp) do
+    cond do
+      is_binary(send_type) -> {:error, {:declared_send_types, send_type}}
+      send_handlers != %{} -> {:error, {:exclusive_keys, :send_handlers, :send_types}}
+      is_list(basichttp) -> {:error, {:exclusive_keys, :basichttp, :send_types}}
+      true -> {:ok, given}
     end
   end
 
@@ -715,11 +758,93 @@ defmodule StatifierRouter.Config do
   # the type string it is registered under, never from the route registry,
   # which maps a route name to an adapter and holds no type string at all.
   # The Amendment of 2026-09-26 merges the host's own processors into the
-  # same map, so one snapshot carries both.
-  defp send_types(nil, send_handlers), do: Types.from_send_types(send_handlers)
+  # same map, so one snapshot carries both. ADR-0002, the
+  # Amendment of 2026-09-30, decision 4, adds `StatifierRouter.BasicHTTP`
+  # under both of its type strings when `:basichttp` is set, with the key's
+  # options, and a create's location token among them when one is given.
+  defp registrations(send_type, send_handlers, basichttp, token \\ nil) do
+    send_handlers
+    |> put_send_type(send_type)
+    |> put_basichttp(basichttp, token)
+  end
 
-  defp send_types(send_type, send_handlers),
-    do: Types.from_send_types(Map.put(send_handlers, send_type, SendHandler))
+  defp put_send_type(map, nil), do: map
+  defp put_send_type(map, send_type), do: Map.put(map, send_type, SendHandler)
+
+  defp put_basichttp(map, nil, _token), do: map
+
+  defp put_basichttp(map, basichttp, token) do
+    opts = if token, do: basichttp ++ [location_token: token], else: basichttp
+
+    Enum.reduce(StatifierRouter.BasicHTTP.type_strings(), map, fn type, acc ->
+      Map.put(acc, type, {StatifierRouter.BasicHTTP, opts})
+    end)
+  end
+
+  # The persistence options a create carries when it mints a location
+  # token: the configuration's own, with the snapshot rebuilt from the same
+  # registrations and the token added to `StatifierRouter.BasicHTTP`'s
+  # options (ADR-0002, the Amendment of 2026-09-30, decision 4). Every step
+  # carries the configuration's own snapshot, without it.
+  @doc false
+  @spec create_persistence_options(t(), String.t() | nil) :: keyword()
+  def create_persistence_options(%__MODULE__{basichttp: nil} = config, _token),
+    do: config.persistence_options
+
+  def create_persistence_options(%__MODULE__{} = config, nil), do: config.persistence_options
+
+  def create_persistence_options(%__MODULE__{} = config, token) when is_binary(token) do
+    types =
+      Types.from_send_types(
+        registrations(config.send_type, config.send_handlers, config.basichttp, token)
+      )
+
+    Keyword.put(config.persistence_options, :send_types, types)
+  end
+
+  # ADR-0002, the Amendment of 2026-09-30, decision 4: the key's shape, and
+  # no other registration under either of the processor's type strings.
+  defp basichttp(opts, send_type, send_handlers) do
+    case Keyword.get(opts, :basichttp) do
+      nil ->
+        {:ok, nil}
+
+      value ->
+        with :ok <- basichttp_shape(value),
+             :ok <- basichttp_types_free(send_type, send_handlers) do
+          {:ok, value}
+        end
+    end
+  end
+
+  defp basichttp_shape(value) do
+    if basichttp_keys?(value) and basichttp_values?(value),
+      do: :ok,
+      else: {:error, {:invalid_value, :basichttp, value}}
+  end
+
+  # A non-empty keyword list of the two keys, each at most once.
+  defp basichttp_keys?(value) do
+    is_list(value) and value != [] and Keyword.keyword?(value) and
+      Keyword.keys(value) -- [:base_url, :transport] == [] and
+      Keyword.keys(value) == Enum.uniq(Keyword.keys(value))
+  end
+
+  # A non-empty base URL, and a module when a transport is given.
+  defp basichttp_values?(value) do
+    match?({:ok, url} when is_binary(url) and url != "", Keyword.fetch(value, :base_url)) and
+      (not Keyword.has_key?(value, :transport) or module?(Keyword.fetch!(value, :transport)))
+  end
+
+  defp basichttp_types_free(send_type, send_handlers) do
+    case Enum.find(
+           StatifierRouter.BasicHTTP.type_strings(),
+           &(&1 == send_type or Map.has_key?(send_handlers, &1))
+         ) do
+      nil -> :ok
+      type -> {:error, {:declared_send_types, type}}
+    end
+  end
 
   # ADR-0005, the Amendment of 2026-09-26: the host's own send types, as
   # the `%{type => module}` map the engine's constructor takes. Only the
@@ -918,10 +1043,10 @@ defmodule StatifierRouter.Config do
   # or a resolver's answer per scope, never both. The refusal is on the
   # `:bindings` key being given at all, so `bindings: []` beside a resolver
   # is refused too; a `nil` resolver is the key left out, as a `nil` hook is.
-  defp binding_source(opts) do
+  defp binding_source(opts, basichttp) do
     case {Keyword.has_key?(opts, :bindings), Keyword.get(opts, :bindings_resolver)} do
       {_given, nil} ->
-        with {:ok, bindings} <- bindings(opts),
+        with {:ok, bindings} <- bindings(opts, basichttp),
              do: {:ok, [bindings: bindings, bindings_resolver: nil]}
 
       {true, _resolver} ->
@@ -934,11 +1059,11 @@ defmodule StatifierRouter.Config do
     end
   end
 
-  defp bindings(opts) do
+  defp bindings(opts, basichttp) do
     case Keyword.get(opts, :bindings, []) do
       list when is_list(list) ->
         with {:ok, bindings} <- build_bindings(list),
-             :ok <- refuse_reserved_id(bindings),
+             :ok <- refuse_reserved_id(bindings, basichttp),
              :ok <- refuse_duplicate_ids(bindings) do
           {:ok, bindings}
         end
@@ -969,12 +1094,20 @@ defmodule StatifierRouter.Config do
   # The other half of ADR-0006, section 1's reserved name: the ledger row
   # of an execution-to-execution send carries it as `binding_id`, so a host
   # binding under that id would write rows a reader cannot tell from those.
-  defp refuse_reserved_id(bindings) do
-    reserved = SendHandler.execution_target()
+  #
+  # ADR-0002, the Amendment of 2026-09-30, decision 3 reserves the front's
+  # plan name on the same terms, on a configuration that sets `:basichttp`
+  # only.
+  defp refuse_reserved_id(bindings, basichttp) do
+    reserved =
+      if is_list(basichttp),
+        do: [SendHandler.execution_target(), "basichttp"],
+        else: [SendHandler.execution_target()]
 
-    if Enum.any?(bindings, &(&1.id == reserved)),
-      do: {:error, {:reserved_binding_id, reserved}},
-      else: :ok
+    case Enum.find(reserved, fn name -> Enum.any?(bindings, &(&1.id == name)) end) do
+      nil -> :ok
+      name -> {:error, {:reserved_binding_id, name}}
+    end
   end
 
   defp refuse_duplicate_ids(bindings) do

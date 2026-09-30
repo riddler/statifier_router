@@ -50,6 +50,19 @@ defmodule StatifierRouter.IndexNamesTest do
     def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 3, version: 3])
   end
 
+  # The host's V04 migration. After MigrateV03's uncapped walk the table is
+  # already there and V04 changes nothing; its down drops the table, which
+  # references the address table, before the earlier versions roll back.
+  defmodule MigrateV04 do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [prefix: "router_index_names"]
+
+    def up, do: StatifierRouter.Migrations.up(@opts ++ [from: 4])
+    def down, do: StatifierRouter.Migrations.down(@opts ++ [from: 4, version: 4])
+  end
+
   defmodule MigrateAll do
     @moduledoc false
     use Ecto.Migration
@@ -89,6 +102,7 @@ defmodule StatifierRouter.IndexNamesTest do
   @all_version 20_260_926_000_304
   @long_version 20_260_926_000_305
   @too_long_version 20_260_926_000_306
+  @v04_version 20_260_926_000_307
 
   @subscriptions "statifier_router_subscriptions"
   @v02_spelling "statifier_router_subscriptions_execution_id_binding_id_invoke_id_index"
@@ -122,7 +136,8 @@ defmodule StatifierRouter.IndexNamesTest do
         @v03_again_version,
         @all_version,
         @long_version,
-        @too_long_version
+        @too_long_version,
+        @v04_version
       ]
     ])
 
@@ -199,6 +214,8 @@ defmodule StatifierRouter.IndexNamesTest do
       refute Map.has_key?(indexes(@subscriptions), @v03_name)
       assert %{^truncated => {true, _columns}} = indexes(@subscriptions)
 
+      :ok = migrate(:up, @v04_version, MigrateV04)
+      :ok = migrate(:down, @v04_version, MigrateV04)
       :ok = migrate(:down, @v03_version, MigrateV03)
       :ok = migrate(:down, @through_v02_version, MigrateThroughV02)
       assert index_names_in_schema() == []
@@ -222,14 +239,14 @@ defmodule StatifierRouter.IndexNamesTest do
         end)
 
       built =
-        Regex.scan(~r/(?:CREATE (?:UNIQUE )?INDEX|RENAME TO) "([^"]+)"/, log,
+        Regex.scan(~r/(?:CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)?|RENAME TO) "([^"]+)"/, log,
           capture: :all_but_first
         )
         |> List.flatten()
 
-      # Every create and the rename were seen: V01's five indexes, V02's one
-      # and V03's new name.
-      assert length(built) == 7
+      # Every create and the rename were seen: V01's five indexes, V02's one,
+      # V03's new name and V04's two.
+      assert length(built) == 9
 
       assert Enum.filter(built, &(byte_size(&1) > @max_identifier_bytes)) == [@v02_spelling]
 
@@ -237,7 +254,7 @@ defmodule StatifierRouter.IndexNamesTest do
       # (a truncated name is spelled by none), within 63 bytes. Primary
       # keys are named by Postgres, not by a version.
       final = Enum.reject(index_names_in_schema(), &String.ends_with?(&1, "_pkey"))
-      assert length(final) == 6
+      assert length(final) == 8
 
       for name <- final do
         assert name in built

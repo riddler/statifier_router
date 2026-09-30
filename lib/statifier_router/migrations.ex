@@ -35,12 +35,13 @@ defmodule StatifierRouter.Migrations do
       `[]`. A keyword list of `name: {type, opts}`, where `type` and `opts`
       are what `Ecto.Migration.add/3` takes:
       `leading_columns: [branch_id: {:text, null: true}]` puts a nullable
-      `branch_id` at ordinal position 2 on all four tables. The package's
+      `branch_id` at ordinal position 2 on every table. The package's
       schemas do not declare the column, so the package never reads or
       writes it; a default or a `NOT NULL` belongs to a later migration of
       the host's own. A name a table the call creates already declares -
-      any column `StatifierRouter.Migrations.V01` or
-      `StatifierRouter.Migrations.V02` lists for it - raises
+      any column `StatifierRouter.Migrations.V01`,
+      `StatifierRouter.Migrations.V02` or `StatifierRouter.Migrations.V04`
+      lists for it - raises
       `ArgumentError` naming the column and those tables, before any DDL
       runs, where Postgres would otherwise refuse the `CREATE TABLE` with a
       duplicate column. A name only a table the call does not create
@@ -52,8 +53,9 @@ defmodule StatifierRouter.Migrations do
       the package declares `id` itself, and a leading `id` raises like any
       other package column.
     * `:timestamps_position` - where `inserted_at` goes in every table a
-      version creates that has one (the address table, the routing ledger
-      and the subscription table; the dedupe table has none): `:trailing`
+      version creates that has one (the address table, the routing ledger,
+      the subscription table and the location table; the dedupe table has
+      none): `:trailing`
       (default: the layout `StatifierRouter.Migrations.V01` and
       `StatifierRouter.Migrations.V02` document) or `:leading`
       (immediately after `id` and the `:leading_columns`). The address
@@ -76,7 +78,7 @@ defmodule StatifierRouter.Migrations do
       `:type`, required, and a `:default`, optional, each what
       `Ecto.Migration.add/3` takes: `primary_key: [type: :text, default:
       fragment("gen_random_uuid()::text")]` builds `id` as a text primary
-      key the database fills in, on all four tables. The column is always
+      key the database fills in, on every table. The column is always
       named `id`, the name the schemas in `StatifierRouter.Schema` read.
       The package inserts no id of its own, so the column needs a default
       the database fills in (a `bigserial` or an identity column has one
@@ -109,8 +111,9 @@ defmodule StatifierRouter.Migrations do
   to hand an `{:error, reason}` to.
 
   `StatifierRouter.Migrations.V01` records what the first version creates,
-  `StatifierRouter.Migrations.V02` what the second adds, and
-  `StatifierRouter.Migrations.V03` what the third renames.
+  `StatifierRouter.Migrations.V02` what the second adds,
+  `StatifierRouter.Migrations.V03` what the third renames, and
+  `StatifierRouter.Migrations.V04` what the fourth adds.
 
   `:from` is **inclusive**: `up(from: 2)` runs V02, and a host already on
   V01 that writes it gets the subscription table without V01's
@@ -132,6 +135,24 @@ defmodule StatifierRouter.Migrations do
   database, and still writes the migration above for the databases that
   ran the first one before V03 existed: on a fresh database the second
   run finds the index already renamed and does nothing.
+
+  ## Upgrading to V04
+
+  V04 creates the location table a configuration with `:basichttp`
+  keeps each address row's BasicHTTP location token in (ADR-0002, the
+  Amendment of 2026-09-30). It is needed only by a host that sets that
+  key; one that does not may leave it unrun, and the package never reads
+  or writes the table for it. A host that has already run V03 and wants
+  it runs one more version, in a new migration of its own:
+
+      def up, do: StatifierRouter.Migrations.up(from: 4)
+      def down, do: StatifierRouter.Migrations.down(from: 4, version: 4)
+
+  with the same `:table_prefix`, `:prefix` and `:primary_key` as its
+  earlier migrations: the table's `address_id` references the address
+  table's `id`, and takes the key type `:primary_key` names. A host whose
+  first migration calls `up/1` with no `version:` gets V04 from it on a
+  fresh database, an empty table nothing reads until the key is set.
 
   ## Index names and a long `:table_prefix`
 
@@ -197,13 +218,15 @@ defmodule StatifierRouter.Migrations do
     2 => [
       subscriptions: [:binding_id, :execution_id, :invoke_id, :scope, :key, :inserted_at]
     ],
-    3 => []
+    3 => [],
+    4 => [locations: [:address_id, :token, :inserted_at]]
   }
 
   @migrations %{
     1 => StatifierRouter.Migrations.V01,
     2 => StatifierRouter.Migrations.V02,
-    3 => StatifierRouter.Migrations.V03
+    3 => StatifierRouter.Migrations.V03,
+    4 => StatifierRouter.Migrations.V04
   }
 
   # Read off the map rather than written beside it, so the default target

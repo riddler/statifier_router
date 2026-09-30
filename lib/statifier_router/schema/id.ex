@@ -1,6 +1,6 @@
 defmodule StatifierRouter.Schema.Id do
   @moduledoc """
-  The primary key type of the four schemas in `StatifierRouter.Schema`:
+  The primary key type of the five schemas in `StatifierRouter.Schema`:
   the `id` of a row, whatever type the host's migration gave it.
 
   `StatifierRouter.Migrations.up/1` builds `id` as the host repo's

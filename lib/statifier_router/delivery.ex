@@ -183,6 +183,19 @@ defmodule StatifierRouter.Delivery do
   enclosing transaction with it. Effects the executor was handed before a
   rollback stay fired (ADR-0003, section 2).
 
+  ## The BasicHTTP location
+
+  On a configuration that sets `:basichttp`, the address row an
+  `:if_absent` insert writes gets a location: a token
+  `StatifierRouter.BasicHTTP` mints, inserted into the location table in
+  the same transaction and savepoint, before `create/4`, and handed to
+  that create in the snapshot's `StatifierRouter.BasicHTTP` registration,
+  so the new execution's `_ioprocessors` names it (ADR-0002, the
+  Amendment of 2026-09-30, decisions 1 and 4). Both doors do it, so an
+  execution-to-execution send's create gets one too. A read address row,
+  an `:always_new` create and a `:never` miss mint nothing. Without the
+  key the delivery writes exactly what it wrote before.
+
   ## The execution id
 
   By default the execution id is a UXID with the prefix `ex`, minted by
@@ -205,12 +218,14 @@ defmodule StatifierRouter.Delivery do
   alias Statifier.MachineState
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
+  alias StatifierRouter.BasicHTTP
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.Dedupe
   alias StatifierRouter.Resolver
   alias StatifierRouter.Schema.Address
   alias StatifierRouter.Schema.Ledger
+  alias StatifierRouter.Schema.Location
   alias StatifierRouter.SendHandler
 
   @terminal [:completed, :failed, :cancelled]
@@ -428,6 +443,7 @@ defmodule StatifierRouter.Delivery do
         existing(config, plan, key, delivery, winner)
 
       %Address{} = inserted ->
+        delivery = locate(config, inserted, delivery)
         create(config, plan, key, delivery, inserted.execution_id, inserted)
     end
   end
@@ -437,7 +453,7 @@ defmodule StatifierRouter.Delivery do
   defp create(config, plan, key, delivery, execution_id, row) do
     with {:ok, machine} <- resolve(config, delivery.scope, plan.document),
          {:ok, execution, state} <-
-           persistence_create(config, execution_id, machine, create_options(config)),
+           persistence_create(config, execution_id, machine, create_options(config, delivery)),
          :ok <- complete(config, execution, state) do
       if execution.status in @terminal do
         finished(config, plan, key, delivery, execution_id, row)
@@ -551,8 +567,39 @@ defmodule StatifierRouter.Delivery do
   # treated them as one shape would leave a created execution without the
   # host's types for its whole life: on `create/4` the snapshot travels
   # inside `initialize:`, on `step/5` beside the event.
-  defp create_options(config),
-    do: [executor: config.executor, initialize: config.persistence_options]
+  #
+  # A create that minted a location token carries it in the snapshot's
+  # `StatifierRouter.BasicHTTP` registration, so the execution's
+  # `_ioprocessors` names its location (ADR-0002, the Amendment of
+  # 2026-09-30, decision 4).
+  defp create_options(config, delivery) do
+    [
+      executor: config.executor,
+      initialize: Config.create_persistence_options(config, Map.get(delivery, :location_token))
+    ]
+  end
+
+  # ADR-0002, the Amendment of 2026-09-30, decision 1: on a configuration
+  # that sets `:basichttp`, the address row an `:if_absent` insert wrote
+  # gets a location, a token minted beside it and inserted in the same
+  # transaction and savepoint, before `create/4`. The loser of the race
+  # for the address mints nothing that is written, and a rollback takes
+  # the location with the address row.
+  defp locate(%Config{basichttp: nil}, _row, delivery), do: delivery
+
+  defp locate(config, %Address{id: address_id}, delivery) do
+    token = BasicHTTP.mint_token()
+
+    config.repo.insert!(
+      Config.put_meta(config, %Location{
+        address_id: address_id,
+        token: token,
+        inserted_at: delivery.now
+      })
+    )
+
+    Map.put(delivery, :location_token, token)
+  end
 
   defp step_options(config),
     do: [{:executor, config.executor} | config.persistence_options]
