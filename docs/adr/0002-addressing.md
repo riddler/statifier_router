@@ -884,7 +884,7 @@ under `lib/` or `test/`:
 
 ## Amendment (2026-09-30, sr-xgi8): a durable execution's BasicHTTP location is a rotatable token the router mints, and the front that answers at it
 
-Status: proposed
+Status: accepted
 
 statifier 2.10.0 ships the W3C Basic HTTP Event I/O Processor,
 `Statifier.Send.BasicHTTP`, with a pure inbound decoder, and its record
@@ -1220,7 +1220,7 @@ version that ships the decoder, never a git or path pin.
 
 ## Amendment (2026-09-30, sr-xgi8): the location table is opt-in, outside the version walk
 
-Status: proposed (2026-09-30)
+Status: accepted (2026-09-30)
 
 The Amendment of 2026-09-30 above on the BasicHTTP location stores each
 token in a table "created by a new migration version,
@@ -1282,3 +1282,154 @@ whose `down/1` drops the table only if it exists. The existing migration
 tests are unchanged from `main` and pass against that code, and a test
 module of its own covers a pre-V04 rollback, the opt-in migration's full
 rollback and a host that opts in from one migration.
+
+## Note (2026-09-30): the two sr-xgi8 Amendments accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`, under the standing grant the operator
+adopted on 2026-09-29. The `## Amendment (2026-09-30, sr-xgi8)` on the
+BasicHTTP location and the `## Amendment (2026-09-30, sr-xgi8)` on the
+opt-in location table are both such records: the first one's `Status:`
+line moved from `proposed` to `accepted`, and the second one's from
+`proposed (2026-09-30)` to `accepted (2026-09-30)`, the date left as
+written. Their code landed in `1a5d8ef` and `fd21ebc` and shipped in
+statifier_router 0.9.0 (tag `v0.9.0`, at `e38142f`, published on Hex
+2026-09-30T16:58:50Z). The record's own status on line 3 was already
+`accepted` and was not touched.
+
+Every claim was re-verified by anchor at `e38142f`, which is both the tag
+and `main` at the time of the flip; statifier cites at its `v2.10.0`
+tag, the version `mix.lock` resolves, and statifier_persistence cites at
+0.18.0.
+
+**The Amendment on the BasicHTTP location.**
+
+- What bounds it: `Statifier.Send.BasicHTTP.ioprocessors_entry/2`
+  answers `base_url <> "/" <> session_id`; the
+  `Statifier.Evaluator.SystemVariables` moduledoc says the entries are
+  written "once, when the session starts, and nowhere else" and that
+  `MachineState.put_send_types/2` "does not rewrite `_ioprocessors`";
+  `StatifierPersistence.Executions.create/4` passes `initialize:` to
+  `Statifier.Interpreter.initialize/2`, and `Statifier.MachineState.new/2`
+  defaults `:session_id` to a generated id; `decode/1` takes the five
+  request keys and st-ADR-0075's decision 5 and its Amendment of
+  2026-09-30 say what the Amendment quotes.
+- Decision 1: `StatifierRouter.BasicHTTP.mint_token/0` is
+  `:crypto.strong_rand_bytes(32)` as unpadded URL-safe base64, derived
+  from nothing. `StatifierRouter.Migrations.V04` creates `locations` with
+  the `id` typed by `:primary_key`, `address_id` referencing the address
+  row's `id` with `on_delete: :delete_all`, `token` and `inserted_at`,
+  and a unique index on each of `address_id` and `token`;
+  `StatifierRouter.Schema.Location` is its schema and
+  `StatifierRouter.Schema.Address` declares no new column. The private
+  `locate/3` of `StatifierRouter.Delivery` is a no-op without
+  `:basichttp` and otherwise inserts the location row inside the
+  delivery's savepoint, called from `insert_or_existing/4` only on the
+  insert that wrote the address row, before `create/4`; the race's loser
+  takes the `existing/5` branch and writes no token. An `always_new`
+  create carries no token, so `ioprocessors_entry/2` answers `%{}`.
+- Decision 2: `rotate_location/2` reads the row through
+  `StatifierRouter.Addresses.by_execution/2`, upserts the token with
+  `on_conflict: [set: [token: token]]` on `address_id`, and answers
+  `{:ok, location}` or `{:error, {:no_address, execution_id}}`;
+  `location/2` answers `{:ok, location}` or `{:error, :no_location}`;
+  both build from the configuration's current base URL; nothing
+  schedules either.
+- Decision 3: `StatifierRouter.BasicHTTP.Front`'s private `resolve/2`
+  refuses a string that is not the token's shape
+  (`StatifierRouter.BasicHTTP.token?/1`, 43 characters of the
+  alphabet), a token with no row and a row with `terminal_seen_at` set,
+  each as `{:error, :unknown_location}`; `deliver/5` calls
+  `StatifierRouter.Delivery.deliver_event/4` with the plan `id:
+  "basichttp"`, the row's document, `create: :never` and `horizon_ms:
+  259_200_000`, the row's key and scope, and sets the delivery scope
+  through `StatifierRouter.SendHandler.put_delivery_scope/1`. The private
+  `refuse_reserved_id/2` of `StatifierRouter.Config` adds `basichttp` to
+  the reserved ids only when `:basichttp` is a list, and `new/1` refuses
+  an unknown key through `reject_unknown/2`.
+- Decision 4: `StatifierRouter.BasicHTTP` declares
+  `@behaviour Statifier.Send.Processor`, answers the entry from
+  `:base_url` and `:location_token`, and hands `deliver/3`, `cancel/2`
+  and `perform/2` to `Statifier.Send.BasicHTTP`. `StatifierRouter.Config`
+  validates `:basichttp` (`:base_url` a non-empty string, `:transport` a
+  module), registers the module under both type strings, refuses a
+  `:send_handlers` entry under either as `{:declared_send_types, type}`
+  and the key beside a host `:send_types` as `{:exclusive_keys,
+  :basichttp, :send_types}`; `create_persistence_options/2` rebuilds the
+  snapshot with `location_token:` for a create, and the private
+  `step_options/1` of `StatifierRouter.Delivery` carries the
+  configuration's own snapshot. statifier 2.10.0 asks
+  `ioprocessors_entry/2`, an optional callback, only at session start.
+- Decision 5: `handle/3` checks the request, refuses a re-entrant call
+  as `{:error, {:reentrant_route, execution_id}}`, resolves, decodes,
+  then delivers; a request failing its keys is `{:error,
+  {:invalid_request, keys}}`; the message id is the execution id, `/`
+  and the send key, or a fresh one without a key; `response/1` answers
+  the table's statuses. `deliver_event/4` never answers `dropped:
+  unmatched_event` (the private `taken/7` of `StatifierRouter.Delivery`
+  matches that outcome on a binding only), and the private `finished/6`
+  stamps `terminal_seen_at`. No row or error the front writes carries
+  the token.
+- Decision 6: the moduledocs of `StatifierRouter.BasicHTTP` and
+  `StatifierRouter.BasicHTTP.Front` and the README's "A BasicHTTP front"
+  say a location is a bearer capability, and name TLS, logs and
+  `rotate_location/2`.
+- What sections 1 to 8 still say: `lib/statifier_router/addresses.ex`,
+  `lib/statifier_router/schema/address.ex` and the V01 to V03 modules are
+  unchanged between `bb292c8` and `e38142f`, so the address table's
+  columns, its writers and `reap/2` are as they were.
+- The tests are in `test/statifier_router/basic_http_test.exs`, under
+  "the location", "the front" and "the configuration".
+
+One cite in "What bounds it" names code this Amendment's own change
+moved. It reads `StatifierRouter.Delivery`'s private `create_options/1`
+at `bb292c8`, where the Amendment says its cites are read, and there it
+hands `create/4` the configuration's `:persistence_options` under
+`initialize:` and nothing else. At `e38142f` that function is
+`create_options/2`: it takes the delivery as well and, when the delivery
+minted a token, hands `initialize:` the snapshot
+`StatifierRouter.Config.create_persistence_options/2` rebuilds with
+`location_token:`, which is the change the Amendment's own decision 4,
+"How the token reaches the entry", decides. The sentence is true of the
+code it cites, and this Note does not rewrite it.
+
+Four sentences of that Amendment are amended in part by the Amendment on
+the opt-in location table, which names them: "created by a new migration
+version, `StatifierRouter.Migrations.V04`", "a host that does not use
+BasicHTTP needs no migration", "a host that never sets the key does not
+need V04", and "`StatifierRouter.Migrations` for the new version". Read
+with that Amendment they hold at `e38142f`: V04 is the migration that
+creates the table, and it is run outside the version walk.
+
+**The Amendment on the opt-in location table.**
+
+- Outside the walk: `StatifierRouter.Migrations`' private `@migrations`
+  maps 1 to 3 only, `@package_columns` has no entry for 4, and the
+  private `validate_version!/2` refuses a version of 4 as unknown.
+- The two calls: `up_locations/1` and `down_locations/1` run
+  `StatifierRouter.Migrations.V04` through the private
+  `parse_locations!/1`, which reads the layout options and
+  `:primary_key` with `up/1`'s private `layout!/1` and refuses `:from`,
+  `:version` and any other key through `Config.reject_unknown/2`, raising
+  `ArgumentError` before any DDL. The private
+  `refuse_location_column_names!/2` refuses a leading `address_id`,
+  `token` or `inserted_at`, and `id` under `:primary_key`.
+- Tolerance: `V04.up/1` uses `create_if_not_exists` for the table and
+  both indexes, and `V04.down/1` uses `drop_if_exists`.
+- The rollback order: the moduledocs of `StatifierRouter.Migrations`
+  ("The location table, V04, is opt-in") and of V04 say the opt-in
+  migration rolls back first, and V01's `down` is unchanged.
+- The tests: the migration tests on `main` before the change are
+  unchanged; `test/support/bootstrap_migrations.ex` gains one opt-in
+  migration at the end of its list; and
+  `test/statifier_router/locations_migration_test.exs` covers "an
+  uncapped first migration never creates V04, and rolls a pre-V04
+  database back whole", "the documented opt-in migration rolls back
+  before the first, and the database empties" and "a host that opts in
+  from one migration gets the cascade and the unique token, and rolls
+  back whole".
+
+The 0.9.0 section of `CHANGELOG.md` names the key, the processor, the
+front, the two calls and the opt-in table.
