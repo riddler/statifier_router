@@ -643,6 +643,77 @@ the attempt did not settle, and the patron may post again. The failed
 verification is the host's own answer (`403` above), never a status from
 this package.
 
+## A BasicHTTP front
+
+A durable execution can take events at an HTTP location of its own: the
+W3C Basic HTTP Event I/O Processor (SCXML appendix C.2). statifier ships
+the processor and a pure decoder for the POST; this package adds the
+location of a persisted execution and the front that delivers to it
+(ADR-0002, the Amendment of 2026-09-30).
+
+**A location is a bearer capability.** Anyone who holds it can post
+events to that execution, and the router authenticates nothing beyond
+possession of the location. Hand a location only to the parties that
+should reach the execution, keep it out of logs and out of URLs shown to
+others, serve the base URL over TLS, and rotate it when it may have
+leaked.
+
+Set `:basichttp` on the configuration with the base URL the front answers
+at, and run the location table's migration (V04, "Upgrading the tables"
+below):
+
+```elixir
+StatifierRouter.Config.new(
+  repo: MyApp.Repo,
+  # ... the delivery options ...
+  basichttp: [base_url: "https://depot.example/scxml"]
+)
+```
+
+From then on each execution created under a new address row gets a
+location: the base URL, `/`, and a 43-character token the router mints,
+never the execution id. The chart reads it at
+`_ioprocessors['basichttp']['location']` and can hand it to whoever should
+reach it; the host reads it with `StatifierRouter.BasicHTTP.location/2`
+and replaces it with `StatifierRouter.BasicHTTP.rotate_location/2`, after
+which the old location answers `404`. Rotation does not reach the chart's
+own copy, which statifier writes once when the execution starts: after a
+rotation the chart still reads the old location. An execution created
+under `:always_new` has no address row and no location.
+
+The front is `StatifierRouter.BasicHTTP.Front`, Plug-shaped as the webhook
+helper is. The host routes `POST <base_url>/:token` (and every other
+method, for the `405`) to an action like this one:
+
+```elixir
+def event(conn, %{"token" => token}) do
+  {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+  answer =
+    StatifierRouter.BasicHTTP.Front.handle(MyApp.Router.config(), %{
+      token: token,
+      method: conn.method,
+      content_type: List.first(Plug.Conn.get_req_header(conn, "content-type")),
+      body: body,
+      query: conn.query_string,
+      send_key: List.first(Plug.Conn.get_req_header(conn, "scxml-send-key"))
+    })
+
+  {status, headers} = StatifierRouter.BasicHTTP.Front.response(answer)
+  conn |> Plug.Conn.merge_resp_headers(headers) |> Plug.Conn.send_resp(status, "")
+end
+```
+
+A parcel's execution that handed its location to the van's scanner takes
+each `_scxmleventname=delivered` POST as the event `delivered` and answers
+`204` once it is delivered. The statuses: `204` for a delivered event or a
+duplicate, `404` for a location that reaches no execution (unknown,
+rotated away, or finished), `405` with `Allow: POST` for another method,
+`400` for a body or send key the decoder refuses, and `500` for a delivery
+that did not settle. A POST that carries statifier's `scxml-send-key`
+header is delivered once per execution within the default dedupe horizon
+of 72 hours; one without it is delivered every time.
+
 ## Resolving a document to its chart
 
 This package keeps no publish store, so which chart a new execution of a
@@ -1043,6 +1114,28 @@ is still needed for every database that ran the first one before V03
 existed, and on a fresh one it finds the index already renamed.
 `StatifierRouter.Migrations` says what a long `:table_prefix` does to the
 index names.
+
+V04 creates the location table a configuration with `:basichttp` keeps
+its tokens in (see "A BasicHTTP front"). A host that does not set the key
+never reads or writes it and does not need the migration; one that does
+adds:
+
+```elixir
+defmodule MyApp.Repo.Migrations.AddStatifierRouterLocations do
+  use Ecto.Migration
+
+  def up, do: StatifierRouter.Migrations.up(from: 4)
+  def down, do: StatifierRouter.Migrations.down(from: 4, version: 4)
+end
+```
+
+with the same `:table_prefix`, `:prefix` and `:primary_key` its earlier
+migrations pass. A first migration with no `version:` builds V04 on a
+fresh database too, an empty table until the key is set. V04 creates
+only what is missing, so the V03 migration above, which walks every later
+version, and this one both run cleanly on a fresh database. The table
+references the address table, so a rollback that drops the earlier
+versions' tables runs this migration's `down` first.
 
 ## A host that wraps the engine
 
