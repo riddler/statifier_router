@@ -548,9 +548,14 @@ def create(conn, _params) do
       })
 
     send_resp(conn, StatifierRouter.Webhook.status(answer), "")
+  else
+    {:error, _reason} -> send_resp(conn, 401, "")
   end
 end
 ```
+
+A request whose signature fails verification never reaches the router: the
+`else` answers `401` and nothing is routed.
 
 The message id is the provider's event id when it sends a non-empty one,
 and otherwise the lowercase hex SHA-256 of the raw body, so a provider's
