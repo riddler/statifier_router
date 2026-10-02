@@ -219,6 +219,14 @@ fell due, so a send it schedules is timed from there. A cancel removes the
 execution's recorded sends that carry its send id. The router itself keeps
 no timer.
 
+The runner in this repository plays that part twice. `test/corpus_test.exs`
+runs every case once with the runner's own record of the timers, and runs
+every case but a publish case again with the timers on a real timer queue:
+each delayed send scheduled as a job, each cancel taken and each due job
+fired through statifier_oban, on an Oban instance in the same Postgres
+database, with each job's fire time moved onto the runner's clock. Both
+runs compare against the same `expected`.
+
 statifier leaves sinks to the host in the same way. A runner registers one
 adapter per name in the case's `routes`, hands every effect to this
 package's own send handler, and records what each adapter was handed. An

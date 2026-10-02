@@ -122,7 +122,12 @@ defmodule StatifierRouter.MixProject do
       {:postgrex, "~> 0.22", only: :test},
       # Test-only, like postgrex: the SQLite repo the migration tests run
       # the versions against, since a host may migrate on SQLite.
-      {:ecto_sqlite3, "~> 0.22", only: :test}
+      {:ecto_sqlite3, "~> 0.22", only: :test},
+      # Test-only: the corpus's second run mode schedules, cancels and
+      # fires its timers through statifier_oban on an Oban queue in this
+      # suite's Postgres database. Timers stay statifier_oban's, never
+      # this package's, so neither enters as a runtime dependency.
+      {:statifier_oban, "~> 0.17", only: :test}
     ]
   end
 end

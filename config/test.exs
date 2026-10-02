@@ -13,5 +13,14 @@ config :statifier_router, StatifierRouter.TestRepo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
+# The Oban instance the corpus's Oban run mode schedules its timers on
+# (test/support/corpus_runner.ex), over the same repo. Manual testing mode
+# runs no queue, plugin or stager: a job fires only when the runner drains
+# it, at the time the case's clock says it falls due.
+config :statifier_router, StatifierRouter.TestOban,
+  name: StatifierRouter.TestOban,
+  repo: StatifierRouter.TestRepo,
+  testing: :manual
+
 # Keeps the harness quiet: Ecto logs every query at :debug.
 config :logger, level: :warning
