@@ -1454,3 +1454,237 @@ never casts an id it binds holds as before, and a reap answers the same
 counts on Postgres as it did. The tests
 `StatifierRouter.SQLiteReapTest` reap on SQLite under the default
 integer key, under a text key of digits, and past one batch.
+
+## Amendment (2026-10-02, sr-bpw3): a durable execution's outbound BasicHTTP send is performed after the delivery commits, and a failed POST comes back through deliver_event/4
+
+Status: proposed
+
+The Amendment of 2026-09-30 above on the BasicHTTP location ends its
+decision 4 with "What is not decided here": "What an outbound BasicHTTP
+send from a durable execution does at the executor seam, and whether its
+delayed POST survives a resume, is statifier's processor and the
+executor's, and is left to a later record." This Amendment decides the
+first half for a send without a delay. The second half, the delayed
+send, stays open (decision 5 below). The shape was ruled by the
+operator, 2026-10-01:
+
+> a durable execution's outbound BasicHTTP send is planned at the
+> executor seam with `deliver/3` and performed with `perform/2` after the
+> delivery commits, from a durable job keyed on the send's dedup key, as
+> the recommended host pattern; the job insert belongs inside the
+> delivery transaction; a failed after-commit POST reaches the execution
+> only through `Delivery.deliver_event/4` with `create: :never` over the
+> row from `Addresses.by_execution/2`; performing inline stays allowed,
+> with its cost stated; no helper ships.
+
+This Amendment changes no code. Code cites in this package are read at
+`467c36d`; statifier cites at its `v2.10.0` tag; statifier_persistence
+cites at 0.18.0, the version this package's `mix.lock` resolves.
+
+**What bounds it.**
+
+- **No session performs the send.** statifier_persistence hands each
+  effect a step emits to the host's executor, once per effect, inside the
+  step (`StatifierPersistence.Executor`'s `execute/2` callback), and at
+  this package's seam that runs in the delivery's own process, inside its
+  transaction (`StatifierRouter.Delivery`'s moduledoc, "What a route may
+  not do while a delivery runs"). A durable execution has no
+  `Statifier.Session` to plan or perform a send for it.
+- **The processor plans and performs; it decides nothing more.**
+  `StatifierRouter.BasicHTTP.deliver/3` and `perform/2` hand each call to
+  `Statifier.Send.BasicHTTP` unchanged (decision 4 of the Amendment of
+  2026-09-30). `Statifier.Send.BasicHTTP.deliver/3` is pure. For a send
+  with a target it answers one instruction, `{:handler,
+  Statifier.Send.BasicHTTP, {:post, post}}`, and for a delayed one
+  `{:handler, Statifier.Send.BasicHTTP, {:post_after, delay_ms, post}}`;
+  for a send with no target it answers `{:raise, :platform,
+  "error.communication", origin, sendid: send_id}` and plans no request
+  (st-ADR-0075, decision 4).
+- **A failed POST names no durable execution.** `perform/2` makes one
+  POST. On a transport error or a status outside 2xx it reports the miss
+  through `Statifier.Session.failed_send/3` to a session it finds in
+  `Statifier.Registry` under the plan context's `session_id`, and answers
+  `{:error, reason}`; with no session registered there it answers
+  `{:error, reason}` only, and the dead-letter rule of `failed_send/3`'s
+  documentation is the host's (st-ADR-0075, decision 8, point d).
+- **Every POST carries the send's dedup key.** The `scxml-send-key`
+  header holds the eight fields of the send's dedup key, the first being
+  the plan context's `session_id`, so a performed-again instruction sends
+  the same value and a receiver that deduplicates on it sees the send
+  once (st-ADR-0075's Amendment of 2026-09-30). This package's front is
+  such a receiver (decision 5 of the Amendment of 2026-09-30).
+- **An executor's error re-enters the step that emitted the send.** An
+  `{:error, reason}` the executor answers for a send re-enters the
+  execution as `error.communication`, carrying the send's `sendid`,
+  inside the same step (`StatifierPersistence.Executions`' moduledoc,
+  "Executor failures on actionable effects re-enter the chart"; its
+  private `reentry_origin/1`).
+- **An effect fired in a delivery that rolls back has happened.**
+  ADR-0003's Consequences: "Effects fired inside a delivery that rolls
+  back have happened anyway."
+
+### 1. The send is planned at the executor seam
+
+The host's executor, handed `{:send, %Statifier.Effect.Send{}}` whose
+`type` is one of the two strings `StatifierRouter.BasicHTTP` is
+registered under, plans it with `StatifierRouter.BasicHTTP.deliver/3`.
+The event is `Statifier.Send.Event.build/2` of the send and the execution
+id, and the plan context is `%{session_id: execution_id, opts: options}`,
+where `execution_id` is the executor context's and `options` are the
+configuration's `:basichttp` options, the keyword list
+`StatifierRouter.Config`'s `basichttp` field holds. With the execution id as the
+`session_id`, the first field of every `scxml-send-key` the send carries
+is the execution id.
+
+### 2. Recommended: performed after the commit, from a job inserted inside the delivery
+
+- **The job is inserted at the seam.** For each `{:handler, module,
+  payload}` instruction the plan answers, the executor inserts a job on
+  the host's own repo. The executor runs in the delivery's process,
+  inside its transaction, so the insert joins it: the job commits with
+  the step that emitted the send, and a delivery that rolls back takes
+  the job with it. This is the transactional outbox the README's "A
+  transactional outbox, end to end" builds for a route, with the job row
+  as the outbox row.
+- **The job is keyed on the send's dedup key.** The job carries the
+  instruction's payload, the plan context, the execution id and the
+  send's id, under a key written from the send's dedup key components:
+  the execution id, `send_id`, `macrostep`, `microstep`, `round`,
+  `c_index`, `owner` and `ordinal`, any of which may be `nil` and is
+  written as a fixed spelling of its own. A redriven step re-emits the same
+  send with the same fields, so a uniqueness rule on that key keeps it to
+  one job.
+- **The job performs after the commit.** The job's worker calls
+  `StatifierRouter.BasicHTTP.perform/2` with the payload and the plan
+  context. It sees only committed jobs, so no POST is made for a step
+  that rolled back, and it runs outside every delivery, so no
+  transaction, no execution lock and no database write lock is held while
+  the receiver answers. A job retried after a POST the receiver took
+  sends the same `scxml-send-key`, which a deduplicating receiver answers
+  without enqueuing twice.
+- **Why it is the recommendation.** It is the one shape in which a slow
+  or unreachable receiver costs the execution nothing but the failure
+  itself, and in which no POST leaves for a step that never committed.
+
+### 3. A failed POST reaches the execution only through `deliver_event/4`
+
+When the job decides the send has failed - at once, or after the
+retries its own policy allows - it reads the execution's address row
+with `StatifierRouter.Addresses.by_execution/2` and delivers
+`error.communication` through `StatifierRouter.Delivery.deliver_event/4`,
+with:
+
+- **The plan** `%{id: name, document: row.document, create: :never,
+  dedupe: %{by: :message_id, horizon_ms: 259_200_000}}`. `name` is a
+  string of the host's choosing that is no binding's `id` and is neither
+  `execution` (ADR-0006, section 1) nor `basichttp` (decision 3 of the
+  Amendment of 2026-09-30), so the ledger and dedupe rows the job writes
+  are told apart from a binding's, an execution-to-execution send's and
+  the front's; the README's recipe uses `basichttp_failure`. `create:
+  :never` because a failure reaches an execution that exists and never
+  makes one. The horizon is ADR-0001, section 1's default, the one the
+  front takes.
+- **The key** the row's `key`, and an envelope whose `scope` is the
+  row's, whose `message_id` is the job's key, and whose `now` is the
+  delivery's time. A job that delivers the failure twice is answered
+  `{:duplicate, name}` the second time.
+- **The event** `Statifier.Event.external("error.communication",
+  sendid: send_id, data: data)`. Its `sendid` is the failed send's id,
+  which the chart reads as `_event.sendid`; `data` is the host's, and the
+  README's recipe carries the reason as a string. It reaches the
+  execution through `step/5` as an external event, in a step of its own
+  after the one that sent; a transition on `error.communication` matches
+  it by name as it matches the in-step re-entry.
+
+The answers, and what the job does with each:
+
+| `deliver_event/4` answers | the job |
+|---|---|
+| `{:delivered, name, execution_id}` | is done |
+| `{:duplicate, name}` | is done: an earlier attempt delivered it |
+| `{:dropped, name, :finished}` | records a dead letter: the execution is terminal |
+| `{:dropped, name, :no_execution}` | records a dead letter: the row was reaped between the read and the delivery |
+| `{:error, reason}` | retries: the delivery did not settle |
+
+A chart with no transition for `error.communication` in the state it is
+in still answers `{:delivered, name, execution_id}`: `deliver_event/4`
+does not take `dropped: unmatched_event` (`StatifierRouter.Delivery`'s
+moduledoc), so the event is in the execution's input log and the job is
+done, though no transition took it.
+
+`by_execution/2` answering `nil` - an `:always_new` execution, which has
+no address row (section 7), or a row already reaped - is a dead letter
+too. The dead letter is `failed_send/3`'s rule, keyed by the send's dedup
+key, with its reason.
+
+This is the only sanctioned way back in. The job never calls
+`StatifierPersistence.Executions.step/5` itself, which would skip the
+dedupe claim, the ledger row and the address lookup every delivery
+writes, and it has no session to call `failed_send/3` on.
+
+- **The scope a route sees.** `deliver_event/4` sets no delivery scope,
+  so in a step the job's delivery causes, a send to a route that some
+  scope in `:route_overrides` overrides is refused as
+  `{:no_delivery_scope, name}` (`StatifierRouter.SendHandler`'s
+  moduledoc, "The scope a route is resolved in"). A chart whose
+  `error.communication` handler sends to such a route meets that refusal
+  on this path; this Amendment changes nothing about it.
+
+### 4. Allowed: performed inline, inside the delivery
+
+The executor may instead perform each planned instruction with
+`StatifierRouter.BasicHTTP.perform/2` at the seam and answer its
+`{:error, reason}`, which statifier_persistence re-enters as
+`error.communication` in the same step, carrying the send's `sendid`. No
+job and no `deliver_event/4` call is needed. The cost:
+
+- The POST is made inside the delivery's transaction, so a slow receiver
+  holds that transaction, the execution's lock and, on SQLite, the
+  database's write lock for as long as it takes to answer.
+- The POST leaves before the step commits. A delivery that then rolls
+  back has POSTed anyway, and its redrive POSTs again with the same
+  `scxml-send-key`; only a receiver that deduplicates on it sees the send
+  once.
+
+### 5. Neither shape covers a delayed send; that stays open
+
+`Statifier.Send.BasicHTTP.perform/2` holds a delayed POST on a timer in
+the process that performs the instruction, and at fire time POSTs only
+if that process is a `Statifier.Session` still running (the moduledoc of
+`Statifier.Send.BasicHTTP`, "A delayed send is this processor's timer").
+At this package's seam it is not one. Whether a durable execution's
+delayed BasicHTTP POST survives a resume, and so how one is performed,
+is not decided here and is left to a later record. The README's recipe
+refuses a `{:send_delayed, _}` of either type string at the executor
+with an `{:error, reason}`, which re-enters the execution as
+`error.communication`; that is the recipe's, not a decision on the open
+question.
+
+A send with no target plans the `{:raise, ...}` instruction above, which
+no executor here performs; the recipe's executor answers `{:error,
+reason}` for any instruction that is not `{:handler, module, payload}`,
+and it re-enters the same way.
+
+### 6. No helper ships
+
+The recipe needs only public functions this package already has:
+`StatifierRouter.BasicHTTP.deliver/3` and `perform/2`,
+`StatifierRouter.Addresses.by_execution/2` and
+`StatifierRouter.Delivery.deliver_event/4`. The job, its table or queue,
+and its retry policy are the host's, as the drain of the README's outbox
+is.
+
+**What the Amendment of 2026-09-30 still says.** Its decisions 1 to 6
+are unchanged: the token, rotation, resolution, the location string,
+the front and the bearer capability. Its "What is not decided here" is
+answered in its first half by this Amendment and stays open in its
+second.
+
+**Where it is shown.** No code changes. The README's "Sending from a
+durable execution" shows the executor, the job and the failure path, and
+`test/statifier_router/basic_http_send_test.exs` pins the failure path
+against the package as it is: a failed POST delivered back through
+`deliver_event/4` with `create: :never` over `by_execution/2`'s row steps
+the execution on `error.communication` and finishes it, a retried job is
+a duplicate, and a failure reaching a finished execution is
+`{:dropped, name, :finished}`.

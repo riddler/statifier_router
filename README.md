@@ -714,6 +714,165 @@ that did not settle. A POST that carries statifier's `scxml-send-key`
 header is delivered once per execution within the default dedupe horizon
 of 72 hours; one without it is delivered every time.
 
+### Sending from a durable execution
+
+A chart can also send with `<send type="basichttp">`. A durable execution
+has no session to perform that send, so the effect reaches the host's
+executor, and the host performs it (ADR-0002, the Amendment of
+2026-10-02). The recommended shape plans the send at the executor seam,
+inserts a job for it inside the delivery's transaction, and performs it
+after the delivery commits: the job commits with the step that sent, no
+POST leaves for a step that rolled back, and a slow receiver holds no
+transaction and no lock. It is the transactional outbox above, with the
+job row as the outbox row.
+
+The example is a parcel loaded onto the van, whose execution tells the
+depot's manifest desk and waits; a failed POST returns the parcel to the
+depot:
+
+```xml
+<state id="on_van">
+  <onentry>
+    <send id="manifest" type="basichttp" target="https://depot.example/manifests" event="parcel.loaded"/>
+  </onentry>
+  <transition event="delivered" target="doorstep"/>
+  <transition event="error.communication" cond="_event.sendid == 'manifest'" target="returned_to_depot"/>
+</state>
+```
+
+**The executor plans and inserts.** `StatifierRouter.BasicHTTP.deliver/3`
+is pure and answers the instructions to perform; the executor runs in the
+delivery's process, so the job insert joins its transaction:
+
+```elixir
+defmodule MyApp.Executor do
+  alias Statifier.Effect.{Send, SendDelayed}
+
+  @types ["http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor", "basichttp"]
+
+  def execute({:send, %Send{type: type} = send}, %{execution_id: execution_id})
+      when type in @types do
+    ctx = %{session_id: execution_id, opts: MyApp.Router.basichttp_options()}
+    event = Statifier.Send.Event.build(send, execution_id)
+    {:ok, instructions} = StatifierRouter.BasicHTTP.deliver(send, event, ctx)
+
+    Enum.reduce_while(instructions, :ok, fn
+      {:handler, _module, payload}, :ok ->
+        MyApp.Repo.insert!(MyApp.SendJob.new(execution_id, send, payload, ctx),
+          on_conflict: :nothing,
+          conflict_target: [:key]
+        )
+
+        {:cont, :ok}
+
+      _not_a_post, :ok ->
+        {:halt, {:error, {:basichttp_send_not_planned, send.send_id}}}
+    end)
+  end
+
+  # A delayed BasicHTTP send is not decided yet: refuse it, and the
+  # execution sees error.communication.
+  def execute({:send_delayed, %SendDelayed{type: type} = send}, _context)
+      when type in @types,
+      do: {:error, {:delayed_basichttp_send, send.send_id}}
+
+  def execute(_effect, _context), do: :ok
+end
+```
+
+`MyApp.SendJob.new/4` writes the payload and the context out as the
+outbox example writes its event, `:erlang.term_to_binary/1`, beside the
+execution id, the send's id and the job's key; `MyApp.Router.basichttp_options/0`
+is the host's own accessor for the `:basichttp` options it configured. The key is the send's
+dedup key written out - the execution id, `send_id`, `macrostep`,
+`microstep`, `round`, `c_index`, `owner` and `ordinal`, each `nil` written
+as a fixed spelling of its own - so a redriven
+step, which re-emits the same send with the same fields, inserts one
+job. A send with no target plans no POST, and the executor's
+`{:error, _}` for it reaches the execution as `error.communication`.
+
+**The job performs after the commit, and a failure comes back through
+`deliver_event/4`.** The worker sees only committed jobs:
+
+```elixir
+defmodule MyApp.SendJob.Worker do
+  alias StatifierRouter.{Addresses, BasicHTTP, Delivery}
+
+  @plan %{
+    id: "basichttp_failure",
+    create: :never,
+    dedupe: %{by: :message_id, horizon_ms: 259_200_000}
+  }
+
+  def perform(job) do
+    {payload, ctx} = :erlang.binary_to_term(job.instruction)
+
+    case BasicHTTP.perform(payload, ctx) do
+      :ok -> :ok
+      {:error, reason} -> failed(job, reason)
+    end
+  end
+
+  # Called once the job's own retries are spent, or at once.
+  defp failed(job, reason) do
+    case Addresses.by_execution(MyApp.Router.config(), job.execution_id) do
+      nil ->
+        MyApp.DeadLetters.record(job.key, reason)
+
+      row ->
+        event =
+          Statifier.Event.external("error.communication",
+            sendid: job.send_id,
+            data: %{"reason" => inspect(reason)}
+          )
+
+        MyApp.Router.config()
+        |> Delivery.deliver_event(Map.put(@plan, :document, row.document), row.key, %{
+          event: event,
+          message_id: job.key,
+          scope: row.scope,
+          now: DateTime.utc_now()
+        })
+        |> settled(job, reason)
+    end
+  end
+
+  defp settled({:delivered, _plan, _execution_id}, _job, _reason), do: :ok
+  defp settled({:duplicate, _plan}, _job, _reason), do: :ok
+  defp settled({:dropped, _plan, _why}, job, reason), do: MyApp.DeadLetters.record(job.key, reason)
+  defp settled({:error, _reason} = error, _job, _reason_sent), do: error
+end
+```
+
+`deliver_event/4` is the only way back in: it takes the same dedupe
+claim, the same address lookup and writes the same ledger row as every
+delivery, under the plan's `id`. Name that `id` yourself: neither
+`execution` nor `basichttp`, and no binding's. `create: :never` because
+a failure reaches an execution that exists and never makes one. The
+event arrives as an external event in a step of its own, carrying the
+failed send's id in `_event.sendid`. A retried job's second delivery is
+`{:duplicate, "basichttp_failure"}`. An execution that has already
+finished answers `{:dropped, "basichttp_failure", :finished}`, and one
+whose address row is gone answers `nil` from `by_execution/2` or
+`:no_execution` from the delivery: the miss is then a dead letter, keyed
+by the job's key. `{:error, _}` is a delivery that did not settle, and
+the job retries it. A chart with no transition for `error.communication`
+where it stands still answers `{:delivered, ...}`: the event is in its
+input log, and nothing took it.
+
+`deliver_event/4` runs with no scope of its own set, so a route that a
+scope in `:route_overrides` overrides is refused as
+`{:no_delivery_scope, name}` in the step it causes; keep such sends out
+of the chart's `error.communication` handler.
+
+**Performing inline is allowed.** The executor may call
+`StatifierRouter.BasicHTTP.perform/2` itself and answer its
+`{:error, reason}`, which reaches the execution as `error.communication`
+within the same step, with no job and no `deliver_event/4`. The POST is
+then made inside the delivery's transaction: a slow receiver holds the
+transaction, the execution's lock and, on SQLite, the database's write
+lock, and a delivery that rolls back after the POST has sent it anyway.
+
 ## Resolving a document to its chart
 
 This package keeps no publish store, so which chart a new execution of a
