@@ -10,7 +10,7 @@ defmodule StatifierRouter.Migrations.V04 do
 
   | Column | Type | Null |
   |---|---|---|
-  | `id` | `bigserial`, primary key | no |
+  | `id` | primary key: the repo's `:migration_primary_key` (`bigserial` by default), or under `:primary_key` the type and default that option names | no |
   | `address_id` | the address table's key type, referencing its `id`, `ON DELETE CASCADE` | no |
   | `token` | `text` | no |
   | `inserted_at` | `utc_datetime_usec` | no |
@@ -37,6 +37,12 @@ defmodule StatifierRouter.Migrations.V04 do
   the same option here. Without it, the reference takes the repo's own
   foreign key type, which matches the address table's `id` when V01 was
   built without the option too.
+
+  `:column_collations` has no effect on this table. The option names the
+  text columns V01 and V02 declare, and this table declares none of
+  them: `token` is not a name the option takes, so it keeps the database
+  default whatever the option says. This version's `up/1` builds the
+  same columns with the option set as without it.
 
   **V04 is opt-in, outside the version walk.** `StatifierRouter.Migrations.up/1`
   and `down/1` never run it, capped or not, so a host that never sets

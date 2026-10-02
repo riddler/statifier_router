@@ -61,6 +61,32 @@ defmodule StatifierRouter.LocationsMigrationTest do
     end
   end
 
+  # The documented opt-in migration with a collation on every text column
+  # :column_collations takes, none of which the location table declares.
+  defmodule MigrateLocationsCollated do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [
+      table_prefix: "loc_router_",
+      prefix: "loc_router_schema",
+      column_collations: [
+        scope: "C",
+        document: "C",
+        key: "C",
+        execution_id: "C",
+        binding_id: "C",
+        message_id: "C",
+        outcome: "C",
+        reason: "C",
+        invoke_id: "C"
+      ]
+    ]
+
+    def up, do: StatifierRouter.Migrations.up_locations(@opts)
+    def down, do: StatifierRouter.Migrations.down_locations(@opts)
+  end
+
   # down_locations/1 alone, on a database that never ran up_locations/1.
   defmodule MigrateLocationsDownOnly do
     @moduledoc false
@@ -78,7 +104,15 @@ defmodule StatifierRouter.LocationsMigrationTest do
   @locations_version 29_990_201_000_102
   @opted_in_version 29_990_201_000_103
   @down_only_version 29_990_201_000_104
-  @versions [@first_version, @locations_version, @opted_in_version, @down_only_version]
+  @collated_version 29_990_201_000_105
+
+  @versions [
+    @first_version,
+    @locations_version,
+    @opted_in_version,
+    @down_only_version,
+    @collated_version
+  ]
 
   @walk_tables [
     "loc_router_addresses",
@@ -125,6 +159,25 @@ defmodule StatifierRouter.LocationsMigrationTest do
       )
 
     List.flatten(rows)
+  end
+
+  # Every column of the location table in ordinal order, with its
+  # collation (nil for the database default and for a column that is not
+  # text), read back from the catalog rather than from the migration.
+  defp location_columns do
+    %{rows: rows} =
+      SQL.query!(
+        TestRepo,
+        """
+        SELECT column_name, collation_name
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'loc_router_locations'
+        ORDER BY ordinal_position
+        """,
+        [@schema]
+      )
+
+    Enum.map(rows, fn [name, collation] -> {name, collation} end)
   end
 
   defp config do
@@ -212,6 +265,38 @@ defmodule StatifierRouter.LocationsMigrationTest do
 
     assert step(:down, @opted_in_version, MigrateOptedIn) == :ok
     assert tables_present() == []
+  end
+
+  # sabotage: V04 made to declare token with the :execution_id entry of
+  # :column_collations as its collation -> the collated table's token came
+  # back "C", red on the comparison; restored, green. sabotage: V04 made
+  # to declare token COLLATE "C" unconditionally -> both tables' token
+  # came back "C", red on the column list; restored, green. sabotage:
+  # :token added to the columns :column_collations takes -> the entry
+  # reached the DDL outside a migration runner and raised another error,
+  # red on assert_raise; restored, green.
+  test "up_locations/1 takes :column_collations and builds the same table without it" do
+    assert step(:up, @first_version, MigrateFirst) == :ok
+
+    assert step(:up, @collated_version, MigrateLocationsCollated) == :ok
+    collated = location_columns()
+    assert step(:down, @collated_version, MigrateLocationsCollated) == :ok
+
+    assert step(:up, @locations_version, MigrateLocations) == :ok
+    plain = location_columns()
+
+    assert plain == [
+             {"id", nil},
+             {"address_id", nil},
+             {"token", nil},
+             {"inserted_at", nil}
+           ]
+
+    assert collated == plain
+
+    assert_raise ArgumentError, ~r/unknown column :token in :column_collations/, fn ->
+      Migrations.up_locations(column_collations: [token: "C"])
+    end
   end
 
   # sabotage: V04.down/1 made drop/1 again, not drop_if_exists/1 -> the

@@ -69,7 +69,9 @@ defmodule StatifierRouter.Migrations do
       declare - `scope`, `document`, `key`, `execution_id`, `binding_id`,
       `message_id`, `outcome`, `reason` and `invoke_id` - and the
       collation must be one the database knows; a host column takes its
-      collation in its own `:leading_columns` opts instead.
+      collation in its own `:leading_columns` opts instead. The location
+      table V04 creates declares none of these columns, so the option has
+      no effect on it (`up_locations/1`).
     * `:primary_key` - the type and default of the `id` primary key of
       every table a version creates, in place of the repo's
       `:migration_primary_key`, default: not set. A keyword list with a
@@ -285,6 +287,12 @@ defmodule StatifierRouter.Migrations do
   `:from`, a `:version` or any other key raises `ArgumentError`, as a
   leading column named like one of the table's own columns does, before
   any DDL.
+
+  `:column_collations` is validated as `up/1` validates it and has no
+  effect on this table: every name it takes is a column of V01 or V02,
+  the location table declares none of them, and its `token` column is
+  not a name the option takes. The table is created with the same
+  columns, and the same collations, with the option set as without it.
   """
   @spec up_locations(keyword()) :: :ok
   def up_locations(opts \\ []) when is_list(opts) do
