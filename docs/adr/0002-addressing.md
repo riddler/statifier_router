@@ -1739,3 +1739,44 @@ and nothing else changes.
 - **The mitigation.** Rotate a location with `rotate_location/2` when it
   may have leaked, and never run a production repo or logger at
   `:debug`.
+
+## Note (2026-10-02, sr-7zxe): the address sweep binds one array per batch on Postgres again
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. The sr-1rgb Note above moved the private
+`stamp/3` and `delete/2` of `StatifierRouter.Addresses` to an `IN` list
+of one bound parameter per id on every adapter. On Postgres that
+statement's text varies with the batch's length, so Postgres prepared a
+statement for each distinct length where the array form of 0.8.0 had
+one. Ruled by the operator, 2026-10-01: the array form on Postgres, the
+`IN` list on every other adapter.
+
+- **The adapter branch.** The private `postgres?/1` reads the repo's
+  adapter from its `__adapter__/0`. Only `Ecto.Adapters.Postgres` takes
+  the array form; every other adapter takes the `IN` list, and so does a
+  repo module that defines no `__adapter__/0` (one that delegates to an
+  Ecto repo rather than being one).
+- **The two forms.** On Postgres the private `stamp_query/2` and
+  `delete_query/2` name the rows in `fragment("? = ANY(?)", a.id,
+  ^batch)`: one bound parameter for the whole batch, so a write is the
+  same statement whatever the batch's length. Elsewhere they name them in
+  `fragment("? IN (?)", a.id, splice(^batch))`, the sr-1rgb form,
+  unchanged.
+- **The array's type.** The ids are bound as the table handed them over,
+  never cast. Postgres types the parameter as an array of the id
+  column's own type (`bigint[]` under the default key, `text[]` under a
+  text key), and Postgrex encodes the list as that type, so a text id
+  made of digits alone stays a string, as the sr-w58a Amendment's rule
+  requires.
+- **What does not change.** The batches stay at most 500 ids a
+  statement on every adapter (the private `in_batches/2` and
+  `@ids_per_statement`), and `reap/3` answers the same `stamped`,
+  `deleted` and `next` as before. No option, table or answer changes.
+- **The tests.** On Postgres, "binds each batch of ids as one array, so
+  every batch of a write is one statement" in
+  `StatifierRouter.PostgresReapTest` reads the statements from the
+  repo's query telemetry event over a reap of three batches; on SQLite,
+  "binds each batch of ids as a spliced IN list" in
+  `StatifierRouter.SQLiteReapTest` does the same. "never casts a text id
+  made of digits alone" in `StatifierRouter.PrimaryKeyTest` reaps under a
+  text key of digits on Postgres.

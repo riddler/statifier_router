@@ -121,6 +121,24 @@ defmodule StatifierRouter.SQLiteReapTest do
     |> Map.new()
   end
 
+  @doc false
+  # Runs in the process that sent the query, so a statement this test's
+  # own process sent is the only one it is told about.
+  def handle_query(_event, _measurements, %{query: query}, test) do
+    if self() == test, do: send(test, {:query, query})
+  end
+
+  # Every UPDATE or DELETE statement this test sent, in order.
+  defp writes do
+    receive do
+      {:query, "UPDATE " <> _ = query} -> [query | writes()]
+      {:query, "DELETE " <> _ = query} -> [query | writes()]
+      {:query, _other} -> writes()
+    after
+      0 -> []
+    end
+  end
+
   defp ids(config) do
     SQLiteRepo.all(from(a in Config.queryable(config, Address), select: a.id))
   end
@@ -185,6 +203,29 @@ defmodule StatifierRouter.SQLiteReapTest do
 
       assert Enum.all?(ids(config), &(is_binary(&1) and &1 =~ ~r/^0\d{11}$/))
       sweep(config)
+    end
+
+    # sabotage: made postgres?/1 answer true, so stamp/3 and delete/2 took
+    # the `? = ANY(?)` array form on SQLite -> red, the first reap raised
+    # "no such function: ANY" instead of stamping; restored, green.
+    test "binds each batch of ids as a spliced IN list" do
+      :ok = Migrator.up(SQLiteRepo, @version, MigrateIntegerKey, log: false)
+      config = config()
+      :ok = seed()
+
+      handler = "sqlite-reap-#{System.unique_integer([:positive])}"
+      query = SQLiteRepo.config()[:telemetry_prefix] ++ [:query]
+      :ok = :telemetry.attach(handler, query, &__MODULE__.handle_query/4, self())
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      sweep(config)
+
+      assert [_stamp, _delete_now, _delete_later] = statements = writes()
+
+      for statement <- statements do
+        assert statement =~ " IN ("
+        refute statement =~ "ANY("
+      end
     end
   end
 
