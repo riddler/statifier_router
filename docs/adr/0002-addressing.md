@@ -1780,3 +1780,70 @@ one. Ruled by the operator, 2026-10-01: the array form on Postgres, the
   `StatifierRouter.SQLiteReapTest` does the same. "never casts a text id
   made of digits alone" in `StatifierRouter.PrimaryKeyTest` reaps under a
   text key of digits on Postgres.
+
+## Note (2026-10-02, sr-n0y4): a late event after its address row is reaped, and the knob that decides it
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Section 5 keeps a finished execution's row
+for the longest dedupe horizon of any enabled binding naming its
+document, and the Consequences say that after the horizon a new event
+for the same address opens a fresh execution. For an execution that
+waits on more than one event, a partner that arrives after the reap
+opens a second execution for the key under `create: :if_absent`. Ruled
+by the operator, 2026-10-01: that trade is the host's, and this Note
+names where the host sets it. No create mode that refuses a key seen
+within the horizon, and no tombstone kept past the address row, is
+added.
+
+- **The knob is the dedupe horizon.** A row's reap horizon is the
+  longest `dedupe.horizon_ms` of any enabled binding naming its
+  document, computed from the bindings handed to each call of
+  `StatifierRouter.Addresses.reap/3` (section 6). It is counted from
+  `terminal_seen_at` (section 5), the first time this package read the
+  execution's status as terminal, which is never earlier than the
+  execution finished and can be later. So the first reap at or after
+  `terminal_seen_at` plus the horizon deletes the row, and a row lives at
+  least the horizon past the finish. A host whose latest partner can
+  arrive later than that lengthens the horizon on any one binding naming
+  the document. That binding's dedupe rows then live as long, since a
+  claim's `expires_at` is the delivery's time plus the same `horizon_ms`
+  (`StatifierRouter.Dedupe.claim/4`).
+- **A document no enabled binding names has a horizon of zero.** Section
+  6 says so, and it holds for a document reached only through the
+  execution target (ADR-0006, section 2): its finished rows go at the
+  next reap, whatever horizon the sender's own bindings carry.
+- **What a late event meets, by the `create` of its binding.** The
+  outcome names are ADR-0004's.
+
+  | `create` | Before the reap deletes the row | After it |
+  |---|---|---|
+  | `if_absent` | `dropped: finished`, recorded against the finished execution, whose row is stamped if it was not yet (ADR-0003, section 4) | a second execution is created for the key and stepped with the event: `created_and_delivered` when the chart's initial state takes it, `dropped: unmatched_event` when it does not, and the second execution exists either way |
+  | `never` | `dropped: finished`, as `if_absent` | `dropped: no_execution`; nothing is created |
+  | `always_new` | a new execution | a new execution |
+
+  `always_new` writes no address row (section 7), so there is no row
+  for a reap to delete and no "before" or "after" for it: every event
+  of that binding opens its own execution, at any time.
+- **`create: :never` on the partner binding is the first-line answer.**
+  A binding whose event only ever joins an execution another binding
+  opened sets `create: :never`; after the reap its late event is the
+  recorded drop `dropped: no_execution`, not a second execution. Its
+  cost: an event of that binding that arrives before the opening event
+  is dropped the same way and is lost, since nothing holds it until the
+  execution exists. A host whose events can arrive in either order keeps
+  `if_absent` and sets the horizon longer than the latest event it
+  expects.
+- **The tests.** `StatifierRouter.LatePartnerTest`
+  (`test/statifier_router/late_partner_test.exs`) pins, over the parcel
+  chart: the `if_absent` and `never` rows before and after the reap; for
+  `always_new`, one execution per event and no row, with a reap between
+  them that finds nothing; the longest enabled horizon as the knob, a
+  disabled binding's horizon not counting; and the cost of
+  `create: :never`. The horizon of zero for a document no enabled binding
+  names is "a document no enabled binding names has a horizon of zero:
+  its finished rows go at the next reap" in
+  `StatifierRouter.CreateModesTest`; the execution-target case of it is
+  not tested on its own.
+- **Left open.** A create mode that refuses a key seen within the
+  horizon, and a tombstone kept past the address row, are for a later
+  record.
