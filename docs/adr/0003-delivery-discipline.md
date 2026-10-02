@@ -731,3 +731,109 @@ written: `lib/statifier_router/delivery.ex` for `taken/7`, `create/6`
 and `step/7`, `lib/statifier_router/send_handler.ex` for
 `deliver_to/5`, and `test/statifier_router/execution_target_test.exs`
 for the test.
+
+## Amendment (2026-10-02, sr-t36w): one optional wrapper runs a whole delivery inside a host's context, on the doors the router drives
+
+Status: proposed
+
+The create and step hooks of the Amendment of 2026-09-25 reach the create
+and the step and nothing else a delivery does. A host whose repo and rows
+read a tenancy context of its own - one held in the process, or a
+transaction-local database setting - has had no seam that covers the
+dedupe claim, the address row, the status read, the ledger row, the
+bindings read or a `key_refused` row. This Amendment adds one. Its shape
+was ruled by the operator, 2026-10-01: the wrapper is handed the scope,
+the BasicHTTP front resolves its token outside it, and the execution-target
+door is not wrapped.
+
+- **The option.** `StatifierRouter.Config` takes one optional key,
+  `:around_delivery`, defaulting to `nil`: a module exporting
+  `around_delivery/3`, or a fun of arity 3. `Config.new/1` checks that
+  shape and nothing more, as it checks the hooks, and refuses any other
+  value with `{:error, {:invalid_value, :around_delivery, value}}`.
+- **Its contract.** It is handed `(scope, door, work)`: the scope the
+  delivery runs under, the door it came through, and a fun of arity 0
+  that does the door's work. It calls `work` exactly once and answers
+  what `work` answered. A wrapper that answers anything else, never calls
+  `work`, or calls it twice raises `ArgumentError` once it returns, so a
+  wrapper that hands back a `c:Ecto.Repo.transaction/2` answer, which
+  wraps the work's answer in `{:ok, _}`, is refused rather than mistaken
+  for a routing answer.
+- **Absent is today.** With the key left out, no wrapper is called and
+  every door runs its work directly: the router issues the same
+  statements, in the same order, and answers the same as before the key
+  existed.
+- **The names.** `:around_delivery` says what the option does: it runs
+  around a whole delivery, where `:on_create` and `:on_step` run in place
+  of one call inside it. The doors are named for the entry point that
+  calls the wrapper: `:route` for `route/3`, `:partition` for the
+  partitioner, `:basichttp` for the front, whose plan name is the same
+  word.
+
+**Where the wrapper lives.** Not in the `:delivery` option. The BasicHTTP
+front and `StatifierRouter.SendHandler` call
+`StatifierRouter.Delivery.deliver_event/4` directly and never reach the
+configuration's `:delivery` module, and `route/3` writes its `key_refused`
+row and reads its bindings outside that module too. So the wrapper is
+called by the entry points, around their call into `StatifierRouter.Delivery`,
+and `StatifierRouter.Delivery` itself never calls it.
+
+**The doors.** Every door that reads or writes for a delivery, and
+whether the wrapper encloses it:
+
+| Door | Wrapped | Door atom | What runs inside, or why not |
+|---|---|---|---|
+| `StatifierRouter.route/3` | yes | `:route` | the bindings read, every `key_refused` row and every binding's delivery, after the event and the options are checked; one call per `route/3` call, handed the event's scope |
+| `StatifierRouter.Webhook.handle/3` | yes, through `route/3` | `:route` | as `route/3`; the webhook front reads and writes nothing of its own |
+| `StatifierRouter.Broadway`'s `handle_message/3` | yes, through `route/3` | `:route` | as `route/3`, in the processor |
+| `StatifierRouter.Broadway.partition/3` | yes | `:partition` | the bindings read for one message, in the producer's dispatcher, with no transaction open |
+| `StatifierRouter.BasicHTTP.Front.handle/3` | the delivery only | `:basichttp` | the delivery, handed the address row's scope; the token's lookup runs before the call and outside it, because the scope is not known until the token resolves |
+| the execution target, at the executor seam | no door of its own | none | it runs inside the sending execution's step; see the table below |
+| the execution target, on the send-processor shape | no | none | no delivery of the router's is running; see the table below |
+| `StatifierRouter.Delivery.deliver/4` and `deliver_event/4`, called by a host itself | no | none | the host's own call, which it wraps at the call |
+| `subscribe/3`, `cancel/2`, `StatifierRouter.BasicHTTP.rotate_location/2` and the two reapers | no | none | host-called writes outside any delivery, which the host wraps at the call |
+
+**The execution target, per shape.** The door is not wrapped. Whether a
+wrapper encloses it depends on who drove the sending step:
+
+| The sending step was driven by | Does a wrapper enclose the target's delivery |
+|---|---|
+| a wrapped door: a binding's delivery through `route/3`, or the BasicHTTP front | yes: the target's delivery runs inside the sender's step, in the same process and the same transaction, so the `:route` or `:basichttp` call around the sender's delivery encloses it and its context is the sender's |
+| a step the router did not drive: a delayed event a timer job steps in, or a step the host makes itself | no: no door of the router's was called, and the host wraps the call that steps the execution |
+| a live session on the send-processor shape (`SendHandler.perform/2`) | no: `deliver_event/4` opens the transaction itself and nothing of the router's encloses it; the host wraps its own call that performs the send |
+
+So the target door is not always inside a wrapped step, and this Amendment
+does not claim it is. Wrapping it on the shapes where no wrapper reaches
+is not decided here.
+
+**What a context reaches.** A context the wrapper holds in the process is
+visible to every statement `work` runs, in the process that called the
+wrapper; for the partitioner that is the producer's dispatcher. A
+transaction-local setting is visible only inside a transaction: each
+delivery opens its own, so a setting made before `work` reaches the
+deliveries only when the wrapper opened a transaction on the
+configuration's repo first, and the partitioner's read and a `key_refused`
+row run in no transaction of the router's.
+
+**A wrapper that opens a transaction.** A wrapper that runs `work` inside
+a transaction of its own on the configuration's repo makes every delivery
+of one `route/3` call commit together, or roll back together: each
+delivery nests into it and settles its own error at its savepoint, which
+the Amendment of 2026-09-23 allows. A host that wraps this way is told so
+in `StatifierRouter.Config`'s documentation and in the README.
+
+**Where the code is.** In the pull request that carries this Amendment:
+`StatifierRouter.Config`'s `new/1` checks the key and its package-internal
+`around_delivery/4` calls the wrapper or runs the work;
+`StatifierRouter.route/3`, the private `bindings_for/2` of
+`StatifierRouter.Broadway` and the private `deliver/5` of
+`StatifierRouter.BasicHTTP.Front` call it. The anchors that predate this
+Amendment were read at `bbe6c16`: `StatifierRouter.SendHandler`'s private
+`deliver_to/5` and its `perform/2`, and `StatifierRouter.Delivery`'s
+`deliver/4` and `deliver_event/4`. The tests are in
+`test/statifier_router/around_delivery_test.exs`: one per wrapped door,
+one for the execution target at the executor seam under a wrapped
+`route/3` and one on the send-processor shape, one for a wrapper that
+opens a transaction, one for the wrapper's contract, and one that
+compares a configuration without the key against the statements captured
+before the key existed.

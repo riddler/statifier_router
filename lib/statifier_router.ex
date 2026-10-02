@@ -372,6 +372,12 @@ defmodule StatifierRouter do
   `{:error, {:duplicate_binding_id, id}}`, before any binding is
   evaluated.
 
+  When the configuration gives an `:around_delivery`, everything after the
+  event and the options are checked - the bindings read, every
+  `key_refused` row and every delivery - runs inside one call of it,
+  handed the event's scope and the door `:route` (ADR-0003, the Amendment
+  of 2026-10-02). `StatifierRouter.Config` says what it must answer.
+
   `opts`:
 
     * `:now` - a `DateTime` in UTC, the time the attempt uses for the rows
@@ -381,8 +387,17 @@ defmodule StatifierRouter do
           {:ok, [outcome()]} | {:error, term()}
   def route(%Config{} = config, source_event, opts \\ []) do
     with {:ok, event} <- validate_event(source_event),
-         {:ok, now} <- fetch_now(opts),
-         {:ok, bindings} <- Config.bindings_for(config, event.scope) do
+         {:ok, now} <- fetch_now(opts) do
+      Config.around_delivery(config, event.scope, :route, fn ->
+        route_event(config, event, now)
+      end)
+    end
+  end
+
+  # Everything route/3 reads and writes for one event: the `:route` door's
+  # work (ADR-0003, the Amendment of 2026-10-02).
+  defp route_event(config, event, now) do
+    with {:ok, bindings} <- Config.bindings_for(config, event.scope) do
       bindings
       |> Enum.filter(&(&1.enabled and &1.source == event.source))
       |> Enum.reduce_while({:ok, []}, &route_next(config, &1, event, now, &2))

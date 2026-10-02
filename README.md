@@ -1002,8 +1002,53 @@ partitioner asks the `:bindings_resolver` too; the `key_refused` row is
 written by `route/3`, outside the `:delivery` module; and a send to an
 execution target is delivered by `StatifierRouter.Delivery.deliver_event/4`
 inside the sending step, never through the `:delivery` module, whichever
-scope the target is in. There is no one seam today that wraps a whole
-delivery on every door; that gap is open, left for a later decision.
+scope the target is in. The `:around_delivery` option below is the seam
+that reaches every door the router drives itself.
+
+### Wrapping a whole delivery
+
+The configuration's `:around_delivery` option is the one seam that wraps a
+whole delivery: every read and write of it, on the doors the router drives
+itself. It is a module exporting `around_delivery/3`, or an arity-3 fun,
+handed `(scope, door, work)`; it calls `work` exactly once and answers what
+`work` answered. Left out, nothing is called and the router issues the same
+statements it did before the option existed.
+
+```elixir
+around_delivery = fn scope, _door, work ->
+  MyApp.Tenancy.put(scope)
+
+  try do
+    work.()
+  after
+    MyApp.Tenancy.delete()
+  end
+end
+
+{:ok, config} = StatifierRouter.Config.new(base_options ++ [around_delivery: around_delivery])
+```
+
+| Door | Called by | What `work` covers |
+|---|---|---|
+| `:route` | `StatifierRouter.route/3`, so `StatifierRouter.Webhook.handle/3` and each message `StatifierRouter.Broadway` handles | the bindings read, every `key_refused` row and every binding's delivery |
+| `:partition` | `StatifierRouter.Broadway`'s partitioner, in the producer's process | the bindings read for one message |
+| `:basichttp` | `StatifierRouter.BasicHTTP.Front.handle/3` | the delivery; the token is resolved before the call, outside it |
+
+A send to an execution target is not wrapped by a door of its own. At the
+executor seam it runs inside the sending execution's step, so the `:route`
+call around that step's delivery already encloses it. On the send-processor
+shape, and from a step the router did not drive, nothing of the router's
+encloses it: wrap the call that performs the send, or the step, yourself. A
+call your own code makes to `StatifierRouter.Delivery`, `subscribe/3`,
+`cancel/2`, the location rotation or a reaper is yours to wrap at the call.
+
+A context held in the process reaches every statement `work` runs. A
+transaction-local database setting reaches them only when the wrapper opens
+a transaction on the configuration's repo before calling `work`, and then
+every delivery of one `route/3` call commits, or rolls back, together. The
+partitioner's read runs in no transaction, so there only the process
+context reaches it. `StatifierRouter.Config` documents the option, and
+ADR-0003's Amendment of 2026-10-02 records the decision.
 
 ### Minting the execution id
 
