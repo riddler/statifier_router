@@ -1,7 +1,7 @@
 defmodule StatifierRouter.MixProject do
   use Mix.Project
 
-  @version "0.9.2"
+  @version "0.10.0"
   @source_url "https://github.com/riddler/statifier_router"
 
   def project do
