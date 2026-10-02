@@ -627,7 +627,12 @@ defmodule StatifierRouter.Config do
   # a configuration without the key runs exactly what it ran before
   # (ADR-0003, the Amendment of 2026-10-02). The work reports its answer to
   # the calling process, which is how the wrapper is held to calling it
-  # exactly once and answering what it answered.
+  # exactly once and answering what it answered. A report rather than a
+  # counter in the process dictionary, because a wrapper may run the work
+  # in another process. The reports are drained on every way out of the
+  # wrapper - a return, a raise, an exit or a throw - so none is left in
+  # the caller's mailbox, and a wrapper that fails is re-raised with its
+  # own kind, reason and stacktrace.
   @doc false
   @spec around_delivery(t(), String.t(), door(), (-> answer)) :: answer when answer: term()
   def around_delivery(%__MODULE__{around_delivery: nil}, _scope, _door, work), do: work.()
@@ -642,13 +647,23 @@ defmodule StatifierRouter.Config do
       answer
     end
 
-    answered = call_wrapper(wrapper, scope, door, reported)
+    returned =
+      try do
+        {:returned, call_wrapper(wrapper, scope, door, reported)}
+      catch
+        kind, reason -> {:failed, kind, reason, __STACKTRACE__}
+      end
 
-    case worked(ref, []) do
-      [answer] when answer === answered ->
+    answers = worked(ref, [])
+
+    case {returned, answers} do
+      {{:failed, kind, reason, stacktrace}, _answers} ->
+        :erlang.raise(kind, reason, stacktrace)
+
+      {{:returned, answered}, [answer]} when answer === answered ->
         answer
 
-      answers ->
+      {{:returned, answered}, answers} ->
         raise ArgumentError,
               "the :around_delivery wrapper called its work #{length(answers)} time(s) " <>
                 "for the door #{inspect(door)} and answered #{inspect(answered)}; it must " <>

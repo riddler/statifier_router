@@ -674,6 +674,46 @@ defmodule StatifierRouter.AroundDeliveryTest do
       end
     end
 
+    # sabotage: around_delivery/4 called the wrapper outside its try/catch
+    # -> the three reports of the wrappers that failed after their work
+    # stayed in the mailbox, red; restored, green.
+    test "a wrapper that fails after or before its work fails with its own error and leaves no report in the caller's mailbox" do
+      returned = %{parcel_scan("parcel_scans/1/0009", "returned") | data: %{"kind" => "returned"}}
+
+      route = fn wrapper ->
+        config = config(self(), bindings: parcel_bindings(), around_delivery: wrapper)
+        StatifierRouter.route(config, returned, now: @now)
+      end
+
+      assert_raise RuntimeError, "the context did not reset", fn ->
+        route.(fn _scope, _door, work ->
+          work.()
+          raise "the context did not reset"
+        end)
+      end
+
+      assert catch_exit(
+               route.(fn _scope, _door, work ->
+                 work.()
+                 exit(:context_lost)
+               end)
+             ) == :context_lost
+
+      assert catch_throw(
+               route.(fn _scope, _door, work ->
+                 work.()
+                 throw(:context_lost)
+               end)
+             ) == :context_lost
+
+      assert_raise RuntimeError, "no context for this scope", fn ->
+        route.(fn _scope, _door, _work -> raise "no context for this scope" end)
+      end
+
+      {:messages, messages} = Process.info(self(), :messages)
+      assert for({ref, _answer} = report when is_reference(ref) <- messages, do: report) == []
+    end
+
     # sabotage: call_wrapper/4's module clause handed around_delivery/3
     # the door and the scope swapped -> the module saw :route as the
     # scope, red; restored, green.
