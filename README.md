@@ -64,6 +64,37 @@ reprocessing is a strategy the host rolls. A host that needs a failed delivery
 retried picks a producer that gives it back, or arranges the replay itself. A
 binding whose `order` is `:none` is not partitioned by its key.
 
+### One key's events, one at a time
+
+Partitioning spreads keys across processors; it never spreads one key.
+Every event for one address runs in order on one processor and steps its
+execution under that execution's lock, and each delivery that steps it
+is one transaction of several row writes: the dedupe claim, the
+execution's step (its stored position and the event appended to its input
+log), the routing ledger row, and on a key's first event the address row
+and the new execution. So the rate for one key is one delivery transaction after
+another, whatever the processor count: more processors raise the rate
+across keys, never the rate for one key. A binding whose `order` is
+`:none` spreads one key's events across processors, but they still step
+one at a time under the lock, with processors waiting on it. That ceiling
+is a property of the design, not a figure this package promises; where it
+falls depends on the host's database and charts.
+
+A key hot enough to meet the ceiling has three pressure valves, in this
+order:
+
+- **Fold its events into one.** The host combines a burst of one key's
+  events into one chart event that carries them together, before they are
+  routed. The pipeline has no batchers, so the folding is the host's, in
+  its producer or ahead of it.
+- **A live session for the hot key.** The host runs that key's chart in a
+  `Statifier.Session`, stepped in memory rather than by one durable
+  delivery per event; what it gives up is the per-event durable record a
+  delivery writes.
+- **Join upstream.** For a true firehose, the high-volume join runs in the
+  source layer or a dedicated stream processor, and its outcomes, not its
+  raw events, are routed into charts.
+
 ## What this package owns
 
 - **Bindings**: source -> match -> key -> document -> event. `match` and
@@ -121,6 +152,45 @@ document, one key:
 
 The shape is illustrative: the binding's fields are fixed by the package's
 first decision record, not by this README.
+
+### A key program that normalizes
+
+The `key` program's answer is the key exactly as it is answered: the router
+trims nothing and converts nothing, and it refuses any answer that is not a
+non-empty string (ADR-0001, section 3). When the sources of one document
+send the same id in different shapes, that is two hazards:
+
+- **A number is refused.** A depot scanner that sends `"parcel_id":
+  1042771` has every one of its events refused on that binding: one
+  `key_refused` row in the routing ledger per event, and nothing delivered.
+- **A padded string is a second address.** A carrier webhook that sends
+  `" 1042771 "` addresses `(scope, "parcel_delivery", " 1042771 ")`, not
+  the parcel's execution: under the default `create: :if_absent` its first
+  event opens a second execution for the same parcel, and under
+  `create: :never` it is dropped as `:no_execution`.
+
+The key program is where the author normalizes, and it goes on **every**
+binding that addresses the document: a cast to `string` and a `trim` make
+one key of both shapes, and a binding left with the raw path keys its own
+events apart again.
+
+```elixir
+[
+  %{id: "depot_scans_to_parcel", source: "depot_scanners",
+    match: ~s(event.kind == "scan"), key: "trim(event.parcel_id::string)",
+    document: "parcel_delivery", event: "parcel.scanned"},
+  %{id: "carrier_scans_to_parcel", source: "parcel_scans",
+    match: ~s(event.kind == "delivered"), key: "trim(event.parcel_id::string)",
+    document: "parcel_delivery", event: "parcel.delivered"}
+]
+```
+
+Both bindings answer `"1042771"` for `1042771` and for `" 1042771 "`, so
+both sources reach one execution, and the Broadway partitioner, which
+evaluates the same program, keeps them on one processor. An event that
+carries no `parcel_id` is still refused: `trim` answers an error for an
+absent value. `StatifierRouter.Binding`'s module documentation runs this
+key program as a doctest.
 
 ### Bindings that differ by scope
 
