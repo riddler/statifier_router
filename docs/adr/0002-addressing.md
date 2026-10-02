@@ -1688,3 +1688,54 @@ against the package as it is: a failed POST delivered back through
 the execution on `error.communication` and finishes it, a retried job is
 a duplicate, and a failure reaching a finished execution is
 `{:dropped, name, :finished}`.
+
+## Note (2026-10-02, sr-d2j1): the location token is kept out of this package's own query log
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Section 6 of the sr-xgi8 location Amendment
+says to keep a location out of logs. At the `:debug` level Ecto's query
+log prints every bound parameter, and three of this package's
+statements bind the token, so a host running at `:debug` had the token
+printed by this package's own statements. Ruled by the operator,
+2026-10-01: those three statements run with Ecto's `log: false` option,
+and nothing else changes.
+
+- **The three statements.** The front's lookup, which the private
+  `resolve/2` of `StatifierRouter.BasicHTTP.Front` runs over the query
+  its private `address_by_token/2` builds; the location insert at
+  create, in the private `locate/3` of `StatifierRouter.Delivery`; and
+  the upsert in `StatifierRouter.BasicHTTP.rotate_location/2`. Each
+  passes `log: false` to the repo call itself. No other statement in
+  this package binds the token: `StatifierRouter.BasicHTTP.location/2`
+  binds only the execution id and reads the token back as its result,
+  which the query log does not print. No table, option, answer or
+  transaction changes. The test is "the debug query log" in
+  `test/statifier_router/basic_http_query_log_test.exs`.
+- **The token is part of the execution's persisted state.** The
+  location is written into the execution's `_ioprocessors` once, when
+  the session starts (statifier 2.10.0, `Statifier.MachineState.new/2`;
+  the moduledoc of `Statifier.Evaluator.SystemVariables`: "The entries
+  are written here, once, when the session starts, and nowhere else"),
+  and a persisted position carries it. statifier_persistence 0.18.0
+  writes that position into `position_blob` on the create (the private
+  `do_insert_execution/3` of `StatifierPersistence.Storage.Ecto`) and on
+  every step (its `update_execution/2`), so the token is bound on those
+  writes whatever this package does, and is at rest in the clear unless
+  the host passes an encrypting `:blob_type` to that package. Ecto's
+  inspect limit cuts the printed blob short, so the token is unreadable
+  in those log lines, not absent from the parameters.
+- **This package keeps the token out of its own query log only.** The
+  statements of other packages are theirs. And `log: false` stops the
+  log line, not the query telemetry event: in ecto_sql 3.14.0 (this
+  package's `mix.lock`), the private `log/5` of `Ecto.Adapters.SQL`
+  emits the repo's query telemetry event, with the bound parameters in
+  its metadata, before it reads the `log` option, so a host's handler
+  on that event still receives the token.
+- **After a rotation.** The persisted `_ioprocessors` still names the
+  old token, and the new token never enters `position_blob`. The
+  location Amendment's "What rotation does not reach" bullet already
+  says a chart reads the location it started with, which answers 404
+  after a rotation.
+- **The mitigation.** Rotate a location with `rotate_location/2` when it
+  may have leaked, and never run a production repo or logger at
+  `:debug`.

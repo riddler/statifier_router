@@ -584,7 +584,8 @@ defmodule StatifierRouter.Delivery do
   # gets a location, a token minted beside it and inserted in the same
   # transaction and savepoint, before `create/4`. The loser of the race
   # for the address mints nothing that is written, and a rollback takes
-  # the location with the address row.
+  # the location with the address row. The insert binds the token, so it
+  # runs with `log: false` (ADR-0002, the Note of 2026-10-02).
   defp locate(%Config{basichttp: nil}, _row, delivery), do: delivery
 
   defp locate(config, %Address{id: address_id}, delivery) do
@@ -595,7 +596,8 @@ defmodule StatifierRouter.Delivery do
         address_id: address_id,
         token: token,
         inserted_at: delivery.now
-      })
+      }),
+      log: false
     )
 
     Map.put(delivery, :location_token, token)
