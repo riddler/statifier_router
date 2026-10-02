@@ -56,6 +56,56 @@ defmodule StatifierRouter.Binding do
   `project/2` builds the delivered event's data from the `data` paths
   (ADR-0001 section 5).
 
+  ## A key is used as it is answered
+
+  `key/2` normalizes nothing: the string the program answers is the key
+  the address is written under. When the sources of one document send the
+  same id in different shapes, that is two hazards:
+
+    * A source that sends the id as a number has every event refused on
+      that binding: `key/2` answers `{:refused, {:invalid_key, 1042771}}`,
+      and `StatifierRouter.route/3` writes one `key_refused` row to the
+      routing ledger for each such event and delivers nothing.
+    * A source that sends it padded, `" 1042771 "`, names a different
+      address: under `create: :if_absent` its first event opens a second
+      execution for the same entity, and under `create: :never` it is
+      dropped as `:no_execution`.
+
+  The key program is the author's tool for both, and it goes on every
+  binding that addresses the document, since a binding left with the raw
+  path keys its own events apart again. A cast to string and a trim make
+  one key of both shapes; an event that carries no id is still refused:
+
+      iex> scan = fn id -> %{"kind" => "scan", "parcel_id" => id} end
+      iex> {:ok, raw} =
+      ...>   StatifierRouter.Binding.new(
+      ...>     id: "depot_scans_to_parcel",
+      ...>     source: "depot_scanners",
+      ...>     match: "event.kind == 'scan'",
+      ...>     key: "event.parcel_id",
+      ...>     document: "parcel_delivery",
+      ...>     event: "parcel.scanned"
+      ...>   )
+      iex> StatifierRouter.Binding.key(raw, scan.(1042771))
+      {:refused, {:invalid_key, 1042771}}
+      iex> StatifierRouter.Binding.key(raw, scan.(" 1042771 "))
+      {:ok, " 1042771 "}
+      iex> {:ok, normalized} =
+      ...>   StatifierRouter.Binding.new(
+      ...>     id: "depot_scans_to_parcel",
+      ...>     source: "depot_scanners",
+      ...>     match: "event.kind == 'scan'",
+      ...>     key: "trim(event.parcel_id::string)",
+      ...>     document: "parcel_delivery",
+      ...>     event: "parcel.scanned"
+      ...>   )
+      iex> StatifierRouter.Binding.key(normalized, scan.(1042771))
+      {:ok, "1042771"}
+      iex> StatifierRouter.Binding.key(normalized, scan.(" 1042771 "))
+      {:ok, "1042771"}
+      iex> {:refused, {:evaluation_error, _error}} =
+      ...>   StatifierRouter.Binding.key(normalized, %{"kind" => "scan"})
+
   ## Example
 
       iex> {:ok, binding} =
