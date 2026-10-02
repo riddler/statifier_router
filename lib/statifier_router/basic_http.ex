@@ -174,6 +174,8 @@ defmodule StatifierRouter.BasicHTTP do
       %Address{id: address_id} ->
         token = mint_token()
 
+        # The upsert binds the token, so it runs with `log: false`: Ecto's
+        # :debug query log would print it (ADR-0002, the Note of 2026-10-02).
         config.repo.insert!(
           Config.put_meta(config, %Location{
             address_id: address_id,
@@ -181,7 +183,8 @@ defmodule StatifierRouter.BasicHTTP do
             inserted_at: DateTime.utc_now()
           }),
           on_conflict: [set: [token: token]],
-          conflict_target: [:address_id]
+          conflict_target: [:address_id],
+          log: false
         )
 
         {:ok, location_string(Keyword.fetch!(basichttp, :base_url), token)}

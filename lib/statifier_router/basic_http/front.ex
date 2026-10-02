@@ -187,10 +187,13 @@ defmodule StatifierRouter.BasicHTTP.Front do
 
   # The address row a token names, joined through its location. A token
   # that is not a minted token's shape is never looked up, and a row
-  # already seen terminal reaches nothing the front can deliver to.
+  # already seen terminal reaches nothing the front can deliver to. The
+  # lookup binds the token, so it runs with `log: false`: Ecto's :debug
+  # query log would print it (ADR-0002, the Note of 2026-10-02).
   defp resolve(config, token) do
     with true <- BasicHTTP.token?(token),
-         %Address{terminal_seen_at: nil} = row <- config.repo.one(address_by_token(config, token)) do
+         %Address{terminal_seen_at: nil} = row <-
+           config.repo.one(address_by_token(config, token), log: false) do
       {:ok, row}
     else
       _unknown -> {:error, :unknown_location}
