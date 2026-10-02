@@ -532,3 +532,71 @@ resolves.
 What a migrated execution's next delivery steps on is ADR-0002's, and
 its Note of 2026-09-26 says it. No test in this repository exercises a
 parked execution yet; this Note is read from the code.
+
+## Note (2026-10-02, sr-31nh): a fired timer is not a routed delivery, and the ledger takes no row for it
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It records that a fired timer is not a
+routing attempt, so section 1 gives it no outcome and section 4 no row,
+which is what the code already does; and it says where a host sees a
+fire instead. The operator ruled on 2026-10-01 that fires stay off the
+ledger in this release, with no timer outcome added. Code cites are read
+at `184d96d`; statifier_oban cites are read at its `v0.17.0` tag
+(`cab60c5`) and statifier_persistence cites at its `v0.18.0` tag, the
+versions this package's `mix.lock` resolves.
+
+- **The ledger's claim is every routed delivery.** Section 1 gives one
+  outcome to each enabled binding per routing attempt, and section 4
+  writes one row per recorded outcome per attempt. A routed delivery is
+  one a door of this package settles: a binding's delivery under
+  `route/3` (`StatifierRouter.Delivery.deliver/4`), or a delivery through
+  `StatifierRouter.Delivery.deliver_event/4`, the door an
+  execution-to-execution send (ADR-0006) and the BasicHTTP front
+  (`StatifierRouter.BasicHTTP.Front.handle/3`) deliver through. Each
+  that does not end in an error (section 7) ends in one outcome, and
+  every outcome but no_match is a row. A step of an execution that no
+  door of this package made is not a routed delivery and has no row.
+  Read so, "every delivery attempt ends in one named outcome" (the
+  `StatifierRouter` moduledoc's sentence before this change) is every
+  routed delivery attempt.
+- **A fire is a step no door made.** A delayed event a chart's `<send>`
+  armed is fired by the host's timer queue. statifier_oban's timer job
+  hands the stored send to the delivery module the host configured
+  (`StatifierOban.Timer.Worker`). For a durable execution that module is
+  the host's own, written to "The contract for a process-less durable
+  host" (`StatifierOban.Timer.Delivery`): it reads the execution's stored
+  status and steps the event in with
+  `StatifierPersistence.Executions.step/5`. No binding is evaluated, no
+  address row is read or written, no dedupe row is claimed and no ledger
+  row is written. ADR-0003's Amendment of 2026-10-02 lists the same step
+  as one the router did not drive.
+- **A delayed route send is not a delivery to an execution.** A delayed
+  send that a `StatifierRouter.TimerQueue` row holds is handed to its
+  route when it fires (`StatifierRouter.TimerQueue`, "Firing a row"),
+  not to an execution, and this package writes no ledger row for it
+  either.
+- **Why it stays off.** The fire is delivered by the timer queue's own
+  job, and the job row already records what happened to it. A ledger
+  row per fire would change what the ledger answers for every host whose
+  charts arm timers: a host counting its ledger rows per execution, or
+  per scope, would find a row for every fire where it finds none today.
+- **Where a host sees a fire into a finished execution.** On the timer
+  job. The delivery answers `{:discarded, status}` for an execution that
+  is no longer active, and the job is cancelled with that answer recorded
+  on its row (`StatifierOban.Timer.Worker`), with the
+  `[:statifier_oban, :timer, :discarded]` telemetry event beside it
+  (`StatifierOban.Telemetry`). `step/5` answers `{:discarded, execution}`
+  for a terminal execution, and the input log takes nothing
+  (sp-ADR-0010, section 5). A routed delivery to the same finished
+  execution is dropped: finished and is a ledger row (section 1).
+- **Pinned.** `test/statifier_router/timer_fire_ledger_test.exs`
+  schedules a delivery window that a parcel chart arms on statifier_oban,
+  on the suite's Oban instance, and fires it by draining the queue, into
+  a live execution and into a finished one. Neither fire writes a ledger
+  row or changes the address table; the fire into the finished execution
+  leaves its job cancelled with the discard on the row; and a routed
+  delivery to that execution then writes its dropped: finished row.
+
+A delivery of a fired timer that this package would own, and that would
+write a ledger row of its own, is not decided here; adding one would
+change section 1's outcomes and is an Amendment's to make.
