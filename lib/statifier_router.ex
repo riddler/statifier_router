@@ -16,8 +16,11 @@ defmodule StatifierRouter do
     * Atomic get-or-create-and-deliver: the execution an address names is
       created when absent and handed the event in the same step.
     * Dedupe on `(binding, message_id)` with a horizon.
-    * The recorded outcome vocabulary: every delivery attempt ends in one
-      named outcome.
+    * The recorded outcome vocabulary: every routed delivery attempt ends
+      in one named outcome. A fired timer is not a routed delivery: the
+      timer queue's own job steps it into its execution, and the job row,
+      not the routing ledger, records it (ADR-0004, the Note of
+      2026-10-02).
     * Execution-to-execution sends: a `<send>` whose `target` is the
       reserved name `StatifierRouter.SendHandler.execution_target/0`
       resolves through the address table and is delivered by the same
