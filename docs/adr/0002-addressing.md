@@ -1457,7 +1457,7 @@ integer key, under a text key of digits, and past one batch.
 
 ## Amendment (2026-10-02, sr-bpw3): a durable execution's outbound BasicHTTP send is performed after the delivery commits, and a failed POST comes back through deliver_event/4
 
-Status: proposed
+Status: accepted
 
 The Amendment of 2026-09-30 above on the BasicHTTP location ends its
 decision 4 with "What is not decided here": "What an outbound BasicHTTP
@@ -1847,3 +1847,77 @@ added.
 - **Left open.** A create mode that refuses a key seen within the
   horizon, and a tombstone kept past the address row, are for a later
   record.
+
+## Note (2026-10-02, sr-4llw): the outbound BasicHTTP send Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`, under the standing grant of the operator's
+campaign consent of 2026-10-01. The `## Amendment (2026-10-02, sr-bpw3)`
+on the outbound BasicHTTP send is such a record: its `Status:` line
+moved from `proposed` to `accepted`. It changes no code; its recipe and
+its test landed in PR 147 (`84f3c46`), and every function it relies on
+shipped in statifier_router 0.10.0 (tag `v0.10.0`, at `f823adb`,
+published on Hex 2026-10-02T11:42:49Z). The record's own status on line
+3 was already `accepted` and was not touched, and the three Notes of
+2026-10-02 between that Amendment and this Note carry no status.
+
+Every claim was re-verified by anchor at `f823adb`, which is both the
+tag and `main` at the time of the flip (the Amendment read this package
+at `467c36d`); statifier cites at its `v2.10.0` tag and
+statifier_persistence cites at 0.18.0, the versions `mix.lock` still
+resolves. Three later changes touched files the Amendment cites, and none
+changes a claim: the Note of 2026-10-02 on the query log (`log: false`
+on the front's token lookup), the Note of 2026-10-02 on the address sweep
+(the reap binds one array on Postgres), and ADR-0003's Amendment of
+2026-10-02 (the front's delivery runs inside `:around_delivery`, and
+`deliver_event/4` is still unwrapped and still sets no delivery scope).
+
+- What bounds it: `StatifierPersistence.Executor`'s `execute/2`
+  callback; `StatifierRouter.Delivery`'s moduledoc, "What a route may not
+  do while a delivery runs"; `StatifierRouter.BasicHTTP.deliver/3` and
+  `perform/2` hand each call to `Statifier.Send.BasicHTTP` unchanged.
+  That module's `deliver/3` answers `{:ok, instructions}`, the list
+  holding the one instruction the Amendment names for each case, which is
+  how its "answers one instruction" reads. Its private `post_now/2` and
+  `report/3` call `Statifier.Session.failed_send/3` only when
+  `Statifier.Registry` holds a session under the plan context's
+  `session_id`, and answer `{:error, reason}` either way; its private
+  `send_key/2` writes the eight fields, `session_id` first, into the
+  `scxml-send-key` header. `StatifierPersistence.Executions`' moduledoc
+  and its private `reentry_origin/1` re-enter an executor's error as the
+  Amendment says, and ADR-0003's Consequences carry the quoted line.
+- Decision 1: `Statifier.Send.Event.build/2` takes the send and the
+  session id; `StatifierRouter.Config`'s `basichttp` field is a keyword
+  list or `nil`; `StatifierRouter.BasicHTTP` is registered under its
+  `@uri` and `@short` strings.
+- Decisions 2 and 4: the README's "A transactional outbox, end to end"
+  and "Sending from a durable execution" show the job inserted at the
+  seam, keyed on the send's dedup key fields, and performed after the
+  commit; no code of this package's is involved.
+- Decision 3: `StatifierRouter.Addresses.by_execution/2` answers the row
+  or `nil`. `StatifierRouter.Delivery.deliver_event/4` under a `create:
+  :never` plan answers `{:dropped, id, :no_execution}` from the private
+  `absent/4`, `{:dropped, id, :finished}` from the private `finished/6`,
+  and `{:duplicate, id}` on a duplicate claim; the private `taken/7`
+  drops `unmatched_event` only for a `StatifierRouter.Binding` plan.
+  `deliver_event/4` goes straight to the private `settled/5` and sets no
+  delivery scope: only the binding path's private `delivered/4` and the
+  front's private `deliver/5` set one, and `StatifierRouter.SendHandler`'s
+  moduledoc, "The scope a route is resolved in", names
+  `{:no_delivery_scope, name}`. The 72-hour horizon is ADR-0001, section
+  1's default and the front's own; ADR-0006, section 1 reserves
+  `execution` and the front's plan id is `basichttp`.
+- Decision 5: `Statifier.Send.BasicHTTP`'s moduledoc, "A delayed send is
+  this processor's timer", and its private `hold/4` POST only while the
+  owner is a session still running; the README's recipe refuses a
+  `{:send_delayed, _}` of either type string. The delayed send stays
+  open, as the Amendment says.
+- Decision 6: the four functions it names are public in 0.10.0, and no
+  helper ships.
+- Where it is shown: `test/statifier_router/basic_http_send_test.exs`,
+  under "a failed after-commit send", pins the delivery of
+  `error.communication` that finishes the execution, the retried job's
+  `{:duplicate, "basichttp_failure"}`, and
+  `{:dropped, "basichttp_failure", :finished}` for a finished execution.
