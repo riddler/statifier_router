@@ -6,9 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.9.2/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.10.0/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.10.0] 2026-10-02
+
+Feature release: a host can run a whole delivery inside a context of its own. `StatifierRouter.Config` takes the new `:around_delivery` option, handed `(scope, door, work)`, which wraps `StatifierRouter.route/3`'s bindings read and deliveries, the Broadway partitioner's bindings read and the BasicHTTP front's delivery; left out, it wraps nothing. The one host-visible change that is not a new option: the BasicHTTP location token no longer appears in the router's own debug query log, on the three statements that bind it; the token is still part of the execution's persisted state and of the query telemetry event, so never run a production repo at `:debug`. On Postgres a reap batch is one array statement again, with the same counts. No migration version is added or changed, and no runtime dependency is added or moved.
+
+### Added
+
+- `StatifierRouter.Config` takes `:around_delivery`, a module exporting
+  `around_delivery/3` or an arity-3 fun handed `(scope, door, work)`, that
+  runs a whole delivery inside a context of the host's own: `route/3`'s
+  bindings read, `key_refused` rows and deliveries (door `:route`, which
+  covers `StatifierRouter.Webhook` and each `StatifierRouter.Broadway`
+  message), the Broadway partitioner's bindings read (door `:partition`)
+  and the BasicHTTP front's delivery (door `:basichttp`). Left out,
+  nothing changes.
+
+### Changed
+
+- `StatifierRouter.Addresses.reap/3` binds each batch of ids as one array
+  on Postgres again (`= ANY(...)`), so Postgres prepares one statement per
+  write rather than one per batch length; SQLite and every other adapter
+  keep the `IN (...)` list, and every reap answers the same counts.
+
+### Security
+
+- The router's own Ecto query log no longer prints the BasicHTTP location
+  token at `:debug`: the front's lookup, the location insert at create
+  and `StatifierRouter.BasicHTTP.rotate_location/2` run with `log: false`.
+  The query telemetry event still carries the token, as does the
+  execution's persisted state; never run a production repo at `:debug`.
 
 ## [0.9.2] 2026-09-30
 
