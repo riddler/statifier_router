@@ -734,7 +734,7 @@ for the test.
 
 ## Amendment (2026-10-02, sr-t36w): one optional wrapper runs a whole delivery inside a host's context, on the doors the router drives
 
-Status: proposed
+Status: accepted
 
 The create and step hooks of the Amendment of 2026-09-25 reach the create
 and the step and nothing else a delivery does. A host whose repo and rows
@@ -837,3 +837,59 @@ one for the execution target at the executor seam under a wrapped
 opens a transaction, one for the wrapper's contract, and one that
 compares a configuration without the key against the statements captured
 before the key existed.
+
+## Note (2026-10-02, sr-4llw): the whole-delivery wrapper Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`, under the standing grant of the operator's
+campaign consent of 2026-10-01. The `## Amendment (2026-10-02, sr-t36w)`
+on the whole-delivery wrapper is such a record: its `Status:` line moved
+from `proposed` to `accepted`. Its code landed in PR 152 (`b79fae8`, and
+`be77380`, which drains the wrapper's reports on every way out of it)
+and shipped in statifier_router 0.10.0 (tag `v0.10.0`, at `f823adb`,
+published on Hex 2026-10-02T11:42:49Z). The record's own status on line
+3 was already `accepted` and was not touched.
+
+Every claim was re-verified by anchor at `f823adb`, which is both the
+tag and `main` at the time of the flip:
+
+- The option: `StatifierRouter.Config`'s `new/1` checks
+  `:around_delivery` with its private `hooks/2`, the function that checks
+  `:on_create`, `:on_step` and `:execution_id`: `nil`, a fun of arity 3,
+  or a loaded module exporting `around_delivery/3` is taken, and any
+  other value is `{:error, {:invalid_value, :around_delivery, value}}`.
+- The contract and the absent key: the package-internal
+  `StatifierRouter.Config.around_delivery/4` runs the work directly when
+  the key is `nil`; otherwise it hands the wrapper `(scope, door, work)`,
+  reads the work's reports once the wrapper returns, answers the work's
+  answer when the work ran once and the wrapper answered it, and raises
+  `ArgumentError` for any other answer or count. A wrapper that raises,
+  exits or throws is re-raised with its own kind, reason and stacktrace.
+- The wrapped doors: `StatifierRouter.route/3` calls it with `:route`
+  and the event's scope around its private `route_event/3` (the bindings
+  read, the private `key_refused/5` row and each binding's delivery),
+  after `validate_event/1` and `fetch_now/1`;
+  `StatifierRouter.Webhook.handle/3` and `StatifierRouter.Broadway`'s
+  `handle_message/3` call `route/3`; `StatifierRouter.Broadway`'s private
+  `bindings_for/2` calls it with `:partition` around
+  `StatifierRouter.Config.bindings_for/2`; `StatifierRouter.BasicHTTP.Front`'s
+  private `deliver/5` calls it with `:basichttp` and the address row's
+  scope around `StatifierRouter.Delivery.deliver_event/4`, after the
+  private `resolve/2` has resolved the token.
+- The doors left unwrapped: `StatifierRouter.Delivery` never calls it,
+  and `StatifierRouter.SendHandler`'s `perform/2` and private
+  `deliver_to/5` call `deliver_event/4` without it; `deliver_event/4`
+  opens its own transaction through the private `settled/5`. Wrapping
+  the execution target where no wrapper reaches it stays undecided, as
+  the Amendment says.
+- The documentation: `StatifierRouter.Config`'s "Wrapping a whole
+  delivery" and the README's "Wrapping a whole delivery" each say that a
+  wrapper which opens a transaction on the configuration's repo makes
+  every delivery of one `route/3` call commit or roll back together.
+- The tests: `test/statifier_router/around_delivery_test.exs` covers each
+  case the Amendment lists, under the describe blocks "the option", "a
+  configuration without the option", "the :route door", "the Broadway
+  handler and its partitioner", "the BasicHTTP front", "the
+  execution-target door is not wrapped" and "the wrapper's contract".
