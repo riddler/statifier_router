@@ -105,12 +105,25 @@ order:
 - **Atomic get-or-create-and-deliver**: the execution an address names is
   created when absent and handed the event in the same step.
 - **Dedupe** on `(binding, message_id)` with a horizon.
-- **The recorded outcome vocabulary**: every delivery attempt ends in one
-  named, recorded outcome.
+- **The recorded outcome vocabulary**: every delivery attempt this package
+  routes ends in one named, recorded outcome. A timer firing into an
+  execution is not routed here (timers are statifier_oban's, below) and
+  writes no routing-ledger row.
 - **The route registry**: the named, one-way outbound destinations a chart
   reaches with `<send>`, registered per host and overridable per scope.
 - **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
   host calls from its own controller or plug.
+- **The BasicHTTP front**: `StatifierRouter.BasicHTTP`, the W3C Basic HTTP
+  Event I/O Processor for durable executions, gives each execution created
+  under a new address row of a configuration that sets `:basichttp` a
+  location, kept in the opt-in location table;
+  `StatifierRouter.BasicHTTP.Front`, Plug-shaped as the webhook front is,
+  delivers a POST to that location into its execution. See "A BasicHTTP
+  front".
+- **The whole-delivery wrapper**: the configuration's optional
+  `:around_delivery`, handed `(scope, door, work)`, runs every read and
+  write of a delivery on the doors this package drives itself inside one
+  call of the host's. See "Wrapping a whole delivery".
 - **Execution-to-execution sends**: a `<send>` whose `target` is the reserved
   name `StatifierRouter.SendHandler.execution_target/0` resolves through the
   address table and is delivered by the same transaction a binding's delivery
@@ -734,6 +747,17 @@ possession of the location. Hand a location only to the parties that
 should reach the execution, keep it out of logs and out of URLs shown to
 others, serve the base URL over TLS, and rotate it when it may have
 leaked.
+
+**The token is part of the execution's persisted state.** The location is
+written into the execution's `_ioprocessors` when the execution starts,
+and a persisted position carries it, so statifier_persistence binds the
+token on the create and on every step, and keeps it at rest in the clear
+unless the host passes that package an encrypting `:blob_type`. This
+package keeps the token out of its own query log only: its three
+statements that bind it run with Ecto's `log: false`, and the repo's query
+telemetry event still carries their parameters. Rotate a location that may
+have leaked, and never run a production repo or logger at `:debug`
+(ADR-0002, the Note of 2026-10-02 on the query log).
 
 Set `:basichttp` on the configuration with the base URL the front answers
 at, and run the location table's migration (V04, "Upgrading the tables"
@@ -1735,7 +1759,12 @@ and writes one `send_refused` routing-ledger row;
 The source invoke is `StatifierRouter.subscribe/3`,
 `StatifierRouter.cancel/2` and the delegate
 `StatifierRouter.SourceInvoke`, over the subscription table
-`StatifierRouter.Migrations.V02` adds. Each piece lands behind the
+`StatifierRouter.Migrations.V02` adds. The BasicHTTP front is
+`StatifierRouter.BasicHTTP` and `StatifierRouter.BasicHTTP.Front`, over
+the opt-in location table that `StatifierRouter.Migrations.up_locations/1`
+creates outside the version walk; a configuration without `:basichttp`
+needs neither. The whole-delivery wrapper is the configuration's optional
+`:around_delivery`; left out, nothing is called. Each piece lands behind the
 decision record that fixes it, in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
 
 ## Installation
