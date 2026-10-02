@@ -455,3 +455,153 @@ accepted, by the Note at the foot of that record.
 
 Every claim was verified by anchor at `4998efc`, `main` when this Note
 was written. No line above this Note was edited.
+
+## Amendment (2026-10-02, sr-lx4v): the window option's five forks, and the reserved `window` key it opens
+
+Status: proposed
+
+Section 6 reserves `window` and says "a later record may open them". This
+Amendment opens `window` on the record, for one option: a **tumbling
+window** computed by the router, which keys an execution on a key and the
+start of the fixed-size window an event's own timestamp falls in, and
+hands the chart that window's end. It names the five forks the option's
+shape turns on and gives a recommendation for each. It writes no code.
+Until the change that implements the option ships, `window` stays
+refused exactly as section 6 says: `StatifierRouter.Binding.new/1`
+answers `{:error, {:reserved_key, :window}}` for it, as the binding tests
+pin today. `mode` and `batch` stay reserved, and nothing here opens them.
+Sections 1 to 5 and 7 stand. Code cites are read at `467c36d`;
+predicator cites at 9.4.2, the version this package's `mix.lock`
+resolves.
+
+**What a host can do today.** A key is whatever the key program answers,
+and `StatifierRouter.Binding.key/2` accepts only a non-empty string
+(section 3). Over predicator 9.4.2 a key program can reach UTC calendar
+buckets: a `::datetime` cast parses an RFC 3339 string and normalizes its
+offset to UTC, `::string` formats it back with a `Z`, and `substring`
+slices it, so `substring(event.scanned_at::datetime::string, 0, 13)`
+answers the UTC hour for `"2026-10-02T09:07:00+02:00"` and for
+`"2026-10-02T07:07:00Z"` alike. A slice of the raw string, without the
+cast, puts the same instant in a different bucket for each offset.
+Arithmetic over a sliced field reaches a size that divides the hour. No
+cast or function answers an instant as one number (`::integer` on a
+datetime answers `:undefined`), so a size that does not divide the UTC
+day, a window longer than a day, or an alignment other than UTC midnight
+needs the program to rebuild a day count from the date's fields by
+calendar arithmetic, which this package neither ships nor tests. And no
+key program can hand the chart a window end: the delivered data is
+`StatifierRouter.Binding.project/2`'s projection of the normalized event
+and nothing else (section 5). The one complete answer today is the
+host's own source adapter, which may add a window start and end to the
+normalized event before the router sees it; a key program then reads the
+start and `data` projects the end. The option moves that arithmetic into
+the binding, so it is done one way, from the event alone.
+
+### The five forks
+
+| Fork | Recommendation |
+|---|---|
+| 1. The timestamp field's name | the binding names it, as one dotted path into the normalized event |
+| 2. The alignment anchor | the Unix epoch by default, overridable by one RFC 3339 instant; a size is fixed milliseconds |
+| 3. How the window start composes into the key | the router appends the window start to the key program's answer, in a fixed-length canonical form; no new address column |
+| 4. The delivered-data key for the window end | `"window"`, a map of `"start"` and `"end"`, with a `data` path under `"window"` refused at construction |
+| 5. A late event's fate | the address decides, as for any event: no new outcome and no lateness check in the router |
+
+A shape the recommendations add up to, for illustration only (the
+implementing change names it): `window: %{at: "scanned_at", size_ms:
+900_000}`, with an optional `anchor:`.
+
+**1. The timestamp field's name.** The options: a fixed field every source
+adapter must supply; a dotted path the binding names; a predicator
+program, like `match` and `key`; or the router's own `now`. Recommended:
+**a dotted path the binding names**, read with the same rules as a `data`
+path (section 5 and the 2026-09-21 Note), whose value must be an RFC 3339
+string. A fixed name pushes a convention onto every adapter; a program is
+more than the job needs and can be added later without breaking a path.
+The router's `now` is declined: a redelivered message must land in the
+window it landed in the first time, and only the event's own time gives
+that answer on every redelivery. An event that holds the binding's match
+but has no value at the path, or a value that is not an RFC 3339 string,
+is a key refusal against the binding, as section 3 refuses a key that is
+not a non-empty string: no window is computed and no execution is
+touched.
+
+**2. The alignment anchor.** The options: UTC calendar boundaries, which
+work only for sizes that divide a calendar unit; the Unix epoch; or an
+anchor the binding gives. Recommended: **the Unix epoch,
+`1970-01-01T00:00:00Z`, by default, with an optional anchor given as one
+RFC 3339 instant**, and the size as a positive integer of milliseconds,
+spelled as `dedupe`'s horizon is. The window start is the anchor plus the
+whole number of sizes that fit between the anchor and the event's
+instant, computed on instants in milliseconds. The timestamp's offset
+then changes only which instant it names, never which window that
+instant falls in, so `"2026-10-02T09:07:00+02:00"` and
+`"2026-10-02T07:07:00Z"` share a window for every size. Under the epoch
+default a 15-minute window starts on the UTC quarter hour. A window that
+follows local calendar days across a daylight-saving change is not a
+fixed size and is out of this option.
+
+**3. How the window start composes into the key.** The address is
+`(scope, document, key)` and its key is a string. The options: a new
+address column holding the window start, which changes the address
+table's columns and its unique index; binding the window start into the
+key program's context, which leaves a binding that forgets to read it
+keying every window onto one execution; or the router composing the two.
+Recommended: **the router appends the window start to the key program's
+answer**, as the key program's answer, a separator, and the start written
+in one canonical form: UTC, millisecond precision, `Z`, for example
+`"depot_14@2026-10-02T07:00:00.000Z"`. That form has a fixed length, so
+the composite is read back unambiguously from its end whatever the key
+program's answer contains. The composite is a function of the event
+alone, so it is not a key the router invents in section 3's sense, and
+it is what the address row's key column holds; the address table and its
+DDL are unchanged. The key program is unchanged too: a refusal from it
+is still a key refusal and no window is computed. `create: :always_new`
+writes no address row, so a window addresses nothing under it, and a
+binding carrying both is refused at construction.
+
+**4. The delivered-data key for the window end.** The options: a fixed
+top-level key; a key the binding names; or the end alone. Recommended:
+**`"window"`, a map holding `"start"` and `"end"`**, both in the
+canonical form of fork 3, the end exclusive (the start plus the size).
+The chart arms its window's close at `"end"`; a chart condition reads it
+as a datetime with a `::datetime` cast, as above. Delivering the start as
+well costs one field and saves the chart parsing it out of a key it
+never sees. Because `data` delivers each path under the same path
+(section 5), a binding with a window whose `data` lists `"window"` or any
+path under it is refused at construction, so the router's map and a
+projected field can never collide.
+
+**5. A late event's fate.** Here a late event is one that arrives after
+the execution for its window has finished. The options: let the address
+decide, as it does for every event; drop it in the router when its
+window end, plus an allowed lateness, is earlier than the router's
+`now`, as a new recorded outcome; or move it into the window that is
+open now. Recommended: **the address decides, and the router adds no
+outcome and no lateness check.** A drop judged against the router's
+`now` answers differently on a redelivery after a lag, which fork 1
+declines for the same reason, and it would add an outcome to ADR-0004's
+vocabulary; moving the event changes the instant it carries. What the
+address does is the trade the late partner of a pair already has today:
+while the finished window's address row lives, a late event resolves to
+that execution and is recorded as `dropped: finished` (ADR-0003, section
+4). The row lives for the longest dedupe horizon, `horizon_ms`, of any
+enabled binding naming the document, counted from when the router first
+reads the execution terminal (ADR-0002, sections 5 and 6;
+`StatifierRouter.Addresses.reap/2`). Once the reap deletes it, a late
+event under `create: :if_absent` finds no row and opens a second
+execution for a window that has already closed. The knob is the
+binding's dedupe horizon: a host sets it at least as long as the latest
+event it expects. `create: :never` keeps a late event from opening
+anything only on a binding that never opens a window, so it is the
+answer for a partner binding, not for the binding that opens one. The
+second execution is handed the same `"window"` map, so a chart can see
+from `"end"` that its window is already past.
+
+**What the implementing change carries.** The option in
+`StatifierRouter.Binding`, `window` taken off the reserved list, and the
+construction refusals named under forks 3 and 4, in one pull request with
+the Amendment or Note that records which recommendations it took. Its
+tests cover a 15-minute window, a timestamp carrying an offset, and a
+late event before and after its address row is reaped. This Amendment
+stays proposed until that code has shipped in a published version.
