@@ -267,29 +267,58 @@ defmodule StatifierRouter.Addresses do
     DateTime.compare(DateTime.add(seen_at, horizon_ms, :millisecond), now) != :gt
   end
 
-  # Both writes name their rows in an IN list of one bound parameter per
-  # id, which Postgres and SQLite both take, each id bound uncast as the
-  # rest of this module binds them. A list longer than
+  # Both writes name their rows by id, each id bound uncast as the rest of
+  # this module binds them, in one of two forms chosen by the repo's
+  # adapter. On Postgres the batch is one bound array, `? = ANY(?)`, so a
+  # write is the same statement whatever the batch's length and Postgres
+  # prepares it once; the server types the array from the id column
+  # (bigint[] under the default key, text[] under a text key), and Postgrex
+  # encodes the ids as that. Every other adapter takes an IN list of one
+  # bound parameter per id, `? IN (?)` with the batch spliced, since `ANY`
+  # is Postgres's own (SQLite has no such function). A list longer than
   # @ids_per_statement is written in batches of that many, one statement
-  # each, which keeps every statement under SQLite's smallest limit on
-  # bound parameters (999) with room for the stamp's own time.
+  # each, on every adapter, which keeps every IN list under SQLite's
+  # smallest limit on bound parameters (999) with room for the stamp's own
+  # time.
   defp stamp(config, ids, now) do
     in_batches(ids, fn batch ->
-      from(a in Config.queryable(config, Address),
-        where: fragment("? IN (?)", a.id, splice(^batch)) and is_nil(a.terminal_seen_at)
-      )
+      config
+      |> stamp_query(batch)
       |> config.repo.update_all(set: [terminal_seen_at: now])
     end)
   end
 
-  defp delete(config, ids) do
-    in_batches(ids, fn batch ->
-      config.repo.delete_all(
-        from(a in Config.queryable(config, Address),
-          where: fragment("? IN (?)", a.id, splice(^batch))
-        )
+  defp stamp_query(config, batch) do
+    if postgres?(config) do
+      from(a in Config.queryable(config, Address),
+        where: fragment("? = ANY(?)", a.id, ^batch) and is_nil(a.terminal_seen_at)
       )
-    end)
+    else
+      from(a in Config.queryable(config, Address),
+        where: fragment("? IN (?)", a.id, splice(^batch)) and is_nil(a.terminal_seen_at)
+      )
+    end
+  end
+
+  defp delete(config, ids) do
+    in_batches(ids, fn batch -> config.repo.delete_all(delete_query(config, batch)) end)
+  end
+
+  defp delete_query(config, batch) do
+    if postgres?(config) do
+      from(a in Config.queryable(config, Address), where: fragment("? = ANY(?)", a.id, ^batch))
+    else
+      from(a in Config.queryable(config, Address),
+        where: fragment("? IN (?)", a.id, splice(^batch))
+      )
+    end
+  end
+
+  # A repo module that names no adapter (one that delegates to an Ecto
+  # repo rather than being one) takes the IN list, as before the array
+  # form came back. The module is loaded: examine/3 has called it.
+  defp postgres?(%Config{repo: repo}) do
+    function_exported?(repo, :__adapter__, 0) and repo.__adapter__() == Ecto.Adapters.Postgres
   end
 
   # The rows `write` counts over every batch of `ids`; no statement for
