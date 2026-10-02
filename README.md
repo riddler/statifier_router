@@ -1061,6 +1061,17 @@ cursor; a host sweeps the table by calling again with `after: next` until
 `next` is `nil`. A host that never schedules it keeps every row, which is
 correct and only costs space.
 
+That horizon is the knob for a late event. While the row lives, a late
+event for a finished execution is recorded as `dropped: finished`; once
+a reap has deleted it, an event through a `create: :if_absent` binding
+opens a second execution for the key. A host whose latest partner event
+can arrive after the horizon lengthens `horizon_ms` on a binding naming
+the document, or sets `create: :never` on the partner's binding, so its
+late event is recorded as `dropped: no_execution` instead; the cost of
+`:never` is that a partner arriving before the event that opens the
+execution is dropped the same way. A document reached only through the
+execution target has no binding naming it, so its horizon is zero.
+
 A host that runs [Oban](https://hexdocs.pm/oban) would write a worker and a
 cron entry like these; this package depends on neither:
 
