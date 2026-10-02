@@ -530,17 +530,18 @@ is a plain function with the shape a plug or a controller action calls, and
 the host writes those ten lines itself.
 
 **The host verifies the signature.** This package verifies nothing; it
-routes what it is handed.
+routes what it is handed. Below, a parcel carrier posts each scan of a
+parcel to the host's controller:
 
 ```elixir
 def create(conn, _params) do
-  {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+  raw_body = conn.assigns.raw_body
 
   with :ok <- MyApp.Provider.verify(conn, raw_body) do
     answer =
       StatifierRouter.Webhook.handle(MyApp.Router.config(), %{
         scope: conn.assigns.scope,
-        source: "ad_events",
+        source: "parcel_scans",
         selector: %{"path" => conn.request_path},
         raw_body: raw_body,
         data: Jason.decode!(raw_body),
@@ -556,6 +557,12 @@ end
 
 A request whose signature fails verification never reaches the router: the
 `else` answers `401` and nothing is routed.
+
+**`raw_body` is the bytes as posted.** A JSON body has usually been parsed
+before the action runs, so a `Plug.Conn.read_body/2` there answers an
+empty body, and an empty `raw_body` hashes to one constant id; a host
+keeps the bytes in `conn.assigns.raw_body` with `Plug.Parsers`'
+`:body_reader` option, as the form-post front below does.
 
 The message id is the provider's event id when it sends a non-empty one,
 and otherwise the lowercase hex SHA-256 of the raw body, so a provider's
@@ -687,7 +694,11 @@ method, for the `405`) to an action like this one:
 
 ```elixir
 def event(conn, %{"token" => token}) do
-  {:ok, body, conn} = Plug.Conn.read_body(conn)
+  {:ok, body, conn} =
+    case conn.assigns do
+      %{raw_body: raw_body} -> {:ok, raw_body, conn}
+      _body_not_parsed -> Plug.Conn.read_body(conn)
+    end
 
   answer =
     StatifierRouter.BasicHTTP.Front.handle(MyApp.Router.config(), %{
@@ -703,6 +714,12 @@ def event(conn, %{"token" => token}) do
   conn |> Plug.Conn.merge_resp_headers(headers) |> Plug.Conn.send_resp(status, "")
 end
 ```
+
+**`body` is the bytes as posted.** A form-encoded POST has usually been
+parsed before the action runs, so the action takes the bytes the
+endpoint's `:body_reader` kept, as the webhook front does; a body the
+parsers pass unread, such as a `<content>` send's `text/plain`, it reads
+itself.
 
 A parcel's execution that handed its location to the van's scanner takes
 each `_scxmleventname=delivered` POST as the event `delivered` and answers
