@@ -40,6 +40,10 @@ end
 # suite, idempotently. Only DDL persists - the sandbox rolls rows back.
 :ok = StatifierRouter.BootstrapMigrations.up(StatifierRouter.TestRepo)
 
+# The Oban instance the corpus's Oban run mode schedules its timers on, in
+# manual testing mode (config/test.exs): it runs no queue of its own.
+{:ok, _pid} = Oban.start_link(Application.fetch_env!(:statifier_router, StatifierRouter.TestOban))
+
 Ecto.Adapters.SQL.Sandbox.mode(StatifierRouter.TestRepo, :manual)
 
 ExUnit.start(exclude: [:isolated])

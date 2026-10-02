@@ -24,6 +24,21 @@ defmodule StatifierRouter.CorpusRunner do
   from there. A cancel removes the execution's recorded sends that carry
   its send id.
 
+  `run/2` with `timers: :oban` plays that part a second way: through
+  statifier_oban on the Oban instance `StatifierRouter.TestOban` in this
+  suite's Postgres database, rather than through the runner's own list.
+  A delayed send is scheduled with `StatifierOban.Timer.schedule/3` under
+  its execution's id, and the job's fire time is then moved off the wall
+  clock onto the runner's clock: the time the send was handed over on
+  that clock, plus its delay. A cancel is `StatifierOban.Timer.cancel/3`
+  under the same id. On an advance the runner drains the timers queue one
+  job at a time, the earliest due first, each at the time it falls due,
+  so a job a fired send cancels is off the queue before the queue is read
+  again. The fired job reaches its execution through
+  `StatifierRouter.CorpusTimerDelivery`, a process-less host's
+  `StatifierOban.Timer.Delivery`. The pending timers a case compares are
+  then the jobs still waiting on the queue.
+
   The runner also plays the host's part for sinks. A case's `routes` names
   the routes it registers; each is registered as
   `StatifierRouter.RecordingRoute` reporting to the runner's own process,
@@ -56,6 +71,8 @@ defmodule StatifierRouter.CorpusRunner do
   alias Statifier.Event
   alias Statifier.Machine
   alias Statifier.Parser.Location
+  alias StatifierOban.Timer
+  alias StatifierOban.Timer.JobArgs
   alias StatifierPersistence.Executions
   alias StatifierPersistence.Storage
   alias StatifierRouter.Addresses
@@ -73,6 +90,13 @@ defmodule StatifierRouter.CorpusRunner do
   @send_type "myapp:sink"
   @config_key {__MODULE__, :config}
 
+  # The Oban run mode: the instance test/test_helper.exs starts, the queue
+  # the runner's timers go to, and the states a job that has not fired can
+  # be in.
+  @oban StatifierRouter.TestOban
+  @timers_queue :corpus_timers
+  @pending_states ~w(scheduled available retryable)
+
   # The binding keys a case may carry, and the enumerated values of the
   # two keys whose values Binding.new/1 takes as atoms. Everything else in
   # a case is a string, a number, a list or an object.
@@ -89,6 +113,14 @@ defmodule StatifierRouter.CorpusRunner do
   @doc "Every case file under `corpus/cases/`, sorted by name."
   @spec case_paths() :: [Path.t()]
   def case_paths, do: @corpus |> Path.join("cases/*.json") |> Path.wildcard() |> Enum.sort()
+
+  @doc """
+  Every delivery case file under `corpus/cases/`, sorted by name: every
+  case but a publish case, which runs no script and so no timer.
+  """
+  @spec delivery_case_paths() :: [Path.t()]
+  def delivery_case_paths,
+    do: Enum.reject(case_paths(), &Map.has_key?(load!(&1)["expected"], "contracts"))
 
   @doc "Every chart file under `corpus/charts/`, sorted by name."
   @spec chart_paths() :: [Path.t()]
@@ -133,9 +165,16 @@ defmodule StatifierRouter.CorpusRunner do
   A publish case, one whose `expected` holds `contracts`, answers with
   `contracts` alone, and raises when it carries a non-empty `script`: a
   step it would not run is a step the case could not check.
+
+  `opts` takes `timers:`, either `:memory` (the default), which keeps the
+  case's timers in the runner's own list, or `:oban`, which schedules,
+  cancels and fires them through statifier_oban on an Oban queue, as the
+  moduledoc says. A publish case takes no timer either way.
   """
-  @spec run(map()) :: map()
-  def run(%{"expected" => %{"contracts" => _contracts}} = kase) do
+  @spec run(map(), keyword()) :: map()
+  def run(kase, opts \\ [])
+
+  def run(%{"expected" => %{"contracts" => _contracts}} = kase, _opts) do
     if Map.get(kase, "script", []) != [] do
       raise ArgumentError,
             "the case #{kase["id"]} expects contracts, runs no script and carries one"
@@ -149,12 +188,18 @@ defmodule StatifierRouter.CorpusRunner do
     %{"contracts" => config |> Contracts.check(machine, lookup) |> case_terms()}
   end
 
-  def run(%{"scope" => scope, "document" => document, "script" => script} = kase) do
+  def run(%{"scope" => scope, "document" => document, "script" => script} = kase, opts) do
     runner = self()
     expects_sends!(kase)
     config = config(kase, runner)
 
-    initial = %{clock: @start, pending: [], sends: [], execution_id: nil}
+    initial = %{
+      clock: @start,
+      timers: timers(Keyword.get(opts, :timers, :memory)),
+      pending: [],
+      sends: [],
+      execution_id: nil
+    }
 
     state =
       Enum.reduce(script, initial, fn step, state ->
@@ -170,7 +215,7 @@ defmodule StatifierRouter.CorpusRunner do
       "status" => status(config, execution_id),
       "configuration" => configuration(config, execution_id),
       "datamodel" => datamodel(config, execution_id, kase),
-      "timers" => state.pending |> Enum.map(& &1.effect.event) |> Enum.sort(),
+      "timers" => pending_timers(state),
       "sends" => state.sends
     }
     |> Map.take(Map.keys(kase["expected"]))
@@ -239,7 +284,7 @@ defmodule StatifierRouter.CorpusRunner do
 
   # Fires the earliest recorded send that is due by `until`, then looks
   # again: a fired send may schedule one that is also due by then.
-  defp fire_due(state, until, config) do
+  defp fire_due(%{timers: :memory} = state, until, config) do
     due = Enum.filter(state.pending, &(DateTime.compare(&1.due, until) != :gt))
 
     case Enum.sort_by(due, &{DateTime.to_unix(&1.due, :microsecond), &1.effect.ordinal}) do
@@ -253,14 +298,65 @@ defmodule StatifierRouter.CorpusRunner do
     end
   end
 
-  defp fire(%{effect: %SendDelayed{} = effect} = send, config) do
-    {:ok, machine} = config.chart_resolver.(send.content_hash)
+  # The Oban run mode: drains the one job that falls due first by `until`,
+  # at the time it falls due, then looks again. One job a drain, so a job
+  # the fired one cancels is off the queue before the next drain reads it.
+  # A delivery that raises is raised here (`with_safety: false`) rather
+  # than left on the queue as a retry the case would not see.
+  defp fire_due(%{timers: %StatifierOban.Config{} = timers} = state, until, config) do
+    case next_due(until) do
+      nil ->
+        state
 
+      due ->
+        %{success: fired, cancelled: discarded} =
+          Oban.drain_queue(timers.oban,
+            queue: timers.timers_queue,
+            with_scheduled: due,
+            with_limit: 1,
+            with_safety: false
+          )
+
+        1 = fired + discarded
+        %{state | clock: due} |> record_effects() |> fire_due(until, config)
+    end
+  end
+
+  defp next_due(until) do
+    from(j in Oban.Job,
+      where:
+        j.queue == ^Atom.to_string(@timers_queue) and j.state in ^@pending_states and
+          j.scheduled_at <= ^until,
+      order_by: [asc: j.scheduled_at, asc: j.id],
+      limit: 1,
+      select: j.scheduled_at
+    )
+    |> TestRepo.one()
+  end
+
+  defp fire(%{effect: %SendDelayed{} = effect} = send, config) do
     event =
       Event.external(effect.event,
         data: effect.data,
         sendid: if(effect.id_from_author?, do: effect.send_id)
       )
+
+    {_answer, _execution} = step_fired(config, send.execution_id, send.content_hash, event)
+    :ok
+  end
+
+  @doc """
+  Steps a fired timer's `event` into the execution `execution_id`, on the
+  chart the configuration's chart resolver answers for `content_hash`.
+  Answers `{:ok, execution}` when the execution took the event, and
+  `{:discarded, execution}` when it is no longer active and did not. Both
+  run modes fire through it; the Oban one reaches it through
+  `StatifierRouter.CorpusTimerDelivery`.
+  """
+  @spec step_fired(Config.t(), String.t(), String.t(), Event.t()) ::
+          {:ok | :discarded, StatifierPersistence.Execution.t()}
+  def step_fired(config, execution_id, content_hash, event) do
+    {:ok, machine} = config.chart_resolver.(content_hash)
 
     # The snapshot options travel on every step, top level, the way
     # `StatifierRouter.Delivery` sends them: a timer-fired step that
@@ -269,33 +365,28 @@ defmodule StatifierRouter.CorpusRunner do
     # a registered type on that step alone.
     opts = [{:executor, config.executor} | config.persistence_options]
 
-    case Executions.step(config.store, send.execution_id, machine, event, opts) do
-      {:ok, _execution, _machine_state} -> :ok
-      {:discarded, _execution} -> :ok
+    case Executions.step(config.store, execution_id, machine, event, opts) do
+      {:ok, execution, _machine_state} -> {:ok, execution}
+      {:discarded, execution} -> {:discarded, execution}
     end
   end
+
+  @doc """
+  The configuration of the case running in this process. A timer the Oban
+  run mode fires is drained in the same process, and steps with it.
+  """
+  @spec current_config() :: Config.t()
+  def current_config, do: Process.get(@config_key) || raise("no corpus case is running here")
 
   # The executor ran in this process, so every effect it recorded since the
   # last look is a message here, in the order it was handed the effects.
   defp record_effects(state) do
     receive do
       {__MODULE__, {:send_delayed, %SendDelayed{} = effect}, context} ->
-        send = %{
-          due: DateTime.add(state.clock, effect.delay_ms, :millisecond),
-          effect: effect,
-          execution_id: context.execution_id,
-          content_hash: context.content_hash
-        }
+        state |> schedule(effect, context) |> record_effects()
 
-        record_effects(%{state | pending: state.pending ++ [send]})
-
-      {__MODULE__, {:cancel, %Cancel{send_id: send_id}}, context} ->
-        pending =
-          Enum.reject(state.pending, fn send ->
-            send.execution_id == context.execution_id and send.effect.send_id == send_id
-          end)
-
-        record_effects(%{state | pending: pending})
+      {__MODULE__, {:cancel, %Cancel{} = effect}, context} ->
+        state |> cancel(effect, context) |> record_effects()
 
       {__MODULE__, _other_effect, _context} ->
         record_effects(state)
@@ -306,6 +397,74 @@ defmodule StatifierRouter.CorpusRunner do
     after
       0 -> state
     end
+  end
+
+  # -- the timers -----------------------------------------------------------
+
+  defp timers(:memory), do: :memory
+
+  defp timers(:oban) do
+    {:ok, timers} =
+      StatifierOban.Config.new(
+        oban: @oban,
+        timers_queue: @timers_queue,
+        delivery: StatifierRouter.CorpusTimerDelivery
+      )
+
+    timers
+  end
+
+  defp schedule(%{timers: :memory} = state, effect, context) do
+    send = %{
+      due: DateTime.add(state.clock, effect.delay_ms, :millisecond),
+      effect: effect,
+      execution_id: context.execution_id,
+      content_hash: context.content_hash
+    }
+
+    %{state | pending: state.pending ++ [send]}
+  end
+
+  # statifier_oban times the job off the wall clock; the runner moves it
+  # onto its own, so the job falls due when the case's clock says so.
+  defp schedule(%{timers: %StatifierOban.Config{} = timers} = state, effect, context) do
+    {:ok, %Oban.Job{conflict?: false, id: id}} =
+      Timer.schedule(timers, context.execution_id, effect)
+
+    due = DateTime.add(state.clock, effect.delay_ms, :millisecond)
+    job = from(j in Oban.Job, where: j.id == ^id)
+    {1, _rows} = TestRepo.update_all(job, set: [scheduled_at: due])
+    state
+  end
+
+  defp cancel(%{timers: :memory} = state, %Cancel{send_id: send_id}, context) do
+    pending =
+      Enum.reject(state.pending, fn send ->
+        send.execution_id == context.execution_id and send.effect.send_id == send_id
+      end)
+
+    %{state | pending: pending}
+  end
+
+  defp cancel(%{timers: %StatifierOban.Config{} = timers} = state, effect, context) do
+    {:ok, _cancelled} = Timer.cancel(timers, context.execution_id, effect)
+    state
+  end
+
+  defp pending_timers(%{timers: :memory, pending: pending}),
+    do: pending |> Enum.map(& &1.effect.event) |> Enum.sort()
+
+  defp pending_timers(%{timers: %StatifierOban.Config{}}) do
+    from(j in Oban.Job,
+      where: j.queue == ^Atom.to_string(@timers_queue) and j.state in ^@pending_states,
+      select: j.args
+    )
+    |> TestRepo.all()
+    |> Enum.map(fn args ->
+      {:ok, _execution_id, effect} = JobArgs.to_effect(args)
+      effect.event
+    end)
+    |> Enum.sort()
   end
 
   # -- the configuration ----------------------------------------------------

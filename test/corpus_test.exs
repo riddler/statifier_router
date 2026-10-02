@@ -14,6 +14,8 @@ defmodule StatifierRouter.CorpusTest do
 
   use ExUnit.Case, async: true, group: :database
 
+  import Ecto.Query, only: [from: 2]
+
   alias Ecto.Adapters.SQL.Sandbox
   alias StatifierRouter.CorpusRunner
   alias StatifierRouter.SendHandler
@@ -51,6 +53,68 @@ defmodule StatifierRouter.CorpusTest do
         kase = CorpusRunner.load!(@path)
         assert CorpusRunner.run(kase) == kase["expected"]
       end
+    end
+  end
+
+  # The same delivery cases with their timers on a real timer queue: every
+  # delayed send scheduled, cancelled and fired through statifier_oban on
+  # the Oban instance in this suite's Postgres database
+  # (CorpusRunner.run/2's `timers: :oban`), against the same expected.
+  describe "every delivery case, its timers on an Oban queue" do
+    for path <- CorpusRunner.delivery_case_paths() do
+      @external_resource path
+      @path path
+
+      # sabotage: a dropped cancel, the Oban run mode's cancel/3 in
+      # CorpusRunner made to answer the state without calling
+      # Timer.cancel/3 -> four cases red here (impression-then-click,
+      # click-then-impression, redelivered-impression,
+      # two-clicks-for-one-impression), the in-memory cases green;
+      # restored, green. Second mutation: schedule/3 left the job's fire
+      # time on the wall clock (no move onto the runner's clock) -> seven
+      # of the eight red here, click-then-impression green, and the job
+      # test below red; restored, green.
+      test "#{Path.basename(path, ".json")} holds what it expects" do
+        kase = CorpusRunner.load!(@path)
+        assert CorpusRunner.run(kase, timers: :oban) == kase["expected"]
+      end
+    end
+  end
+
+  describe "the Oban run mode" do
+    # sabotage: CorpusRunner.run/2 made to ignore `timers:` and keep every
+    # timer in its own list -> this test red, no job on the queue, and
+    # every case above green, which is the point; restored, green.
+    test "fires its timers as jobs on the queue" do
+      kase =
+        CorpusRunner.delivery_case_paths()
+        |> Enum.find(&(Path.basename(&1, ".json") == "impression-then-expiry"))
+        |> CorpusRunner.load!()
+
+      assert CorpusRunner.run(kase, timers: :oban) == kase["expected"]
+
+      states =
+        from(j in Oban.Job,
+          where: j.worker == "StatifierOban.Timer.Worker",
+          select: {j.args["event"], j.state}
+        )
+        |> TestRepo.all()
+        |> Enum.sort()
+
+      assert states == [{"grace.over", "scheduled"}, {"window.closed", "completed"}]
+    end
+
+    # sabotage: delivery_case_paths/0 made to keep the publish cases ->
+    # this test red; restored, green.
+    test "runs every case but a publish case" do
+      publish =
+        Enum.filter(
+          CorpusRunner.case_paths(),
+          &Map.has_key?(CorpusRunner.load!(&1)["expected"], "contracts")
+        )
+
+      assert publish != []
+      assert CorpusRunner.delivery_case_paths() == CorpusRunner.case_paths() -- publish
     end
   end
 

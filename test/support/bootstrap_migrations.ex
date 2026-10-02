@@ -1,10 +1,11 @@
 defmodule StatifierRouter.BootstrapMigrations do
   @moduledoc """
   The suite-wide DDL bootstrap: the package's tables under the default
-  options and statifier_persistence's tables for
-  `StatifierRouter.TestPersistence`, applied once by `test/test_helper.exs`
-  through `Ecto.Migrator` (idempotent on `:already_up`) and left in place. The SQL sandbox rolls
-  each test's rows back, so only the DDL persists from one suite to the next.
+  options, statifier_persistence's tables for
+  `StatifierRouter.TestPersistence` and Oban's job table, applied once by
+  `test/test_helper.exs` through `Ecto.Migrator` (idempotent on
+  `:already_up`) and left in place. The SQL sandbox rolls each test's rows
+  back, so only the DDL persists from one suite to the next.
 
   The live migration tests in `StatifierRouter.MigrationsTest` do not use
   these tables: they own their DDL end to end, up and down, under a table
@@ -17,7 +18,8 @@ defmodule StatifierRouter.BootstrapMigrations do
     {20_260_919_000_103, __MODULE__.SubscriptionsTable},
     {20_260_925_000_104, __MODULE__.PersistenceEndedAt},
     {20_260_925_000_105, __MODULE__.SubscriptionIndexName},
-    {20_260_930_160_106, __MODULE__.LocationsTable}
+    {20_260_930_160_106, __MODULE__.LocationsTable},
+    {20_261_002_000_107, __MODULE__.ObanJobsTable}
   ]
 
   defmodule DefaultTables do
@@ -71,6 +73,19 @@ defmodule StatifierRouter.BootstrapMigrations do
     # table, V04, after the migrations it already has.
     def up, do: Migrations.up_locations()
     def down, do: Migrations.down_locations()
+  end
+
+  defmodule ObanJobsTable do
+    @moduledoc false
+    use Ecto.Migration
+
+    # Oban's job table, which the corpus's Oban run mode schedules its
+    # timers in (StatifierRouter.CorpusRunner). statifier_oban ships no
+    # migration, so the suite runs Oban's own, as a host does. Pinned at
+    # V14, the newest version Oban 2.24 ships, so this migration does not
+    # drift forward when Oban gains a version.
+    def up, do: Oban.Migrations.up(version: 14)
+    def down, do: Oban.Migrations.down(version: 1)
   end
 
   defmodule PersistenceTables do
