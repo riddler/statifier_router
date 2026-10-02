@@ -169,6 +169,16 @@ defmodule StatifierRouter.Broadway do
   that raises `ArgumentError` itself is treated the same way; any other
   raise from the resolver is not rescued here.
 
+  When the configuration gives an `:around_delivery`, the bindings read
+  runs inside one call of it, here in the producer's dispatcher, handed
+  the event's scope and the door `:partition`; `handle_message/3`'s
+  `route/3` calls it again in the processor, with the door `:route`
+  (ADR-0003, the Amendment of 2026-10-02). Only the read is wrapped, and
+  no transaction is open around it, so what the wrapper sets in the
+  process is visible to it and a transaction-local setting is not, unless
+  the wrapper opens a transaction itself. An `ArgumentError` the wrapper
+  raises is rescued here as a malformed resolver answer is.
+
   A message no such binding addresses is partitioned by the hash of its
   message id. So is a message `normalize` builds no routable event from,
   one whose resolver answer `StatifierRouter.route/3` would refuse, and
@@ -206,9 +216,12 @@ defmodule StatifierRouter.Broadway do
   # Config.bindings_for/2 raises ArgumentError on a malformed resolver
   # answer. The partitioner runs in the producer's dispatcher, so the raise
   # is turned into the refused path here and route/3, which raises it again
-  # in handle_message/3, is where the message fails.
+  # in handle_message/3, is where the message fails. The read is the
+  # `:partition` door's work (ADR-0003, the Amendment of 2026-10-02).
   defp bindings_for(router, scope) do
-    Config.bindings_for(router, scope)
+    Config.around_delivery(router, scope, :partition, fn ->
+      Config.bindings_for(router, scope)
+    end)
   rescue
     error in ArgumentError -> {:error, error}
   end

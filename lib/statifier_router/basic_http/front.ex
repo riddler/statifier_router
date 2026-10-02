@@ -53,6 +53,11 @@ defmodule StatifierRouter.BasicHTTP.Front do
       and ADR-0001's default horizon, with the row's scope. That is the
       one transaction every delivery takes: the dedupe claim, the address
       lookup, the step, the ledger row, whose `binding_id` is `basichttp`.
+      When the configuration gives an `:around_delivery`, the delivery
+      runs inside one call of it, handed the address row's scope and the
+      door `:basichttp`; the resolution before it stays outside, because
+      the scope is not known until the token resolves (ADR-0003, the
+      Amendment of 2026-10-02).
     * **Deduplication.** With a send key, the claim's message id is the
       execution id, `/`, and the key, so one key is deduplicated per
       execution; a request already enqueued within the horizon is a
@@ -177,7 +182,12 @@ defmodule StatifierRouter.BasicHTTP.Front do
       now: now
     }
 
-    case Delivery.deliver_event(config, plan, row.key, envelope) do
+    delivered =
+      Config.around_delivery(config, row.scope, :basichttp, fn ->
+        Delivery.deliver_event(config, plan, row.key, envelope)
+      end)
+
+    case delivered do
       {:error, _reason} = error -> error
       outcome -> {:ok, outcome}
     end

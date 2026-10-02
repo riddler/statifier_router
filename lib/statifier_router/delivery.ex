@@ -118,6 +118,16 @@ defmodule StatifierRouter.Delivery do
   outside the contract raises `ArgumentError`. When neither is set, the
   delivery calls statifier_persistence itself.
 
+  ## The whole-delivery wrapper
+
+  `StatifierRouter.Config`'s `:around_delivery` is not called here: it is
+  called by this module's callers, around their call (ADR-0003, the
+  Amendment of 2026-10-02). `StatifierRouter.route/3` wraps every
+  `deliver/4` of one event, with its bindings read, and
+  `StatifierRouter.BasicHTTP.Front` wraps its `deliver_event/4`.
+  `StatifierRouter.SendHandler` calls `deliver_event/4` unwrapped, and so
+  does a host that calls either door itself.
+
   ## The completion hook
 
   `StatifierRouter.Config`'s `:on_complete` names a registered route an
