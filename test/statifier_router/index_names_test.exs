@@ -14,6 +14,7 @@ defmodule StatifierRouter.IndexNamesTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Ecto.Migrator
   alias StatifierRouter.TestRepo
+  alias StatifierRouter.WrappedPostgresRepo
 
   @schema "router_index_names"
 
@@ -89,6 +90,8 @@ defmodule StatifierRouter.IndexNamesTest do
   @all_version 20_260_926_000_304
   @long_version 20_260_926_000_305
   @too_long_version 20_260_926_000_306
+  @wrapped_through_v02_version 20_260_926_000_307
+  @wrapped_v03_version 20_260_926_000_308
 
   @subscriptions "statifier_router_subscriptions"
   @v02_spelling "statifier_router_subscriptions_execution_id_binding_id_invoke_id_index"
@@ -122,7 +125,9 @@ defmodule StatifierRouter.IndexNamesTest do
         @v03_again_version,
         @all_version,
         @long_version,
-        @too_long_version
+        @too_long_version,
+        @wrapped_through_v02_version,
+        @wrapped_v03_version
       ]
     ])
 
@@ -130,7 +135,9 @@ defmodule StatifierRouter.IndexNamesTest do
   end
 
   defp migrate(direction, version, module, opts \\ []) do
-    case apply(Migrator, direction, [TestRepo, version, module, [log: false] ++ opts]) do
+    {repo, opts} = Keyword.pop(opts, :repo, TestRepo)
+
+    case apply(Migrator, direction, [repo, version, module, [log: false] ++ opts]) do
       :ok -> :ok
       :already_up -> :ok
       :already_down -> :ok
@@ -201,6 +208,47 @@ defmodule StatifierRouter.IndexNamesTest do
 
       :ok = migrate(:down, @v03_version, MigrateV03)
       :ok = migrate(:down, @through_v02_version, MigrateThroughV02)
+      assert index_names_in_schema() == []
+    end
+  end
+
+  describe "the subscription index under a Postgres adapter module that is not the stock one" do
+    # The repo's adapter module is StatifierRouter.WrappedPostgres, which
+    # hands every callback to Ecto.Adapters.Postgres: it writes its SQL
+    # with the Postgres connection, so V03 is not read as SQLite and
+    # renames the index exactly as on the stock module.
+    #
+    # sabotage: made V03 rename only when the stock Postgres adapter
+    # module is the repo's (`if Adapter.postgres?(repo())`) -> red, the
+    # index kept V02's truncated name; restored, green.
+    test "V03 renames V02's truncated index, up and down" do
+      connection =
+        Keyword.take(TestRepo.config(), [:hostname, :port, :username, :password, :database])
+
+      # Two connections: Ecto takes the migration lock on one of its own.
+      start_supervised!({WrappedPostgresRepo, connection ++ [pool_size: 2]})
+      assert WrappedPostgresRepo.__adapter__() == StatifierRouter.WrappedPostgres
+
+      :ok =
+        migrate(:up, @wrapped_through_v02_version, MigrateThroughV02, repo: WrappedPostgresRepo)
+
+      truncated = binary_part(@v02_spelling, 0, @max_identifier_bytes)
+      assert %{^truncated => {true, _columns}} = indexes(@subscriptions)
+
+      :ok = migrate(:up, @wrapped_v03_version, MigrateV03, repo: WrappedPostgresRepo)
+
+      assert indexes(@subscriptions) == %{
+               "statifier_router_subscriptions_pkey" => {true, ["id"]},
+               @v03_name => {true, ["execution_id", "binding_id", "invoke_id"]}
+             }
+
+      :ok = migrate(:down, @wrapped_v03_version, MigrateV03, repo: WrappedPostgresRepo)
+      assert %{^truncated => {true, _columns}} = indexes(@subscriptions)
+      refute Map.has_key?(indexes(@subscriptions), @v03_name)
+
+      :ok =
+        migrate(:down, @wrapped_through_v02_version, MigrateThroughV02, repo: WrappedPostgresRepo)
+
       assert index_names_in_schema() == []
     end
   end
