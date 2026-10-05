@@ -6,9 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.10.0/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.0/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.11.0] 2026-10-04
+
+Feature release: two opt-ins for a host that delivers outside the router's own doors. `StatifierRouter.Config` takes `:wrap_target`, given beside `:around_delivery`, which runs a send's delivery to the execution target inside the wrapper, under the new door `:target`, wherever no other door's work encloses it; and `StatifierRouter.Delivery.deliver_event/4` reads `run_in_scope: true` in its envelope, which runs the step it drives under the envelope's scope, so a host's own job reaches a route that a scope overrides. Left out, each answers as 0.10.0 did. The change in behaviour that comes without a new option is migration V03's: on a repo whose adapter module wraps `Ecto.Adapters.SQLite3` it now does nothing, as on the stock SQLite adapter, where it sent an `ALTER INDEX` SQLite cannot parse; a Postgres repo, wrapped or not, is renamed as before. The statifier requirement stays `~> 2.10`, no migration version is added or changed, and no runtime dependency is added or moved.
+
+### Added
+
+- `StatifierRouter.Config` takes an optional boolean `:wrap_target`, given
+  only beside `:around_delivery`: set to `true`, a `<send>` to the
+  execution target on the send-processor shape, or from a step the router
+  did not drive, is delivered inside the wrapper too, under the new door
+  `:target` and the sender's scope, while one sent from a step a wrapped
+  door drove is still wrapped once, by that door. Left out, or `false`,
+  nothing changes.
+- `StatifierRouter.Delivery.deliver_event/4` reads an optional boolean
+  `:run_in_scope` in its envelope: set to `true`, the step the delivery
+  drives resolves its routes in the envelope's `:scope`, so a host's own
+  job that delivers an event back in - as the README's "Sending from a
+  durable execution" recipe does - reaches a route that a scope in
+  `:route_overrides` overrides, where it was refused as
+  `{:no_delivery_scope, name}`. The scope is set for the length of the
+  call and any scope the calling process held before is put back. Left
+  out, or `false`, nothing changes; any other value raises
+  `ArgumentError` before anything is written.
+
+### Fixed
+
+- `StatifierRouter.Migrations.V03` does nothing, as on
+  `Ecto.Adapters.SQLite3`, for a repo whose adapter module is another one
+  that writes its SQL with the stock SQLite connection (a wrapper around
+  `Ecto.Adapters.SQLite3`), where it sent an `ALTER INDEX` SQLite cannot
+  parse. Postgres repos, wrapped or not, are renamed as before.
 
 ## [0.10.0] 2026-10-02
 
