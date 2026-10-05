@@ -29,21 +29,46 @@ defmodule StatifierRouter do
       routed delivery: the timer queue's own job steps it into its
       execution, and the job row, not the routing ledger, records it
       (ADR-0004, the Note of 2026-10-02).
+    * The route registry: the named, one-way outbound destinations a chart
+      reaches with `<send>`, registered per host and overridable per scope
+      (ADR-0005). A route a scope overrides resolves in the scope of the
+      delivery that drove the sending step, or in the configuration's
+      `:processor_scope` on the send-processor shape; a step a host drives
+      itself through `StatifierRouter.Delivery.deliver_event/4` names its
+      scope with `run_in_scope: true` in the envelope (ADR-0002, the
+      Amendment of 2026-10-04).
+    * The webhook front, `StatifierRouter.Webhook`: a Plug-shaped helper
+      a host calls from its own controller or plug.
+    * The BasicHTTP front: `StatifierRouter.BasicHTTP`, the W3C Basic HTTP
+      Event I/O Processor for durable executions, gives each execution
+      created under a new address row of a configuration that sets
+      `:basichttp` a location, kept in the opt-in location table;
+      `StatifierRouter.BasicHTTP.Front` delivers a POST to that location
+      into its execution (ADR-0002, the Amendments of 2026-09-30).
+    * The whole-delivery wrapper: the configuration's optional
+      `:around_delivery`, handed `(scope, door, work)`, runs every read and
+      write of a delivery on the doors this package drives itself inside
+      one call of the host's. With `:wrap_target` set beside it, it also
+      wraps a send's delivery to an execution target that no other door's
+      work encloses, under the door `:target` (ADR-0003, the Amendments
+      of 2026-10-02 and 2026-10-04).
     * Execution-to-execution sends: a `<send>` whose `target` is the
       reserved name `StatifierRouter.SendHandler.execution_target/0`
       resolves through the address table and is delivered by the same
       transaction a binding's delivery uses (ADR-0006).
-    * The webhook front, `StatifierRouter.Webhook`: a Plug-shaped helper
-      a host calls from its own controller or plug.
     * The source invoke: an `<invoke>` whose lifetime is a subscription's,
       through `subscribe/3`, `cancel/2` and the delegate a host's invoke
       handler calls, `StatifierRouter.SourceInvoke` (ADR-0007).
 
   ## What it does not own
 
-    * Sinks and the route registry.
-    * Any queue adapter.
-    * Timers: those are `statifier_oban`'s.
+    * The sinks themselves: a route adapter, what it writes to, and its
+      retries are the host's.
+    * The invoke handler itself: the host registers it with the engine and
+      delegates to `StatifierRouter.SourceInvoke`.
+    * Any queue adapter: Broadway's producers are the host's choice.
+    * Timers: those are `statifier_oban`'s, and the durable queue a delayed
+      route send is recorded on is the host's.
     * A publish store: a host callback resolves a document to its active
       chart.
     * Any process or supervisor: the host schedules the reapers and starts
@@ -68,6 +93,14 @@ defmodule StatifierRouter do
   `StatifierRouter.Dedupe.reap/2` and `StatifierRouter.Addresses.reap/2`.
   It builds the source invoke's two calls, `subscribe/3` and `cancel/2`,
   over the subscription table `StatifierRouter.Migrations.V02` adds.
+  It builds the outbound half: the registry on `StatifierRouter.Config`,
+  the adapter behaviour `StatifierRouter.Route`, the queue behaviour
+  `StatifierRouter.TimerQueue` and `StatifierRouter.SendHandler`. It
+  builds the BasicHTTP front, `StatifierRouter.BasicHTTP` and
+  `StatifierRouter.BasicHTTP.Front`, over the opt-in location table
+  `StatifierRouter.Migrations.up_locations/1` creates, and the
+  whole-delivery wrapper, the configuration's `:around_delivery` with
+  `:wrap_target` its opt-in for the execution target's delivery.
   Each piece lands behind the decision record that fixes it, in
   `docs/adr/`.
 
