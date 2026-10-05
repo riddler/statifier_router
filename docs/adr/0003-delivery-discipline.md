@@ -910,9 +910,17 @@ atom, was decided by the conductor under a standing consent, 2026-10-03.
 
 **The superseded sentence.** "Wrapping it on the shapes where no wrapper
 reaches is not decided here", in the Amendment of 2026-10-02, is
-superseded by this Amendment. Every other sentence of that Amendment
-stands, and with the new key left out each of its tables answers as it
-did.
+superseded by this Amendment. With the new key left out, or `false`,
+every other sentence of that Amendment stands and each of its tables
+answers as it did. With `wrap_target: true`, the sentences that say the
+execution target has no door or is not wrapped - "the execution-target
+door is not wrapped" in its opening paragraph, its doors table's "no
+door of its own" and "no" for the execution target at the executor seam
+and on the send-processor shape, and "The door is not wrapped." opening
+its per-shape paragraph - hold only for a send whose delivery runs
+inside a step a door drove; on the two shapes no door reaches, the
+execution target has the door `:target` and is wrapped, as the table
+below says.
 
 - **The option.** `StatifierRouter.Config` takes one optional key,
   `:wrap_target`, a boolean defaulting to `false`. It names a door handed
