@@ -187,6 +187,14 @@ defmodule StatifierRouter.Config do
   that calls it twice raise `ArgumentError` after the wrapper returns. A
   module is called as `module.around_delivery/3`.
 
+  That raise undoes nothing: it comes once the wrapper has returned, so
+  what every call of `work` wrote stands, committed by then when the
+  wrapper opened a transaction of its own. A wrapper that calls `work`
+  twice on the `:route` door has routed the event twice: each binding's
+  second delivery finds its dedupe claim taken and writes a `duplicate`
+  ledger row, and a `key_refused` row, which no dedupe covers, is written
+  a second time.
+
   The doors, and what `work` covers in each:
 
   | Door | Called by | `work` covers |
@@ -667,9 +675,13 @@ defmodule StatifierRouter.Config do
   # exactly once and answering what it answered. A report rather than a
   # counter in the process dictionary, because a wrapper may run the work
   # in another process. The reports are drained on every way out of the
-  # wrapper - a return, a raise, an exit or a throw - so none is left in
-  # the caller's mailbox, and a wrapper that fails is re-raised with its
-  # own kind, reason and stacktrace.
+  # wrapper - a return, a raise, an exit or a throw - so no report of work
+  # that finished before the wrapper returned is left in the caller's
+  # mailbox, and a wrapper that fails is re-raised with its own kind,
+  # reason and stacktrace. Work the wrapper starts in another process and
+  # does not wait for is outside that: the wrapper is refused when the
+  # work has not reported by the time it returns, and the work's report,
+  # if it comes, arrives later and stays in the caller's mailbox.
   @doc false
   @spec around_delivery(t(), String.t(), door(), (-> answer)) :: answer when answer: term()
   def around_delivery(%__MODULE__{around_delivery: nil}, _scope, _door, work), do: work.()

@@ -71,6 +71,16 @@ defmodule StatifierRouter.Broadway do
   statifier_persistence's per-execution lock, whichever processor they
   came through (ADR-0003, section 5). A binding whose `order` is `:none`
   is not partitioned by its key (ADR-0003, section 10).
+
+  The partitioner runs in the producer's dispatcher, so what it rescues
+  and what it lets through matter to the producer. An `ArgumentError`
+  from its bindings read is rescued, whether the `:bindings_resolver`,
+  the `:around_delivery` wrapper or the router's check of the wrapper's
+  contract raised it: the message is partitioned by its message id, and
+  `handle_message/3` is where it fails, if it does. Anything else raised,
+  exited or thrown there, and any raise from `normalize`, is not rescued
+  and takes the producer down with the messages it holds. `partition/3`
+  says which in full.
   """
 
   use Broadway
@@ -176,8 +186,19 @@ defmodule StatifierRouter.Broadway do
   (ADR-0003, the Amendment of 2026-10-02). Only the read is wrapped, and
   no transaction is open around it, so what the wrapper sets in the
   process is visible to it and a transaction-local setting is not, unless
-  the wrapper opens a transaction itself. An `ArgumentError` the wrapper
-  raises is rescued here as a malformed resolver answer is.
+  the wrapper opens a transaction itself.
+
+  What is rescued here is an `ArgumentError`, whichever raised it: the
+  wrapper itself, the resolver inside it, or the router's check of the
+  wrapper's contract, which raises after the wrapper returns when it
+  answered anything but the work's answer or called the work other than
+  once. Each is rescued as a malformed resolver answer is: the message is
+  partitioned by its message id, and `route/3` in `handle_message/3`
+  calls the wrapper again under `:route`, where nothing rescues it, so a
+  wrapper that raises or breaks its contract there too fails the message.
+  Any other raise from the wrapper, and any exit or throw, is not rescued:
+  it propagates out of the partitioner, in the producer's dispatcher, as a
+  raise from `normalize` does.
 
   The configuration's `:wrap_target` adds no call to this pipeline. The
   partitioner sends nothing, and a send to an execution target from a

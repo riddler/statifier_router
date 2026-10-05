@@ -1018,3 +1018,22 @@ inside a step the `:route` door and the `:basichttp` door drive, and the
 statements a configuration without the key issues on both shapes,
 captured before the key existed. The describe block "the
 execution-target door is not wrapped" is unchanged and stays green.
+
+## Note (2026-10-04): a wrapper that calls its work twice has routed twice, and the extra call's effects stand
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It states a consequence of the contract the
+Amendment of 2026-10-02 sets out, which says that a wrapper that "calls
+it twice raises `ArgumentError` once it returns" and does not say what
+the second call has done by then.
+
+The raise comes after the wrapper has returned, so it undoes nothing:
+what every call of `work` wrote stands, and a wrapper that ran the work
+inside a transaction of its own has committed it by then. On the
+`:route` door a second call routes the event a second time. Each
+binding's second delivery finds its dedupe claim of section 6 already
+taken and records a `duplicate` ledger row, and a `key_refused` row,
+which `StatifierRouter.route/3` writes with no dedupe claim of its own
+(its private `key_refused/5`), is written a second time. The check that
+raises is the package-internal `StatifierRouter.Config.around_delivery/4`;
+`StatifierRouter.Config`'s "Wrapping a whole delivery" says the same.
