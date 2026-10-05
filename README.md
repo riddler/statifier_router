@@ -1363,6 +1363,10 @@ wants the helper to build exactly what it wrote:
   `invoke_id` - and the collation must be one your database knows. A
   column of your own takes its collation in its `:leading_columns` opts
   (`collation: "C"`, which `Ecto.Migration.add/3` already accepts).
+  On SQLite the option builds no collation: the package hands each
+  entry to `add/3` as `:collation`, which the Postgres adapter reads,
+  while ecto_sqlite3 reads `:collate`, so every entry is accepted and
+  every column keeps SQLite's default collation.
 
 Like `:leading_columns`, both apply to a fresh create only. A malformed
 value for any of the three raises `ArgumentError` before any table is
