@@ -179,6 +179,12 @@ defmodule StatifierRouter.Broadway do
   the wrapper opens a transaction itself. An `ArgumentError` the wrapper
   raises is rescued here as a malformed resolver answer is.
 
+  The configuration's `:wrap_target` adds no call to this pipeline. The
+  partitioner sends nothing, and a send to an execution target from a
+  step `handle_message/3` drives runs inside that message's `:route`
+  call, so it is wrapped once, by that call, and never again under the
+  door `:target` (ADR-0003, the Amendment of 2026-10-04).
+
   A message no such binding addresses is partitioned by the hash of its
   message id. So is a message `normalize` builds no routable event from,
   one whose resolver answer `StatifierRouter.route/3` would refuse, and

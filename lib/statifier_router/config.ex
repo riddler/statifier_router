@@ -21,6 +21,7 @@ defmodule StatifierRouter.Config do
   | `:on_step` | what `StatifierRouter.Delivery` calls in place of `StatifierPersistence.Executions.step/5`, with its arguments and its return contract: a module exporting `step/5` or an arity-5 fun (see below) | `nil` (the delivery calls `step/5` itself) |
   | `:execution_id` | what `StatifierRouter.Delivery` mints a new execution's id with, from `(scope, document, key)`: a module exporting `execution_id/3` or an arity-3 fun answering a non-empty string (see below) | `nil` (a UXID with the prefix `ex`) |
   | `:around_delivery` | what `StatifierRouter.route/3`, `StatifierRouter.Broadway`'s partitioner and `StatifierRouter.BasicHTTP.Front` run a whole delivery inside, handed `(scope, door, work)`: a module exporting `around_delivery/3` or an arity-3 fun that calls `work` exactly once and answers what it answered (see below) | `nil` (nothing wraps a delivery) |
+  | `:wrap_target` | `true` runs a send's delivery to the execution target inside `:around_delivery` too, under the door `:target`, wherever no other door's work encloses it: a boolean, given only beside `:around_delivery` (see below) | `false` |
   | `:bindings` | a list of bindings, each a map or keyword list `StatifierRouter.Binding.new/1` accepts, or a `%StatifierRouter.Binding{}` it built | `[]` |
   | `:bindings_resolver` | the `StatifierRouter.BindingsResolver` answering the bindings of one scope, in place of `:bindings`: a module implementing it or an arity-1 fun (see below) | `nil` (the bindings are `:bindings`) |
   | `:route_adapters` | the route registry, a map from route name to `{module, config}` where the module implements `StatifierRouter.Route` | `%{}` |
@@ -193,18 +194,43 @@ defmodule StatifierRouter.Config do
   | `:route` | `StatifierRouter.route/3`, and so `StatifierRouter.Webhook.handle/3` and `StatifierRouter.Broadway`'s `handle_message/3` | the bindings read, every binding's `key_refused` row, and every binding's delivery through the `:delivery` module, after the event and the options are checked |
   | `:partition` | `StatifierRouter.Broadway.partition/3`, in the producer's dispatcher | the bindings read the partitioner makes for one message |
   | `:basichttp` | `StatifierRouter.BasicHTTP.Front.handle/3` | the delivery to the execution the location names, after the token is resolved, which stays outside |
+  | `:target` | `StatifierRouter.SendHandler`, on a configuration that sets `:wrap_target`, for a send to the execution target that no other door's work encloses | the send's delivery to the execution it names, or the `send_refused` row of a refused one, after the sender's address row is read, which stays outside |
 
   A send to an execution target is delivered by
   `StatifierRouter.Delivery.deliver_event/4`, called by
-  `StatifierRouter.SendHandler` directly, and no door wraps it. At the
-  executor seam it runs inside the sending execution's step, so a
-  `:route` wrapper around that step's delivery encloses it; on the
-  send-processor shape, and from a step the router did not drive, nothing
-  of this package's encloses it, and the host wraps the call that performs
-  the send itself. Nor are `StatifierRouter.Delivery.deliver/4` and
-  `deliver_event/4` wrapped when a host calls them itself, and nor are
-  `subscribe/3`, `cancel/2`, the location rotation and the reapers, which
-  the host calls itself and can wrap at the call.
+  `StatifierRouter.SendHandler`. At the executor seam it runs inside the
+  sending execution's step, so when a door above drove that step - a
+  `:route` or a `:basichttp` call - the wrapper around it already
+  encloses the target's delivery. On the send-processor shape, and from a
+  step the router did not drive (a delayed event a timer job steps in, a
+  step the host makes itself), no door encloses it, and unless the
+  configuration sets `:wrap_target` nothing of this package's wraps it.
+
+  `:wrap_target` is the opt-in for those two shapes (ADR-0003, the
+  Amendment of 2026-10-04). Set to `true`, a send's delivery to the
+  execution target runs inside one call of the wrapper, under the door
+  `:target`, handed the scope of the sender's address row, whenever no
+  door's work is running. Each door marks its work while it runs, in the
+  process that runs it, so a target delivery inside a step a door drove
+  is wrapped once, by that door, and never again under `:target`. The
+  mark is this package's own: a step the host runs inside a context of
+  its own, at its own call, carries none, so on such a step the wrapper
+  is called under `:target` inside the host's context and must allow
+  that. At the executor seam the work runs inside the sending step's
+  transaction, so the wrapper must run it in the calling process, and a
+  transaction the wrapper opens there nests into the sender's: a
+  `c:Ecto.Repo.rollback/1` from it takes the sending step down with it.
+  The key is a boolean, taken only beside an `:around_delivery`: any
+  other value is refused with
+  `{:error, {:invalid_value, :wrap_target, value}}`, and the key given
+  without the wrapper, `false` included, with
+  `{:error, {:missing_key, :around_delivery}}`. Left out, or `false`, the
+  execution target is delivered exactly as it was before the key existed.
+
+  Nor are `StatifierRouter.Delivery.deliver/4` and `deliver_event/4`
+  wrapped when a host calls them itself, under either setting, and nor
+  are `subscribe/3`, `cancel/2`, the location rotation and the reapers,
+  which the host calls itself and can wrap at the call.
 
   A context held in the process is visible to every statement `work`
   runs, in the process that calls the wrapper. A transaction-local setting
@@ -368,6 +394,7 @@ defmodule StatifierRouter.Config do
     :around_delivery,
     :bindings_resolver,
     :basichttp,
+    wrap_target: false,
     bindings: [],
     persistence_options: [],
     send_handlers: %{},
@@ -431,7 +458,7 @@ defmodule StatifierRouter.Config do
           | (scope :: String.t(), document :: String.t(), key :: String.t() -> String.t())
 
   @typedoc "The door a wrapped delivery came through (ADR-0003, the Amendment of 2026-10-02)."
-  @type door :: :route | :partition | :basichttp
+  @type door :: :route | :partition | :basichttp | :target
 
   @typedoc """
   What runs a whole delivery: a module exporting `around_delivery/3`, or an
@@ -462,6 +489,7 @@ defmodule StatifierRouter.Config do
           on_step: on_step() | nil,
           execution_id: execution_id() | nil,
           around_delivery: around_delivery() | nil,
+          wrap_target: boolean(),
           basichttp: keyword() | nil,
           table_prefix: String.t(),
           prefix: String.t() | nil
@@ -473,7 +501,8 @@ defmodule StatifierRouter.Config do
   @typedoc "Why `new/1` refused a configuration."
   @type new_error ::
           {:unknown_key, term()}
-          | {:missing_key, :repo | :store | :executor | :resolver | :chart_resolver}
+          | {:missing_key,
+             :repo | :store | :executor | :resolver | :chart_resolver | :around_delivery}
           | {:invalid_value, atom(), term()}
           | {:invalid_config, term()}
           | {:binding, non_neg_integer(), Binding.new_error()}
@@ -508,6 +537,10 @@ defmodule StatifierRouter.Config do
   # What runs a whole delivery, and the function its module form must
   # export (ADR-0003, the Amendment of 2026-10-02). Checked as a hook is.
   @wrapper [around_delivery: {:around_delivery, 3}]
+  # The process key a wrapped door's work is marked under while it runs,
+  # on a configuration that sets `:wrap_target` (ADR-0003, the Amendment
+  # of 2026-10-04).
+  @door_key {__MODULE__, :wrapped_door}
   @known [
     :repo,
     :delivery,
@@ -515,7 +548,8 @@ defmodule StatifierRouter.Config do
     :bindings_resolver,
     :persistence_options,
     :send_handlers,
-    :basichttp
+    :basichttp,
+    :wrap_target
     | @delivery_keys ++
         @storage_keys ++
         @route_keys ++
@@ -543,7 +577,8 @@ defmodule StatifierRouter.Config do
   adapter options name another repo, then a malformed `:send_handlers`,
   then a malformed `:persistence_options`, then a malformed `:on_create`
   or `:on_step`, then a malformed `:execution_id`, then a malformed
-  `:around_delivery`, then a storage value the
+  `:around_delivery`, then a `:wrap_target` that is not a boolean, then a
+  `:wrap_target` given without `:around_delivery`, then a storage value the
   table does not allow, then `:bindings` and `:bindings_resolver` both
   given, then a malformed `:bindings_resolver`, then the first binding
   `StatifierRouter.Binding.new/1` refuses, as `{:binding, index, reason}`
@@ -581,6 +616,7 @@ defmodule StatifierRouter.Config do
          {:ok, hooks} <- hooks(opts, @hooks),
          {:ok, minter} <- hooks(opts, @minter),
          {:ok, wrapper} <- hooks(opts, @wrapper),
+         {:ok, wrap_target} <- wrap_target(opts, wrapper[:around_delivery]),
          {:ok, storage} <- storage(opts),
          {:ok, bindings} <- binding_source(opts, basichttp) do
       {:ok,
@@ -591,7 +627,8 @@ defmodule StatifierRouter.Config do
            {:delivery, delivery},
            {:persistence_options, persistence_options},
            {:send_handlers, send_handlers},
-           {:basichttp, basichttp}
+           {:basichttp, basichttp},
+           {:wrap_target, wrap_target}
            | bindings ++ needs ++ storage ++ routes ++ hooks ++ minter ++ wrapper
          ]
        )}
@@ -637,12 +674,12 @@ defmodule StatifierRouter.Config do
   @spec around_delivery(t(), String.t(), door(), (-> answer)) :: answer when answer: term()
   def around_delivery(%__MODULE__{around_delivery: nil}, _scope, _door, work), do: work.()
 
-  def around_delivery(%__MODULE__{around_delivery: wrapper}, scope, door, work) do
+  def around_delivery(%__MODULE__{around_delivery: wrapper} = config, scope, door, work) do
     ref = make_ref()
     caller = self()
 
     reported = fn ->
-      answer = work.()
+      answer = in_door(config, door, work)
       send(caller, {ref, answer})
       answer
     end
@@ -670,6 +707,45 @@ defmodule StatifierRouter.Config do
                 "call the work exactly once and answer what the work answered"
     end
   end
+
+  # Package-internal: runs the execution target's delivery for a send whose
+  # sender's address row names `scope`. On a configuration that sets
+  # `:wrap_target`, and only while no wrapped door's work is running in the
+  # calling process, it runs inside the host's `:around_delivery` under the
+  # door `:target`; otherwise it runs `work` directly, so a configuration
+  # without the key runs exactly what it ran before, and a target delivery
+  # inside a wrapped step is wrapped once, by the sender's door (ADR-0003,
+  # the Amendment of 2026-10-04).
+  @doc false
+  @spec around_target(t(), String.t(), (-> answer)) :: answer when answer: term()
+  def around_target(%__MODULE__{wrap_target: true} = config, scope, work) do
+    case Process.get(@door_key) do
+      nil -> around_delivery(config, scope, :target, work)
+      _door -> work.()
+    end
+  end
+
+  def around_target(%__MODULE__{}, _scope, work), do: work.()
+
+  # The mark a wrapped door's work carries while it runs, read by
+  # around_target/3. It is set inside the work, so it lives in whichever
+  # process the wrapper runs the work in, and the value it replaced is put
+  # back on every way out. Only a configuration that sets `:wrap_target`
+  # reads it, so only such a configuration sets it.
+  defp in_door(%__MODULE__{wrap_target: true}, door, work) do
+    previous = Process.put(@door_key, door)
+
+    try do
+      work.()
+    after
+      restore_door(previous)
+    end
+  end
+
+  defp in_door(%__MODULE__{}, _door, work), do: work.()
+
+  defp restore_door(nil), do: Process.delete(@door_key)
+  defp restore_door(door), do: Process.put(@door_key, door)
 
   defp call_wrapper(wrapper, scope, door, work) when is_function(wrapper, 3),
     do: wrapper.(scope, door, work)
@@ -1162,6 +1238,19 @@ defmodule StatifierRouter.Config do
   defp hook?(value, function, arity) do
     module?(value) and Code.ensure_loaded?(value) and
       function_exported?(value, function, arity)
+  end
+
+  # ADR-0003, the Amendment of 2026-10-04: a boolean, and only beside an
+  # `:around_delivery`, since it names a door handed to that wrapper and
+  # nothing else. Given at all without one - `false` included - it is
+  # refused, as `:bindings` given at all beside a resolver is.
+  defp wrap_target(opts, wrapper) do
+    case Keyword.fetch(opts, :wrap_target) do
+      :error -> {:ok, false}
+      {:ok, value} when not is_boolean(value) -> {:error, {:invalid_value, :wrap_target, value}}
+      {:ok, _value} when is_nil(wrapper) -> {:error, {:missing_key, :around_delivery}}
+      {:ok, value} -> {:ok, value}
+    end
   end
 
   defp snapshot?(given) do
