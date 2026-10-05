@@ -896,7 +896,7 @@ tag and `main` at the time of the flip:
 
 ## Amendment (2026-10-04): the whole-delivery wrapper may also enclose the execution target's delivery, opt-in
 
-Status: proposed
+Status: accepted
 
 The Amendment of 2026-10-02 left the execution target unwrapped on two
 shapes, a live session on the send-processor shape and a step the router
@@ -1037,3 +1037,75 @@ which `StatifierRouter.route/3` writes with no dedupe claim of its own
 (its private `key_refused/5`), is written a second time. The check that
 raises is the package-internal `StatifierRouter.Config.around_delivery/4`;
 `StatifierRouter.Config`'s "Wrapping a whole delivery" says the same.
+
+## Note (2026-10-04, sr-4emm): the execution-target wrap Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`; this flip was decided by the conductor
+under a standing consent, 2026-10-04. The `## Amendment (2026-10-04)` on
+the execution target's delivery is such a record: its `Status:` line
+moved from `proposed` to `accepted`. Its code landed in PR 161
+(`3ce250b`, with `5829841`, which scoped its superseded-sentence
+paragraph before the merge) and shipped in statifier_router 0.11.0 (tag
+`v0.11.0`, at `df7f009`, published on Hex 2026-10-05T04:02:16Z). The
+record's own status on line 3 was already `accepted` and was not
+touched, and the Note of 2026-10-04 after the Amendment carries no
+status and does not flip.
+
+Every claim was re-verified by anchor at `df7f009`, which is both the
+tag and `main` at the time of the flip. Later changes touched files the
+Amendment cites, and none changes a claim: PR 163 (`285a64c`, the Note
+of 2026-10-04 above and its documentation and test), ADR-0002's
+Amendment of 2026-10-04 (`deliver_event/4`'s `:run_in_scope`, which
+`StatifierRouter.SendHandler` does not set and which wraps nothing), and
+PR 171 (`f0d24a1`, the ownership lists, which now name `:wrap_target`).
+
+- The option: `StatifierRouter.Config`'s `new/1` checks `:wrap_target`
+  with its private `wrap_target/2`, after `:around_delivery`: left out
+  it is `false`; a value that is not a boolean is
+  `{:error, {:invalid_value, :wrap_target, value}}`; the key given
+  without a wrapper, `false` included, is
+  `{:error, {:missing_key, :around_delivery}}`.
+- The door: `StatifierRouter.Config`'s `door` type carries `:target`,
+  and the package-internal `around_target/3` hands it to the
+  package-internal `around_delivery/4`, whose contract is the one the
+  Amendment of 2026-10-02 states.
+- The mark: `around_delivery/4`'s reported work runs through the private
+  `in_door/3`, which, on a configuration that sets `:wrap_target`, puts
+  the door under a process key inside the work and puts back the value it
+  replaced on every way out; `around_target/3` runs the work directly
+  when it finds the mark and wraps it under `:target` when it finds none,
+  so the `:target` work carries the mark in turn. Without the key both
+  run the work directly.
+- What `:target` covers: `StatifierRouter.SendHandler`'s private
+  `to_execution/3` reads the sender's row through
+  `StatifierRouter.Addresses.by_execution/2` before the call and outside
+  it, answers `{:error, {:send_refused, :unaddressed_sender}}` with no
+  call for a sender with no row, and hands `around_target/3` the row's
+  scope around the private `addressed/5`, which either delivers through
+  the private `deliver_to/5` and `StatifierRouter.Delivery.deliver_event/4`
+  or writes the `send_refused` row. A delayed send to the reserved name is
+  refused by the private `enqueue/5`, which never reaches `to_execution/3`.
+- The shapes: `handle_effect/3` at the executor seam and `perform/2`'s
+  private `perform_send/4` on the send-processor shape both reach
+  `to_execution/3`; `deliver_event/4` opens its transaction through the
+  private `settled/5`, which nests inside a caller's.
+- The doors left as they were: `StatifierRouter.Config.around_delivery/4`
+  is called only by `StatifierRouter.route/3` (`:route`),
+  `StatifierRouter.Broadway`'s private `bindings_for/2` (`:partition`),
+  `StatifierRouter.BasicHTTP.Front`'s private `deliver/5` (`:basichttp`)
+  and `around_target/3` (`:target`); `StatifierRouter.Delivery`,
+  `subscribe/3`, `cancel/2`, `StatifierRouter.BasicHTTP.rotate_location/2`
+  and the two reapers call neither function. `StatifierRouter.Broadway`'s
+  moduledoc says `:wrap_target` adds no call to the pipeline.
+- The tests: `test/statifier_router/around_delivery_test.exs`, under the
+  describe block "the execution-target door, opted in with :wrap_target",
+  covers the option's shape, one `:target` call on the send-processor
+  shape and on a step the host makes itself with the target's statements
+  under the wrapper's context, a refused send's `send_refused` row inside
+  the call, the delivery wrapped once inside the `:route` and
+  `:basichttp` doors, and a configuration without the key issuing the
+  same statements on both shapes. The describe block "the
+  execution-target door is not wrapped" is still there.

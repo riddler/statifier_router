@@ -1975,7 +1975,7 @@ cites at 0.18.0, the version this package's `mix.lock` resolves.
 
 ## Amendment (2026-10-04, sr-x41e): a host's own deliver_event/4 may run its step under the envelope's scope, opt-in
 
-Status: proposed
+Status: accepted
 
 The Amendment of 2026-10-02 on the outbound BasicHTTP send ends its
 decision 3 with a limit: a job that delivers a failed POST back in
@@ -2070,3 +2070,65 @@ refusal without the key and with `false`, the send resolved in the
 envelope's scope with `true`, the `ArgumentError` with nothing written,
 the sending step's scope put back after a call nested inside it, and the
 statements a call without the key issues, captured at `10e7a94`.
+
+## Note (2026-10-04, sr-4emm): the run_in_scope Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`; this flip was decided by the conductor
+under a standing consent, 2026-10-04. The `## Amendment (2026-10-04,
+sr-x41e)` on a host's own `deliver_event/4` is such a record: its
+`Status:` line moved from `proposed` to `accepted`. Its code landed in PR
+170 (`b9695d1`) and shipped in statifier_router 0.11.0 (tag `v0.11.0`,
+at `df7f009`, published on Hex 2026-10-05T04:02:16Z). The record's own
+status on line 3 was already `accepted` and was not touched, and the
+Note of 2026-10-04 on the delayed BasicHTTP send, before the Amendment,
+carries no status and does not flip.
+
+Every claim was re-verified by anchor at `df7f009`, which is both the
+tag and `main` at the time of the flip (the Amendment read this package
+at `10e7a94`). One later change touched files the Amendment cites, and
+it changes no claim: PR 171 (`f0d24a1`, the ownership lists in the
+README and the `StatifierRouter` moduledoc, which now name
+`run_in_scope: true`).
+
+- What bounds it: `StatifierRouter.Delivery`'s `envelope` type requires
+  `:scope`; the README's "Sending from a durable execution" passes the
+  row `StatifierRouter.Addresses.by_execution/2` answers,
+  `StatifierRouter.SendHandler`'s private `deliver_to/5` the sender's
+  row's scope and `StatifierRouter.BasicHTTP.Front`'s private `deliver/5`
+  the token's row's. The delivery reads `delivery.scope` for the address
+  lookup and insert, the resolver, the minter and the ledger row.
+  Outside the new key, the delivery scope is set
+  only by `StatifierRouter.Delivery`'s private `delivered/4` and the
+  front's private `deliver/5`, each through
+  `StatifierRouter.SendHandler.put_delivery_scope/1`, which is still
+  `@doc false`; `StatifierRouter.SendHandler`'s private `unscoped/3`
+  refuses an overridden route with no scope in reach as
+  `{:no_delivery_scope, name}`.
+- Decision 1: `StatifierRouter.Delivery.deliver_event/4` reads
+  `:run_in_scope`; with `true` it runs the private `settled/5`, the
+  transaction and the step, inside
+  `StatifierRouter.SendHandler.in_delivery_scope/2` under the envelope's
+  `:scope`. `in_delivery_scope/2` is `@doc false`, and no public setter
+  was added.
+- Decision 2: `in_delivery_scope/2` puts the scope in an `after` block
+  back to what the process held before, or deletes it when it held none.
+- Decision 3: left out or `false`, `deliver_event/4` calls `settled/5`
+  as before; any other value raises `ArgumentError` before `settled/5`
+  is reached, so nothing is opened or written.
+- Decision 4: `deliver_to/5` builds its envelope without the key, and
+  nothing in this package sets it; `deliver_event/4` calls no wrapper,
+  and `StatifierRouter.Config.around_delivery/4` is called around it only
+  by the front and, under `:wrap_target`, by
+  `StatifierRouter.Config.around_target/3` from `StatifierRouter.SendHandler`.
+- Decision 5: the README's recipe passes `run_in_scope: true` and its
+  paragraph names the key and the refusal without it;
+  `deliver_event/4`'s documentation carries "Running the step under the
+  envelope's scope"; `test/statifier_router/deliver_event_scope_test.exs`
+  pins the refusal without the key and with `false`, the send resolved
+  in the envelope's scope with `true`, the `ArgumentError` with nothing
+  written, the sending step's scope put back after a nested call, and the
+  statements a call without the key issues, captured at the commit
+  before the key existed.
