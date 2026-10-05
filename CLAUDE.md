@@ -128,9 +128,9 @@ tree with any producer, and `partition_by` keeps one key on one processor.
 Behind it sits a binding, addressing and delivery layer over
 [statifier_persistence](https://github.com/riddler/statifier_persistence).
 
-What this package owns, by name (the README's "What this package owns" and
-the `StatifierRouter` moduledoc's section of the same name say what each
-piece covers):
+What this package owns, by name (the "What this package owns" section of
+`docs/explanation/what-the-router-owns.md` and the `StatifierRouter`
+moduledoc's section of the same name say what each piece covers):
 
 - Bindings: source -> match -> key -> document -> event, with `match` and
   `key` as predicator programs over the normalized event.
@@ -154,10 +154,13 @@ adapter; timers (statifier_oban's; the durable queue a delayed route send
 is recorded on is the host's); a publish store (a host callback resolves a
 document to its active chart); any process or supervisor.
 
-The three places that carry these two lists - this file, the README and
-the `StatifierRouter` moduledoc - agree with each other and with the code
-on main: a change to what the package owns, or an option a list names,
-moves all three in the same change.
+The three places that carry these two lists - this file,
+`docs/explanation/what-the-router-owns.md` and the `StatifierRouter`
+moduledoc - agree with each other and with the code on main: a change to
+what the package owns, or an option a list names, moves all three in the
+same change. The README is an introduction and a map: its host recipes
+live on the pages under `docs/guides/`, `docs/explanation/` and
+`docs/upgrading.md`, which `mix.exs` lists as extras and package files.
 
 Vocabulary and boundaries that hold in every file here:
 
