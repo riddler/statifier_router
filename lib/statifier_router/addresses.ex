@@ -100,6 +100,7 @@ defmodule StatifierRouter.Addresses do
   import Ecto.Query, only: [from: 2]
 
   alias StatifierPersistence.Storage
+  alias StatifierRouter.Adapter
   alias StatifierRouter.Binding
   alias StatifierRouter.Config
   alias StatifierRouter.Schema.Address
@@ -316,10 +317,8 @@ defmodule StatifierRouter.Addresses do
 
   # A repo module that names no adapter (one that delegates to an Ecto
   # repo rather than being one) takes the IN list, as before the array
-  # form came back. The module is loaded: examine/3 has called it.
-  defp postgres?(%Config{repo: repo}) do
-    function_exported?(repo, :__adapter__, 0) and repo.__adapter__() == Ecto.Adapters.Postgres
-  end
+  # form came back: StatifierRouter.Adapter answers false for it.
+  defp postgres?(%Config{repo: repo}), do: Adapter.postgres?(repo)
 
   # The rows `write` counts over every batch of `ids`; no statement for
   # no ids.

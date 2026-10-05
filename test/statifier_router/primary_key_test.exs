@@ -177,6 +177,15 @@ defmodule StatifierRouter.PrimaryKeyTest do
     |> List.flatten()
   end
 
+  @doc false
+  # A query telemetry handler: runs in the process that sent the query,
+  # so only an UPDATE the test's own process sent reaches it.
+  def handle_update(_event, _measurements, %{query: "UPDATE " <> _ = query}, test) do
+    if self() == test, do: send(test, {:stamp, query})
+  end
+
+  def handle_update(_event, _measurements, _metadata, _test), do: :ok
+
   defp routing_config do
     config(self(),
       bindings: parcel_bindings(),
@@ -357,6 +366,51 @@ defmodule StatifierRouter.PrimaryKeyTest do
                {:ok, %{stamped: 0, deleted: 0, next: nil}}
 
       assert [%Address{id: ^second}] = TestRepo.all(Config.queryable(config, Address))
+    end
+
+    # sabotage: made stamp_query/2 take the spliced IN branch on Postgres
+    # -> the stamp sent "IN ($2)", not "= ANY(", red; restored, green.
+    # Second mutation: made stamp/3 count its batch without writing it ->
+    # no UPDATE was sent, red; restored, green. Third: bound stamp/3's
+    # Postgres batch with `a.id in ^batch` -> the digit-only id cast to an
+    # integer and the reap raised encoding it for the text column (an
+    # error, not an assertion); restored, green.
+    test "stamps a row under a text id made of digits alone" do
+      :ok = Migrator.up(TestRepo, @digits_version, MigrateDigits, log: false)
+      config = routing_config()
+
+      # The doorstep scan finishes the parcel's execution and leaves its
+      # address row unstamped: the reap is the first to see it finished.
+      {:ok, [{:created_and_delivered, _, done}, _]} =
+        StatifierRouter.route(config, scan("depot/4/1", "loaded", "pcl_6101"), now: @now)
+
+      {:ok, [_, {:delivered, _, ^done}]} =
+        StatifierRouter.route(config, scan("depot/4/2", "delivered", "pcl_6101"), now: @now)
+
+      assert [%Address{id: id, terminal_seen_at: nil}] =
+               TestRepo.all(Config.queryable(config, Address))
+
+      assert id =~ ~r/^\d{12}$/
+
+      handler = "pk-stamp-#{System.unique_integer([:positive])}"
+      query = TestRepo.config()[:telemetry_prefix] ++ [:query]
+      :ok = :telemetry.attach(handler, query, &__MODULE__.handle_update/4, self())
+
+      # A one-hour horizon keeps the row the reap stamps.
+      bindings = for b <- config.bindings, do: %{b | dedupe: %{b.dedupe | horizon_ms: 3_600_000}}
+
+      try do
+        assert Addresses.reap(config, bindings, now: @now) ==
+                 {:ok, %{stamped: 1, deleted: 0, next: nil}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      assert_received {:stamp, stamp}
+      assert stamp =~ "= ANY("
+
+      assert [%Address{id: ^id, terminal_seen_at: @now}] =
+               TestRepo.all(Config.queryable(config, Address))
     end
 
     # sabotage: examine/3 dropped its rescue -> the integer cursor raised
