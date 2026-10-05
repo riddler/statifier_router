@@ -247,8 +247,8 @@ defmodule StatifierRouter.Delivery do
   @terminal [:completed, :failed, :cancelled]
 
   # The name of the event `:on_complete` hands a route. A completion is not
-  # a `<send>`, so no chart named it; it is written here once and the README
-  # documents it.
+  # a `<send>`, so no chart named it; it is written here once and the guide
+  # "How to deliver a chart's sends to a sink" documents it.
   @done_event "done.execution"
 
   @typedoc """
@@ -374,10 +374,11 @@ defmodule StatifierRouter.Delivery do
   `{:no_delivery_scope, name}` (`StatifierRouter.SendHandler`'s
   moduledoc, "The scope a route is resolved in").
 
-  A host that delivers a prebuilt event itself - the README's recipe
-  "Sending from a durable execution" delivers a failed POST back in this
-  way - sets `run_in_scope: true` in the envelope, and the step then
-  resolves its routes in the envelope's `:scope`, as a binding's delivery
+  A host that delivers a prebuilt event itself - step 5 of the guide
+  ["How to give an execution an HTTP location"](how-to-give-an-execution-an-http-location.md#step-5-perform-the-job-after-the-commit-and-bring-a-failure-back)
+  delivers a failed POST back in this way - sets `run_in_scope: true` in
+  the envelope, and the step then resolves its routes in the envelope's
+  `:scope`, as a binding's delivery
   and the BasicHTTP front do (ADR-0002, the Amendment of 2026-10-04). The
   scope is set for the length of the call and put back on every way out
   to what the process held before, so a call made inside a sending step

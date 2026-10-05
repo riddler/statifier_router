@@ -9,8 +9,9 @@ defmodule StatifierRouter.Webhook do
 
   It is Plug-shaped, not a Plug: it adds no dependency on Plug or Phoenix,
   and starts no process. The host writes the controller action or the plug
-  and calls `handle/3` from it; the README's "A webhook front" section shows
-  such an action.
+  and calls `handle/3` from it; step 2 of the guide ["How to take webhooks
+  and form posts"](how-to-take-webhooks-and-form-posts.md#step-2-write-the-webhook-action)
+  shows such an action.
 
   ## The request
 

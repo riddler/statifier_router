@@ -99,8 +99,9 @@ defmodule StatifierRouter.Config do
   name}` rather than missed on the one delivery that would have used it.
   It is what `StatifierRouter.Delivery` hands an execution's donedata to
   on the delivery that finishes the execution, inside that delivery's
-  transaction; the README's "A finished execution reaches a sink" sets it
-  beside the chart's own way of telling a sink.
+  transaction; step 6 of the guide ["How to deliver a chart's sends to a
+  sink"](how-to-deliver-to-a-sink.md#step-6-tell-a-sink-that-an-execution-has-finished)
+  sets it beside the chart's own way of telling a sink.
 
   An `{:error, reason}` from that route settles the delivery as
   `{:error, {:on_complete, route_name, reason}}` and rolls it back, the
