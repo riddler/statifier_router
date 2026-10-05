@@ -17,7 +17,8 @@ defmodule StatifierRouter.BasicHTTP.Front do
   no dependency on Plug or Phoenix and starts no process. The host routes
   `POST <base_url>/:token` (and, for the 405, every other method) to a
   controller action that builds the request map and calls `handle/3`, then
-  answers with `response/1`. The README's "A BasicHTTP front" section
+  answers with `response/1`. Step 3 of the guide ["How to give an execution
+  an HTTP location"](how-to-give-an-execution-an-http-location.md#step-3-route-posts-to-the-front)
   shows it. `handle/3` needs a configuration that sets `:basichttp`.
 
   ## The request
