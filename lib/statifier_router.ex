@@ -17,10 +17,18 @@ defmodule StatifierRouter do
       created when absent and handed the event in the same step.
     * Dedupe on `(binding, message_id)` with a horizon.
     * The recorded outcome vocabulary: every routed delivery attempt ends
-      in one named outcome. A fired timer is not a routed delivery: the
-      timer queue's own job steps it into its execution, and the job row,
-      not the routing ledger, records it (ADR-0004, the Note of
-      2026-10-02).
+      in one named outcome, and every outcome but `no_match` writes one
+      routing-ledger row (ADR-0004, section 4). These write no row:
+      a `no_match`, reported as telemetry only (ADR-0004, section
+      5); a send refused as `unaddressed_sender`, or as `delay` from a
+      sender with no address row, reported to the sender only, since the
+      ledger's `scope` is `NOT NULL` and a sender with no address row has
+      no scope (ADR-0006, section 6); and a delivery that answers
+      `{:error, _}`, which is not an outcome and leaves nothing written
+      for that binding (ADR-0004, section 7). A fired timer is not a
+      routed delivery: the timer queue's own job steps it into its
+      execution, and the job row, not the routing ledger, records it
+      (ADR-0004, the Note of 2026-10-02).
     * Execution-to-execution sends: a `<send>` whose `target` is the
       reserved name `StatifierRouter.SendHandler.execution_target/0`
       resolves through the address table and is delivered by the same
