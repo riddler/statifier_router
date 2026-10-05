@@ -98,6 +98,41 @@ defmodule StatifierRouter.LocationsMigrationTest do
     def down, do: :ok
   end
 
+  # A host on a text primary key, the one the Migrations moduledoc gives
+  # for `:primary_key`: V01 to V03 and then the location table, both under
+  # the same option, as that moduledoc says to pass it.
+  defmodule MigrateFirstTextKey do
+    @moduledoc false
+    use Ecto.Migration
+
+    def up, do: StatifierRouter.Migrations.up(opts())
+    def down, do: StatifierRouter.Migrations.down(opts())
+
+    defp opts do
+      [
+        table_prefix: "loc_router_",
+        prefix: "loc_router_schema",
+        primary_key: [type: :text, default: fragment("gen_random_uuid()::text")]
+      ]
+    end
+  end
+
+  defmodule MigrateLocationsTextKey do
+    @moduledoc false
+    use Ecto.Migration
+
+    def up, do: StatifierRouter.Migrations.up_locations(opts())
+    def down, do: StatifierRouter.Migrations.down_locations(opts())
+
+    defp opts do
+      [
+        table_prefix: "loc_router_",
+        prefix: "loc_router_schema",
+        primary_key: [type: :text, default: fragment("gen_random_uuid()::text")]
+      ]
+    end
+  end
+
   # Dated past every bootstrap and migrations_test version, so Ecto never
   # warns that one sorts below a version already run.
   @first_version 29_990_201_000_101
@@ -105,13 +140,17 @@ defmodule StatifierRouter.LocationsMigrationTest do
   @opted_in_version 29_990_201_000_103
   @down_only_version 29_990_201_000_104
   @collated_version 29_990_201_000_105
+  @first_text_key_version 29_990_201_000_106
+  @locations_text_key_version 29_990_201_000_107
 
   @versions [
     @first_version,
     @locations_version,
     @opted_in_version,
     @down_only_version,
-    @collated_version
+    @collated_version,
+    @first_text_key_version,
+    @locations_text_key_version
   ]
 
   @walk_tables [
@@ -178,6 +217,25 @@ defmodule StatifierRouter.LocationsMigrationTest do
       )
 
     Enum.map(rows, fn [name, collation] -> {name, collation} end)
+  end
+
+  # The catalog's data type of every id column the location table's key
+  # rule reaches - each walk table's id, and the location table's id and
+  # address_id - keyed "table.column", read back from information_schema
+  # rather than from the migration.
+  defp key_types do
+    %{rows: rows} =
+      SQL.query!(
+        TestRepo,
+        """
+        SELECT table_name || '.' || column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND column_name IN ('id', 'address_id')
+        """,
+        [@schema]
+      )
+
+    Map.new(rows, fn [column, type] -> {column, type} end)
   end
 
   defp config do
@@ -297,6 +355,47 @@ defmodule StatifierRouter.LocationsMigrationTest do
     assert_raise ArgumentError, ~r/unknown column :token in :column_collations/, fn ->
       Migrations.up_locations(column_collations: [token: "C"])
     end
+  end
+
+  # sabotage: V04's table_opts/1 made to ignore :primary_key -> the
+  # location table's id came back bigint, red; restored, green. sabotage:
+  # V04's reference_opts/1 made to type address_id :varchar under the
+  # option -> address_id came back character varying, red; restored,
+  # green.
+  test "under :primary_key the location table's id and address_id take the option's type" do
+    assert step(:up, @first_version, MigrateFirst) == :ok
+    assert step(:up, @locations_version, MigrateLocations) == :ok
+
+    # Without the option every key is the repo's own: a bigserial id,
+    # which the catalog reads as bigint, and a bigint reference to it.
+    assert key_types() == %{
+             "loc_router_addresses.id" => "bigint",
+             "loc_router_dedupe.id" => "bigint",
+             "loc_router_routing_ledger.id" => "bigint",
+             "loc_router_subscriptions.id" => "bigint",
+             "loc_router_locations.id" => "bigint",
+             "loc_router_locations.address_id" => "bigint"
+           }
+
+    assert step(:down, @locations_version, MigrateLocations) == :ok
+    assert step(:down, @first_version, MigrateFirst) == :ok
+    assert tables_present() == []
+
+    assert step(:up, @first_text_key_version, MigrateFirstTextKey) == :ok
+    assert step(:up, @locations_text_key_version, MigrateLocationsTextKey) == :ok
+
+    assert key_types() == %{
+             "loc_router_addresses.id" => "text",
+             "loc_router_dedupe.id" => "text",
+             "loc_router_routing_ledger.id" => "text",
+             "loc_router_subscriptions.id" => "text",
+             "loc_router_locations.id" => "text",
+             "loc_router_locations.address_id" => "text"
+           }
+
+    assert step(:down, @locations_text_key_version, MigrateLocationsTextKey) == :ok
+    assert step(:down, @first_text_key_version, MigrateFirstTextKey) == :ok
+    assert tables_present() == []
   end
 
   # sabotage: V04.down/1 made drop/1 again, not drop_if_exists/1 -> the

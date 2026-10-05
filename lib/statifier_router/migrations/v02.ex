@@ -10,7 +10,7 @@ defmodule StatifierRouter.Migrations.V02 do
 
   | Column | Type | Null |
   |---|---|---|
-  | `id` | `bigserial`, primary key | no |
+  | `id` | primary key: the repo's `:migration_primary_key` (`bigserial` by default), or under `:primary_key` the type and default that option names | no |
   | `binding_id` | `text` | no |
   | `execution_id` | `text` | no |
   | `invoke_id` | `text` | no |
