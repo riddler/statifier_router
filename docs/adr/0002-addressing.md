@@ -1921,3 +1921,54 @@ on the front's token lookup), the Note of 2026-10-02 on the address sweep
   `error.communication` that finishes the execution, the retried job's
   `{:duplicate, "basichttp_failure"}`, and
   `{:dropped, "basichttp_failure", :finished}` for a finished execution.
+
+## Note (2026-10-04, sr-69pg): a delayed BasicHTTP send is not delivered by this package
+
+A Note, not an amendment: it changes no decision, amendment or Note
+above it, and no code. Decision 5 of the Amendment of 2026-10-02 on the
+outbound BasicHTTP send leaves open how a durable execution's delayed
+BasicHTTP POST is performed. Decided by the conductor under a standing
+consent, 2026-10-03: this package does not deliver one. The refusal the
+README's recipe already ships is what a chart author sees, and this Note
+names it. A delivery through the host's timer queue is not built here
+and is left to a later ruling. Code cites in this package are read at
+`285a64c`; statifier cites at its `v2.11.0` tag; statifier_persistence
+cites at 0.18.0, the version this package's `mix.lock` resolves.
+
+- **Why no delivery.** `Statifier.Send.BasicHTTP`'s moduledoc, "A
+  delayed send is this processor's timer": a delayed POST is held by a
+  timer process that `perform/2` starts and a `Statifier.Session` keeps,
+  and a delayed send performed outside a session has no session to hold
+  it and is discarded. A durable execution has no session (the
+  Amendment's "What bounds it"). This package starts no timer, and the
+  `:timer_queue` a host configures (`StatifierRouter.TimerQueue`) is
+  handed a delayed send of the configured `:send_type` only:
+  `StatifierRouter.SendHandler.handle_effect/3` acts on a
+  `{:send_delayed, _}` only when its private `mine?/2` finds the send's
+  `type` equal to that `:send_type`.
+- **The refusal.** The README's "Sending from a durable execution"
+  executor answers `{:error, {:delayed_basichttp_send, send_id}}` for a
+  `{:send_delayed, _}` of either type string `StatifierRouter.BasicHTTP`
+  is registered under. statifier_persistence re-enters that error inside
+  the step that sent (`StatifierPersistence.Executions`' moduledoc,
+  "Executor failures on actionable effects re-enter the chart"; its
+  private `reentry_origin/1`).
+- **What a chart author sees.** `error.communication`, a platform
+  event, whose `_event.sendid` is the delayed send's id and which
+  carries no data: `_event.data` reads as undefined. A transition on
+  `error.communication` with `cond="_event.sendid == '...'"` takes it in
+  the same step, and no POST is made at any time. The reason
+  `{:delayed_basichttp_send, send_id}` does not reach the chart; the
+  host reads it as the `reason` of
+  `[:statifier_persistence, :effect, :failed]`, with `kind:
+  :send_delayed` and `reentered?: true`.
+- **The test.** `StatifierRouter.BasicHTTPSendTest`
+  (`test/statifier_router/basic_http_send_test.exs`), under "a delayed
+  send", runs the README executor's delayed arm over the parcel's
+  manifest send with a delay and pins: one input, the execution finished
+  on the chart's `error.communication` transition, `_event.type` as
+  `platform`, `_event.data` as undefined, and the telemetry event's
+  `reason`, `kind` and `reentered?`.
+- **Left open.** A delayed BasicHTTP send delivered through the host's
+  timer queue, and how it would survive a resume, is for a later ruling
+  and record.

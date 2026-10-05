@@ -881,8 +881,9 @@ defmodule MyApp.Executor do
     end)
   end
 
-  # A delayed BasicHTTP send is not decided yet: refuse it, and the
-  # execution sees error.communication.
+  # A delayed BasicHTTP send is not delivered by this package (ADR-0002,
+  # the Note of 2026-10-04): refuse it, and the chart sees
+  # error.communication with _event.sendid the send's id and no data.
   def execute({:send_delayed, %SendDelayed{type: type} = send}, _context)
       when type in @types,
       do: {:error, {:delayed_basichttp_send, send.send_id}}
