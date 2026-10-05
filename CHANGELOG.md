@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.1/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.2/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.11.2] 2026-10-05
+
+Patch release: the documentation is reorganized, and the package's code is unchanged. The README is rewritten as an introduction, and the long sections it carried move to pages of their own that ship in the package and appear in the HexDocs sidebar. No public function, option, event or migration version is added or changed, and the statifier requirement stays `~> 2.10`.
+
+### Changed
+
+- The README is rewritten as an introduction: what the package does and for whom, why it exists, the installation and the migration, one worked example, and a documentation map that sends a reader to the page for their question.
+- The README's long sections move to eleven pages: "How to route a producer's messages through the Broadway pipeline", "How to bind events from several sources to one execution", "How to deliver a chart's sends to a sink", "How to take webhooks and form posts", "How to give an execution an HTTP location", "How to resolve a document to its chart", "How to fit the router into an engine of your own", "How to fit the router's tables to a host", "What the router owns, and what it leaves to the host", "Why one key's events step one at a time" and "Upgrading the tables".
+- The HexDocs sidebar groups those pages under "How-to guides", "Explanation" and "Upgrading", below the README and the changelog.
+- The module and function docs that pointed at a README section now link the page and step that carries it.
 
 ## [0.11.1] 2026-10-05
 
