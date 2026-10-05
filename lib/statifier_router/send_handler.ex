@@ -66,6 +66,12 @@ defmodule StatifierRouter.SendHandler do
   registered configuration, which would be the wrong one for every scope
   that overrides it (ADR-0005, as its Amendment of 2026-09-23 has it). A
   route no scope overrides resolves the same everywhere and needs none.
+  A binding's delivery and the BasicHTTP front always name their scope;
+  `StatifierRouter.Delivery.deliver_event/4` names one only when its
+  envelope sets `run_in_scope: true` (ADR-0002, the Amendment of
+  2026-10-04), which a host's own job may set and this module's sends
+  to the execution target do not: they keep whatever scope the sending
+  step holds.
 
   The send-processor shape is reached by no delivery, so there the host
   names the scope, with the configuration's `:processor_scope`
@@ -521,6 +527,26 @@ defmodule StatifierRouter.SendHandler do
     Process.delete(@scope_key)
     :ok
   end
+
+  # Runs `fun` with `scope` as the delivery scope, and puts back whatever
+  # the process held before on every way out: the scope a step it runs
+  # nested inside set, or none. `StatifierRouter.Delivery.deliver_event/4`
+  # calls it when the envelope sets `run_in_scope: true` (ADR-0002, the
+  # Amendment of 2026-10-04).
+  @doc false
+  @spec in_delivery_scope(String.t(), (-> result)) :: result when result: var
+  def in_delivery_scope(scope, fun) when is_binary(scope) and is_function(fun, 0) do
+    previous = Process.put(@scope_key, scope)
+
+    try do
+      fun.()
+    after
+      restore_delivery_scope(previous)
+    end
+  end
+
+  defp restore_delivery_scope(nil), do: Process.delete(@scope_key)
+  defp restore_delivery_scope(scope), do: Process.put(@scope_key, scope)
 
   # The adapter path, opened for `StatifierRouter.Delivery`'s completion
   # hook. It is the same three steps `hand_off/3` takes for a `<send>` -

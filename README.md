@@ -952,6 +952,7 @@ defmodule MyApp.SendJob.Worker do
           event: event,
           message_id: job.key,
           scope: row.scope,
+          run_in_scope: true,
           now: DateTime.utc_now()
         })
         |> settled(job, reason)
@@ -981,10 +982,14 @@ the job retries it. A chart with no transition for `error.communication`
 where it stands still answers `{:delivered, ...}`: the event is in its
 input log, and nothing took it.
 
-`deliver_event/4` runs with no scope of its own set, so a route that a
-scope in `:route_overrides` overrides is refused as
-`{:no_delivery_scope, name}` in the step it causes; keep such sends out
-of the chart's `error.communication` handler.
+`run_in_scope: true` runs the step the delivery causes under the
+address row's scope, as a binding's delivery does, so a send the chart's
+`error.communication` handler makes to a route that a scope in
+`:route_overrides` overrides resolves in that scope (ADR-0002, the
+Amendment of 2026-10-04). Without it, `deliver_event/4` sets no scope of
+its own, and such a send is refused as `{:no_delivery_scope, name}` in
+that step. The scope is set for the length of the call only: any scope
+the calling process held before is put back.
 
 **Performing inline is allowed.** The executor may call
 `StatifierRouter.BasicHTTP.perform/2` itself and answer its

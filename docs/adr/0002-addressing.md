@@ -1972,3 +1972,101 @@ cites at 0.18.0, the version this package's `mix.lock` resolves.
 - **Left open.** A delayed BasicHTTP send delivered through the host's
   timer queue, and how it would survive a resume, is for a later ruling
   and record.
+
+## Amendment (2026-10-04, sr-x41e): a host's own deliver_event/4 may run its step under the envelope's scope, opt-in
+
+Status: proposed
+
+The Amendment of 2026-10-02 on the outbound BasicHTTP send ends its
+decision 3 with a limit: a job that delivers a failed POST back in
+through `deliver_event/4` runs with no delivery scope, so in the step
+that delivery causes a send to a route some scope in `:route_overrides`
+overrides is refused as `{:no_delivery_scope, name}`, and "this
+Amendment changes nothing about it." This Amendment changes it, for a
+host that asks. Its direction was ruled by the operator, 2026-10-04: an
+opt-in key in the envelope `deliver_event/4` already takes, no public
+setter, and a call without the key unchanged. Its spelling, one boolean
+key and the refusal of any other value, was decided by the conductor
+under a standing consent, 2026-10-04.
+
+Code cites that predate this Amendment are read at `10e7a94`; the code it
+adds is cited by anchor in the pull request that carries it.
+
+**What bounds it.**
+
+- **The envelope already carries the scope.** `deliver_event/4`'s
+  `envelope` type requires `:scope`, and every caller passes one: the
+  README's recipe "Sending from a durable execution" passes the address
+  row's, `StatifierRouter.SendHandler`'s private `deliver_to/5` the
+  sender's row's, and `StatifierRouter.BasicHTTP.Front`'s private
+  `deliver/5` the row its token names. `deliver_event/4` reads it for the
+  address lookup and insert, the resolver, the minter and the ledger
+  row, and never sets it as the delivery scope.
+- **Who sets the delivery scope today.** Only `StatifierRouter.Delivery`'s
+  private `delivered/4` (a binding's delivery) and the front's private
+  `deliver/5`, each through `StatifierRouter.SendHandler`'s
+  `put_delivery_scope/1`, which is `@doc false`. At the executor seam a
+  send resolves its route in that scope, and with none in reach a route
+  some scope overrides is refused as `{:no_delivery_scope, name}`
+  (`StatifierRouter.SendHandler`'s moduledoc, "The scope a route is
+  resolved in"; its private `unscoped/3`).
+- **The door may run nested.** `deliver_event/4` is called inside a
+  sending step when a send reaches the execution target, and a host may
+  call it from a route at the executor seam; the sending step's scope is
+  then the one in the process, and a later send of that step resolves in
+  it.
+
+### 1. The key
+
+The envelope takes one optional key, `:run_in_scope`, a boolean. Set to
+`true`, `deliver_event/4` runs the delivery - its transaction, and the
+step it drives - with the envelope's `:scope` as the delivery scope, so a
+send that step makes resolves its route in that scope, as a binding's
+delivery and the front do. No public setter is added:
+`put_delivery_scope/1` stays `@doc false`.
+
+### 2. The scope is the call's, and the earlier one is put back
+
+The scope is set for the length of the call. On every way out - an
+outcome, an `{:error, reason}`, a raise - the process gets back whatever
+it held before: the scope of a sending step the call ran nested inside,
+or none. A send that step makes after the call returns resolves in its
+own scope again.
+
+### 3. Absent is today
+
+Left out, or `false`, `deliver_event/4` issues the same statements, in
+the same order, and answers the same as before the key existed; with no
+scope in reach, the refusal of decision 3's limit stands. Any other value
+raises `ArgumentError` before anything is opened or written, as a call
+with no `:event` already fails to match.
+
+### 4. What changes in the records above
+
+With the key set, three sentences of this record hold only for a call
+without it: "The scope a route sees" in decision 3 of the Amendment of
+2026-10-02 ("`deliver_event/4` sets no delivery scope, ... this
+Amendment changes nothing about it"); in the Note of 2026-10-02 that
+accepted it, the closing words "and still sets no delivery scope" of its
+paragraph on later changes, and the sentence of its decision 3 bullet
+"`deliver_event/4` goes straight to the private `settled/5` and sets no
+delivery scope: only the binding path's private `delivered/4` and the
+front's private `deliver/5` set one". Every other sentence stands. The
+execution target is unchanged: `StatifierRouter.SendHandler` does not set
+the key, so a send to it keeps the sending step's scope, as before.
+Nothing here wraps a call: `deliver_event/4` called by a host is still not
+handed to `:around_delivery`, under either value (ADR-0003, the Amendment
+of 2026-10-04).
+
+### 5. Where it is shown
+
+The README's recipe passes `run_in_scope: true`, and its paragraph on the
+limit says what the key does and what a call without it meets.
+`StatifierRouter.Delivery.deliver_event/4`'s documentation, "Running the
+step under the envelope's scope", states decisions 1 to 3. The tests are
+in `test/statifier_router/deliver_event_scope_test.exs`, over a parcel
+whose returned-to-depot step sends to a route each scope overrides: the
+refusal without the key and with `false`, the send resolved in the
+envelope's scope with `true`, the `ArgumentError` with nothing written,
+the sending step's scope put back after a call nested inside it, and the
+statements a call without the key issues, captured at `10e7a94`.
