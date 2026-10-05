@@ -393,6 +393,12 @@ defmodule StatifierRouter.AroundDeliveryTest do
     # sabotage: around_delivery/4's nil clause ran the work inside
     # config.repo.transaction/1 -> the key_refused row gained a begin and
     # a commit, red; restored, green.
+    # sabotage: StatifierRouter.Broadway's bindings_for/2 read the bindings
+    # in a Task -> the resolver was not asked in the calling process, red;
+    # it ran its read inside router.repo.transaction/1 -> the partitioner
+    # issued a begin and a commit, red; by_address/2 hashed
+    # {scope, key, document} -> the partition differed, red; restored,
+    # green.
     test "issues the same statements and answers the same as before the option existed" do
       config = config(self(), bindings: parcel_bindings(), basichttp: [base_url: @base_url])
       me = self()
@@ -435,6 +441,28 @@ defmodule StatifierRouter.AroundDeliveryTest do
                StatifierRouter.route(config, refused, now: @now)
 
       assert queries(statements(), me) == @key_refused
+
+      # The :partition door: the partitioner asks the resolver once, in
+      # the calling process, under no context, issues no statement and
+      # answers the hash of the address it read before the option existed.
+      partitioned = config(me, bindings_resolver: reporting_resolver(me))
+      scan = parcel_scan("parcel_scans/1/0004", "loaded")
+
+      message = %Message{
+        data: scan.data,
+        metadata: Map.take(scan, [:scope, :message_id, :source]),
+        acknowledger: Broadway.NoopAcknowledger.init()
+      }
+
+      assert StatifierRouter.Broadway.partition(
+               message,
+               partitioned,
+               &StatifierRouter.Broadway.normalize/1
+             ) == :erlang.phash2({"7c1e", "parcel_route", "pcl_4821"})
+
+      assert_received {:bindings_read, ^me, nil}
+      refute_received {:bindings_read, _pid, _context}
+      assert statements() == []
       assert wrapped() == []
     end
   end

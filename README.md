@@ -1097,7 +1097,11 @@ written by `route/3`, outside the `:delivery` module; and a send to an
 execution target is delivered by `StatifierRouter.Delivery.deliver_event/4`
 inside the sending step, never through the `:delivery` module, whichever
 scope the target is in. The `:around_delivery` option below is the seam
-that reaches every door the router drives itself.
+that reaches every door the router drives itself, with one carve-out: a
+send's delivery to an execution target has no door of its own by default,
+so where no other door's work encloses it nothing wraps it, and only with
+`wrap_target: true` beside the wrapper is it wrapped there, under the door
+`:target`.
 
 ### Wrapping a whole delivery
 
