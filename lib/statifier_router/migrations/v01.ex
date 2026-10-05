@@ -9,7 +9,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
   | Column | Type | Null |
   |---|---|---|
-  | `id` | `bigserial`, primary key | no |
+  | `id` | primary key: the repo's `:migration_primary_key` (`bigserial` by default), or under `:primary_key` the type and default that option names | no |
   | `scope` | `text` | no |
   | `document` | `text` | no |
   | `key` | `text` | no |
@@ -27,7 +27,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
   | Column | Type | Null |
   |---|---|---|
-  | `id` | `bigserial`, primary key | no |
+  | `id` | primary key: the repo's `:migration_primary_key` (`bigserial` by default), or under `:primary_key` the type and default that option names | no |
   | `binding_id` | `text` | no |
   | `message_id` | `text` | no |
   | `expires_at` | `utc_datetime_usec` | no |
@@ -41,7 +41,7 @@ defmodule StatifierRouter.Migrations.V01 do
 
   | Column | Type | Null |
   |---|---|---|
-  | `id` | `bigserial`, primary key | no |
+  | `id` | primary key: the repo's `:migration_primary_key` (`bigserial` by default), or under `:primary_key` the type and default that option names | no |
   | `binding_id` | `text` | no |
   | `message_id` | `text` | no |
   | `scope` | `text` | no |
