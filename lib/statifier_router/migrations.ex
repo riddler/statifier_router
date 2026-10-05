@@ -69,9 +69,13 @@ defmodule StatifierRouter.Migrations do
       declare - `scope`, `document`, `key`, `execution_id`, `binding_id`,
       `message_id`, `outcome`, `reason` and `invoke_id` - and the
       collation must be one the database knows; a host column takes its
-      collation in its own `:leading_columns` opts instead. The location
-      table V04 creates declares none of these columns, so the option has
-      no effect on it (`up_locations/1`).
+      collation in its own `:leading_columns` opts instead. On SQLite the
+      option builds no collation: the versions hand each entry to
+      `Ecto.Migration.add/3` as `:collation`, the option the Postgres
+      adapter reads, while ecto_sqlite3 reads `:collate`, so every entry
+      is accepted and every column keeps SQLite's default collation. The
+      location table V04 creates declares none of these columns, so the
+      option has no effect on it (`up_locations/1`).
     * `:primary_key` - the type and default of the `id` primary key of
       every table a version creates, in place of the repo's
       `:migration_primary_key`, default: not set. A keyword list with a

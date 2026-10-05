@@ -39,6 +39,21 @@ defmodule StatifierRouter.SQLiteMigrationsTest do
     def down, do: StatifierRouter.Migrations.down()
   end
 
+  # The same walk under a table prefix of its own, with a collation SQLite
+  # knows on two package columns.
+  defmodule MigrateAllCollated do
+    @moduledoc false
+    use Ecto.Migration
+
+    @opts [
+      table_prefix: "collated_",
+      column_collations: [execution_id: "NOCASE", key: "RTRIM"]
+    ]
+
+    def up, do: StatifierRouter.Migrations.up(@opts)
+    def down, do: StatifierRouter.Migrations.down(@opts)
+  end
+
   # A repo module that hands every call to SQLiteRepo but exports no
   # __adapter__/0: it names no adapter.
   defmodule NoAdapterRepo do
@@ -56,6 +71,7 @@ defmodule StatifierRouter.SQLiteMigrationsTest do
   @through_v02_version 20_260_930_000_401
   @v03_version 20_260_930_000_402
   @all_version 20_260_930_000_403
+  @all_collated_version 20_260_930_000_404
 
   @subscriptions "statifier_router_subscriptions"
   @v02_spelling "statifier_router_subscriptions_execution_id_binding_id_invoke_id_index"
@@ -179,6 +195,46 @@ defmodule StatifierRouter.SQLiteMigrationsTest do
 
       assert migrate(:down, @all_version, MigrateAll) == :ok
       assert router_tables() == []
+    end
+  end
+
+  # table name, prefix stripped => the CREATE TABLE statement SQLite
+  # holds for it, prefix stripped, for every table under the prefix.
+  defp create_statements(prefix) do
+    %{rows: rows} =
+      SQL.query!(
+        SQLiteRepo,
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name LIKE ?1",
+        [prefix <> "%"]
+      )
+
+    Map.new(rows, fn [name, sql] ->
+      {String.replace_prefix(name, prefix, ""), String.replace(sql, prefix, "")}
+    end)
+  end
+
+  describe ":column_collations on SQLite" do
+    # The versions hand each collation to Ecto.Migration.add/3 as
+    # `:collation`, the option the Postgres adapter reads; ecto_sqlite3
+    # reads `:collate` instead, so on SQLite every entry is accepted and
+    # builds no collation: each column keeps SQLite's default.
+    #
+    # sabotage: made V01's and V02's collated/3 also put the entry under
+    # `:collate` -> red, the collated tables' statements carried
+    # `COLLATE NOCASE` and `COLLATE RTRIM`; restored, green.
+    test "builds no collation: the tables match the ones built without it" do
+      assert migrate(:up, @all_version, MigrateAll) == :ok
+      assert migrate(:up, @all_collated_version, MigrateAllCollated) == :ok
+
+      plain = create_statements("statifier_router_")
+      collated = create_statements("collated_")
+
+      assert Map.keys(plain) == ["addresses", "dedupe", "routing_ledger", "subscriptions"]
+      assert collated == plain
+      refute Enum.any?(Map.values(collated), &(&1 =~ ~r/COLLATE/i))
+
+      assert migrate(:down, @all_collated_version, MigrateAllCollated) == :ok
+      assert create_statements("collated_") == %{}
     end
   end
 
