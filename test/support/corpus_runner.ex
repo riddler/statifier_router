@@ -30,14 +30,21 @@ defmodule StatifierRouter.CorpusRunner do
   A delayed send is scheduled with `StatifierOban.Timer.schedule/3` under
   its execution's id, and the job's fire time is then moved off the wall
   clock onto the runner's clock: the time the send was handed over on
-  that clock, plus its delay. A cancel is `StatifierOban.Timer.cancel/3`
-  under the same id. On an advance the runner drains the timers queue one
-  job at a time, the earliest due first, each at the time it falls due,
-  so a job a fired send cancels is off the queue before the queue is read
-  again. The fired job reaches its execution through
-  `StatifierRouter.CorpusTimerDelivery`, a process-less host's
-  `StatifierOban.Timer.Delivery`. The pending timers a case compares are
-  then the jobs still waiting on the queue.
+  that clock, plus its delay. Before it moves the fire time, the runner
+  asserts that the one statifier_oban stored is the wall clock at the
+  hand-over plus the send's delay, so a fault in statifier_oban's own
+  delay arithmetic fails the case rather than being written over. A
+  cancel is `StatifierOban.Timer.cancel/3` under the same id. On an
+  advance the runner drains the timers queue one job at a time, the
+  earliest due first, each at the time it falls due, so a job a fired
+  send cancels is off the queue before the queue is read again. The fired
+  job reaches its execution through `StatifierRouter.CorpusTimerDelivery`,
+  a process-less host's `StatifierOban.Timer.Delivery`. The pending
+  timers a case compares are then the jobs still waiting on the queue, in
+  the states statifier_oban itself counts as a timer that has not fired:
+  `suspended`, `scheduled`, `available` and `retryable`. A drain fires
+  only the last three, so a suspended job stays pending and is never
+  fired.
 
   The runner also plays the host's part for sinks. A case's `routes` names
   the routes it registers; each is registered as
@@ -66,6 +73,7 @@ defmodule StatifierRouter.CorpusRunner do
   """
 
   import Ecto.Query, only: [from: 2]
+  import ExUnit.Assertions, only: [assert: 2]
 
   alias Statifier.Effect.{Cancel, SendDelayed}
   alias Statifier.Event
@@ -92,10 +100,16 @@ defmodule StatifierRouter.CorpusRunner do
 
   # The Oban run mode: the instance test/test_helper.exs starts, the queue
   # the runner's timers go to, and the states a job that has not fired can
-  # be in.
+  # be in. The pending states are statifier_oban's own (the set
+  # `StatifierOban.Timer.pending_for/2` counts and `cancel/3` reaches),
+  # `suspended` among them: a held job has not fired. The drainable states
+  # are the ones `Oban.drain_queue/2` fires, which leave `suspended` out;
+  # the look for the next job due reads those, or it would pick a job no
+  # drain fires.
   @oban StatifierRouter.TestOban
   @timers_queue :corpus_timers
-  @pending_states ~w(scheduled available retryable)
+  @pending_states ~w(suspended scheduled available retryable)
+  @drainable_states @pending_states -- ~w(suspended)
 
   # The binding keys a case may carry, and the enumerated values of the
   # two keys whose values Binding.new/1 takes as atoms. Everything else in
@@ -325,7 +339,7 @@ defmodule StatifierRouter.CorpusRunner do
   defp next_due(until) do
     from(j in Oban.Job,
       where:
-        j.queue == ^Atom.to_string(@timers_queue) and j.state in ^@pending_states and
+        j.queue == ^Atom.to_string(@timers_queue) and j.state in ^@drainable_states and
           j.scheduled_at <= ^until,
       order_by: [asc: j.scheduled_at, asc: j.id],
       limit: 1,
@@ -427,14 +441,34 @@ defmodule StatifierRouter.CorpusRunner do
 
   # statifier_oban times the job off the wall clock; the runner moves it
   # onto its own, so the job falls due when the case's clock says so.
+  # First it checks the time statifier_oban stored: the wall clock read on
+  # either side of the hand-over brackets it, each plus the delay.
   defp schedule(%{timers: %StatifierOban.Config{} = timers} = state, effect, context) do
+    handed_over = DateTime.utc_now()
+
     {:ok, %Oban.Job{conflict?: false, id: id}} =
       Timer.schedule(timers, context.execution_id, effect)
 
-    due = DateTime.add(state.clock, effect.delay_ms, :millisecond)
+    returned = DateTime.utc_now()
     job = from(j in Oban.Job, where: j.id == ^id)
+    stored = TestRepo.one!(from(j in job, select: j.scheduled_at))
+    assert_computed_due(stored, handed_over, returned, effect)
+
+    due = DateTime.add(state.clock, effect.delay_ms, :millisecond)
     {1, _rows} = TestRepo.update_all(job, set: [scheduled_at: due])
     state
+  end
+
+  defp assert_computed_due(stored, handed_over, returned, effect) do
+    earliest = DateTime.add(handed_over, effect.delay_ms, :millisecond)
+    latest = DateTime.add(returned, effect.delay_ms, :millisecond)
+
+    assert DateTime.compare(stored, earliest) != :lt and
+             DateTime.compare(stored, latest) != :gt,
+           "statifier_oban scheduled the send #{inspect(effect.event)} " <>
+             "(delay #{effect.delay_ms}ms) at #{DateTime.to_iso8601(stored)}, " <>
+             "outside the wall clock at its hand-over plus the delay: " <>
+             "#{DateTime.to_iso8601(earliest)} to #{DateTime.to_iso8601(latest)}"
   end
 
   defp cancel(%{timers: :memory} = state, %Cancel{send_id: send_id}, context) do
