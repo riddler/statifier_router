@@ -40,7 +40,7 @@ the router's configuration:
 children = [
   MyApp.Repo,
   {StatifierRouter.Broadway,
-   name: MyApp.AdEventsRouter,
+   name: MyApp.ParcelScansRouter,
    producer: {BroadwayKafka.Producer, kafka_opts},
    router: router_config,
    processors: [default: [concurrency: 8]]}
@@ -106,9 +106,18 @@ order:
   created when absent and handed the event in the same step.
 - **Dedupe** on `(binding, message_id)` with a horizon.
 - **The recorded outcome vocabulary**: every delivery attempt this package
-  routes ends in one named, recorded outcome. A timer firing into an
-  execution is not routed here (timers are statifier_oban's, below) and
-  writes no routing-ledger row.
+  routes ends in one named outcome, and every outcome but `no_match`
+  writes one routing-ledger row: a delivery, a duplicate, each drop, a
+  `key_refused` and a `send_refused` whose sender has an address row.
+  These write none. A `no_match` is reported as telemetry only.
+  A send refused because its sending execution has no address row
+  (`unaddressed_sender`, and a delayed send's `delay` refusal from such a
+  sender) is reported to the sender only, because the ledger's `scope` is
+  `NOT NULL` and such a sender has no scope. A delivery that answers
+  `{:error, _}` is not an outcome: it ends the attempt with nothing
+  written for that binding, and the rows of the bindings before it stay
+  written. A timer firing into an execution is not routed here (timers
+  are statifier_oban's, below) and writes no routing-ledger row.
 - **The route registry**: the named, one-way outbound destinations a chart
   reaches with `<send>`, registered per host and overridable per scope.
 - **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
@@ -610,7 +619,7 @@ where the option is set.
 A provider that posts rather than queues reaches the same `route/3`. This
 package adds no dependency on Plug or Phoenix: `StatifierRouter.Webhook`
 is a plain function with the shape a plug or a controller action calls, and
-the host writes those ten lines itself.
+the host writes that action itself.
 
 **The host verifies the signature.** This package verifies nothing; it
 routes what it is handed. Below, a parcel carrier posts each scan of a

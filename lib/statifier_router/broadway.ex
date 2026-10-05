@@ -10,7 +10,7 @@ defmodule StatifierRouter.Broadway do
       children = [
         MyApp.Repo,
         {StatifierRouter.Broadway,
-         name: MyApp.AdEventsRouter,
+         name: MyApp.ParcelScansRouter,
          producer: {BroadwayKafka.Producer, kafka_opts},
          router: router_config,
          processors: [default: [concurrency: 8]]}
