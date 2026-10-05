@@ -177,6 +177,9 @@ defmodule StatifierRouter.Delivery do
   because the executor seam's context carries an execution id and a
   content hash and no scope, and a per-scope route override needs one.
   The seam runs in this same process, inside this transaction.
+  `deliver/4` always sets it; `deliver_event/4` sets it only when its
+  envelope asks (its documentation, "Running the step under the
+  envelope's scope").
 
   An `{:error, reason}` from `create/4`, `step/5` or
   `StatifierPersistence.Storage.fetch_execution/2`,
@@ -271,12 +274,19 @@ defmodule StatifierRouter.Delivery do
   The message one delivery carries: the event stepped into the execution,
   the id its dedupe row and its ledger row are written under, the scope it
   runs in and the time its rows carry.
+
+  `deliver_event/4` also reads one optional key, `:run_in_scope`: `true`
+  runs the step it drives under `:scope` as the delivery scope, and `false`
+  or left out runs it with whatever scope the calling process already
+  holds (`deliver_event/4`'s documentation, "Running the step under the
+  envelope's scope").
   """
   @type envelope :: %{
           required(:event) => Event.t(),
           required(:message_id) => String.t(),
           required(:scope) => String.t(),
           required(:now) => DateTime.t(),
+          optional(:run_in_scope) => boolean(),
           optional(atom()) => term()
         }
 
@@ -352,11 +362,47 @@ defmodule StatifierRouter.Delivery do
   A raise is the one case that still reaches the enclosing transaction,
   exactly as it does on the binding path: nothing here rescues, and the
   record leaves a raise as a raise.
+
+  ## Running the step under the envelope's scope
+
+  This door sets no delivery scope of its own unless the envelope asks,
+  so the step it drives resolves a route in whatever scope the calling
+  process already holds. At the executor seam that is the scope of the
+  delivery that drove the sending step, if one did; in a host's own job
+  it is none. With no scope in reach, a send that step makes to a route
+  some scope in `:route_overrides` overrides is refused as
+  `{:no_delivery_scope, name}` (`StatifierRouter.SendHandler`'s
+  moduledoc, "The scope a route is resolved in").
+
+  A host that delivers a prebuilt event itself - the README's recipe
+  "Sending from a durable execution" delivers a failed POST back in this
+  way - sets `run_in_scope: true` in the envelope, and the step then
+  resolves its routes in the envelope's `:scope`, as a binding's delivery
+  and the BasicHTTP front do (ADR-0002, the Amendment of 2026-10-04). The
+  scope is set for the length of the call and put back on every way out
+  to what the process held before, so a call made inside a sending step
+  leaves that step's scope as it found it. Left out, or `false`, the call
+  issues the same statements and answers the same as before the key
+  existed. Any other value raises `ArgumentError` before anything is
+  opened or written.
   """
   @spec deliver_event(Config.t(), plan(), String.t(), envelope()) ::
           StatifierRouter.outcome() | {:error, term()}
-  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery),
-    do: settled(config, "sr_execution_target_", plan, key, delivery)
+  def deliver_event(%Config{} = config, plan, key, %{event: %Event{}} = delivery) do
+    case Map.get(delivery, :run_in_scope, false) do
+      false ->
+        settled(config, "sr_execution_target_", plan, key, delivery)
+
+      true ->
+        SendHandler.in_delivery_scope(delivery.scope, fn ->
+          settled(config, "sr_execution_target_", plan, key, delivery)
+        end)
+
+      other ->
+        raise ArgumentError,
+              "deliver_event/4's :run_in_scope must be a boolean, got: #{inspect(other)}"
+    end
+  end
 
   # The one way a delivery settles, on both doors. The transaction is what
   # gives the savepoint something to live in when the door is called
