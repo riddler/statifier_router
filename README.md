@@ -119,7 +119,12 @@ order:
   written. A timer firing into an execution is not routed here (timers
   are statifier_oban's, below) and writes no routing-ledger row.
 - **The route registry**: the named, one-way outbound destinations a chart
-  reaches with `<send>`, registered per host and overridable per scope.
+  reaches with `<send>`, registered per host and overridable per scope. A
+  route a scope overrides resolves in the scope of the delivery that drove
+  the sending step, or in the configuration's `:processor_scope` on the
+  send-processor shape; a step a host drives itself through
+  `StatifierRouter.Delivery.deliver_event/4` names its scope with
+  `run_in_scope: true` in the envelope.
 - **The webhook front**: `StatifierRouter.Webhook`, a Plug-shaped helper a
   host calls from its own controller or plug.
 - **The BasicHTTP front**: `StatifierRouter.BasicHTTP`, the W3C Basic HTTP
@@ -132,7 +137,9 @@ order:
 - **The whole-delivery wrapper**: the configuration's optional
   `:around_delivery`, handed `(scope, door, work)`, runs every read and
   write of a delivery on the doors this package drives itself inside one
-  call of the host's. See "Wrapping a whole delivery".
+  call of the host's. With `:wrap_target` set beside it, it also wraps a
+  send's delivery to an execution target that no other door's work
+  encloses, under the door `:target`. See "Wrapping a whole delivery".
 - **Execution-to-execution sends**: a `<send>` whose `target` is the reserved
   name `StatifierRouter.SendHandler.execution_target/0` resolves through the
   address table and is delivered by the same transaction a binding's delivery

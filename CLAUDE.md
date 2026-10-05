@@ -128,7 +128,9 @@ tree with any producer, and `partition_by` keeps one key on one processor.
 Behind it sits a binding, addressing and delivery layer over
 [statifier_persistence](https://github.com/riddler/statifier_persistence).
 
-What this package owns:
+What this package owns, by name (the README's "What this package owns" and
+the `StatifierRouter` moduledoc's section of the same name say what each
+piece covers):
 
 - Bindings: source -> match -> key -> document -> event, with `match` and
   `key` as predicator programs over the normalized event.
@@ -136,11 +138,26 @@ What this package owns:
 - Atomic get-or-create-and-deliver.
 - Dedupe on `(binding, message_id)` with a horizon.
 - The recorded outcome vocabulary.
+- The route registry, overridable per scope; a step a host drives itself
+  through `StatifierRouter.Delivery.deliver_event/4` names its scope with
+  `run_in_scope: true`.
+- The webhook front, `StatifierRouter.Webhook`.
+- The BasicHTTP front, behind the configuration's `:basichttp`.
+- The whole-delivery wrapper, the configuration's `:around_delivery`, with
+  `:wrap_target` its opt-in for a send's delivery to an execution target.
+- Execution-to-execution sends.
+- The source invoke.
 
-What it does not own: sinks and the route registry; execution-to-execution
-sends; the source invoke; any queue adapter; the webhook helper; timers
-(statifier_oban's); a publish store (a host callback resolves a document to
-its active chart); any process or supervisor.
+What it does not own: the sinks themselves (a route adapter, what it writes
+to, and its retries are the host's); the invoke handler itself; any queue
+adapter; timers (statifier_oban's; the durable queue a delayed route send
+is recorded on is the host's); a publish store (a host callback resolves a
+document to its active chart); any process or supervisor.
+
+The three places that carry these two lists - this file, the README and
+the `StatifierRouter` moduledoc - agree with each other and with the code
+on main: a change to what the package owns, or an option a list names,
+moves all three in the same change.
 
 Vocabulary and boundaries that hold in every file here:
 
