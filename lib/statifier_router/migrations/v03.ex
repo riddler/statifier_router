@@ -32,12 +32,24 @@ defmodule StatifierRouter.Migrations.V03 do
   one that already walked through V03 on a fresh database: the second run
   finds the index already renamed and leaves it.
 
-  On SQLite (`Ecto.Adapters.SQLite3`) both directions do nothing. SQLite
-  keeps an identifier whole, so V02's index there already holds the name
-  V02 gave it, with nothing cut to repair, and SQLite has no
-  `ALTER INDEX`. The index keeps V02's name on SQLite; the package's
-  queries name its columns, never its name. Every other adapter runs the
-  rename above.
+  On SQLite both directions do nothing. SQLite keeps an identifier whole,
+  so V02's index there already holds the name V02 gave it, with nothing
+  cut to repair, and SQLite has no `ALTER INDEX`. The index keeps V02's
+  name on SQLite; the package's queries name its columns, never its name.
+  Every other adapter runs the rename above.
+
+  A repo is on SQLite here when its adapter module is
+  `Ecto.Adapters.SQLite3`, or when its adapter module is another one
+  whose running repo writes its SQL with the stock SQLite connection,
+  `Ecto.Adapters.SQLite3.Connection`: a wrapper that hands its callbacks
+  to `Ecto.Adapters.SQLite3` is read as SQLite and does nothing. A
+  Postgres repo, on the stock adapter module or on a wrapper of it,
+  writes its SQL with the Postgres connection and runs the rename as
+  before. An adapter that brings a connection module of its own is not
+  read as SQLite, even when it speaks SQLite, and runs the rename; a host
+  on such an adapter whose database refuses `ALTER INDEX` stops its
+  version walk at V02 (`version: 2`), which leaves the index under V02's
+  name, as SQLite keeps it.
 
   A host already running V02 reaches this version with
   `StatifierRouter.Migrations.up(from: 3)`: `from:` names the first
@@ -46,6 +58,7 @@ defmodule StatifierRouter.Migrations.V03 do
 
   use Ecto.Migration
 
+  alias StatifierRouter.Adapter
   alias StatifierRouter.Config
 
   # Postgres's NAMEDATALEN - 1: the most bytes an identifier keeps.
@@ -84,7 +97,7 @@ defmodule StatifierRouter.Migrations.V03 do
   # SQLite never cut V02's name, so there is nothing to rename, and it has
   # no ALTER INDEX to rename with.
   defp rename_index(%{prefix: prefix}, from, to) do
-    if repo().__adapter__() != Ecto.Adapters.SQLite3 do
+    unless Adapter.sqlite?(repo()) do
       execute("ALTER INDEX IF EXISTS #{qualified(prefix, from)} RENAME TO #{quoted(to)}")
     end
 

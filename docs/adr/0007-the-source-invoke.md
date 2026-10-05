@@ -398,3 +398,30 @@ Nothing section 6 fixes changes, for the reasons the Note of 2026-09-27
 gives: the index's columns, their order and its uniqueness are V02's on
 every adapter, and `StatifierRouter.subscribe/3` names the triple by its
 columns, not by the index's name.
+
+## Note (2026-10-04, sr-hz82): V03 reads SQLite through the adapter helper
+
+The Note of 2026-09-30 (sr-zb9m) says V03 does nothing on
+`Ecto.Adapters.SQLite3`. It read SQLite by that stock adapter module
+alone, so a host whose repo runs on an adapter module of its own that
+hands its callbacks to `Ecto.Adapters.SQLite3` was read as another
+dialect, and V03 sent it the `ALTER INDEX` SQLite cannot parse. This
+Note records the change that answers it; it decides nothing, and no
+line above it was edited. That V03 reads the adapter through the one
+private helper the package's other dialect check uses was decided by
+the conductor under a standing consent, 2026-10-03.
+
+`StatifierRouter.Migrations.V03` now does nothing in either direction
+when the private `StatifierRouter.Adapter.sqlite?/1` answers true: the
+repo's adapter module is `Ecto.Adapters.SQLite3`, or it is a module
+other than the two stock ones whose running repo writes its SQL with
+`Ecto.Adapters.SQLite3.Connection`. A Postgres repo writes its SQL with
+the Postgres connection, on the stock module or a wrapper of it, and V03
+renames its index as before; an adapter that brings a connection module
+of its own is not read as SQLite. `StatifierRouter.SQLiteMigrationsTest`
+walks V03 on a wrapped SQLite adapter and reads V02's index name back,
+and `StatifierRouter.IndexNamesTest` walks it on a wrapped Postgres
+adapter and reads the renamed index back.
+
+Nothing section 6 fixes changes, for the reasons the Note of 2026-09-27
+gives.
