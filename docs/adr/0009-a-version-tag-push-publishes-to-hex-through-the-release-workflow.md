@@ -1,6 +1,6 @@
 # ADR-0009: A version tag push publishes to Hex through the release workflow, after three checks at the tagged commit
 
-Status: proposed (2026-10-04) - moves the publish from a person's command
+Status: accepted (2026-10-04) - moves the publish from a person's command
 to a GitHub Actions workflow started by the tag push the tagging row
 already allows; changes no function, module or package behaviour and no
 `lib/` file; amends no earlier record
@@ -146,3 +146,60 @@ decided by the conductor under a standing consent, 2026-10-03.
   changed is who presses the button, not what an agent may do.
 - This record stays proposed until the workflow has published a version
   of this package.
+
+## Note (2026-10-04, sr-4emm): accepted after the first publish through the workflow
+
+A Note, not an amendment: it decides nothing and changes no decision or
+consequence above it. This record's `Status:` line moved from `proposed`
+to `accepted`; this flip was decided by the conductor under a standing
+consent, 2026-10-04. The last consequence above, "This record stays
+proposed until the workflow has published a version of this package.",
+is met: the push of tag `v0.11.0`, at `df7f009`, started the release
+workflow's run
+https://github.com/riddler/statifier_router/actions/runs/37261741197,
+whose job "Verify, gate and publish" succeeded and published
+statifier_router 0.11.0 to Hex (2026-10-05T04:02:16Z). That sentence is
+left as written.
+
+Every claim was re-verified at `df7f009`, which is both the tag and
+`main` at the time of the flip, and against what that run did:
+
+- Decision 1: `.github/workflows/release.yml`'s `on:` key is a push of a
+  tag matching `v*.*.*`, with no branch, pull-request or
+  `workflow_dispatch` trigger. The run's event is a push of `v0.11.0`.
+- Decision 2: the steps "Fetch the default branch" and "Check the tagged
+  commit is on the default branch" read
+  `github.event.repository.default_branch` and run
+  `git merge-base --is-ancestor`; the run logged "v0.11.0 is on
+  df7f009ec7ea9a1cc5dbdd76d8a24f9683b2c00e, which is on main". The step
+  "Check the tag names the version in mix.exs" logged "v0.11.0 matches
+  @version 0.11.0". The step "Check Hex does not already show this
+  version" answers a 200 and any answer but 404 with a stop, and logged
+  "statifier_router 0.11.0 is not on Hex yet". All three ran before the
+  toolchain steps. The step "Full quality gate" reads `gate.full` from
+  `.claude/wurk.json` (`mix quality`) with the toolchain, cache and
+  dependency steps, the `postgres:17` service and the `PG*` environment
+  of `.github/workflows/ci.yml`, copied; the run logged "gate command
+  (.claude/wurk.json gate.full): mix quality" and "All quality checks
+  passed!".
+- Decision 3: `permissions: contents: read`; `secrets.HEX_API_KEY` is
+  read only in the `env:` of the step "Publish to Hex", which runs
+  `mix hex.publish --yes`, and the run's log shows the key masked.
+- Decision 4: the run's Docs stage logged "Docs: No warnings", and the
+  publish step built the docs again from the same tagged commit and
+  logged "Publishing docs..." after "Package published to
+  https://hex.pm/packages/statifier_router/0.11.0".
+- Decision 5: the workflow has no retry step, and `concurrency` never
+  cancels a run in progress. `CLAUDE.md`'s release row and
+  `.claude/wurk/release.md` say a failed workflow is re-run from its
+  Actions page.
+- Decision 6: `mix help hex.publish`, "Reverting a package" and
+  `--replace`, give one hour for a new version of an existing package.
+- Decision 7: `CLAUDE.md`'s release row, version-bump row and Release
+  preps paragraph, and `.claude/wurk/release.md`, say an agent or a
+  session never runs `mix hex.publish` and the release workflow publishes
+  on the tag push.
+- Consequences: the job's `timeout-minutes` is 45 and `ci.yml`'s is 30;
+  the Postgres service is job-level; the third-party actions are
+  `actions/checkout@v4`, `erlef/setup-beam@v1` and `actions/cache@v4` in
+  both files.
