@@ -228,8 +228,9 @@ defmodule StatifierRouter.BasicHTTPSendTest do
   end
 
   # ADR-0002, the Note of 2026-10-04: a delayed BasicHTTP send is not
-  # delivered by this package. The README's executor refuses it, and what
-  # a chart author sees is error.communication carrying the send's id.
+  # delivered by this package. The executor in
+  # docs/guides/how-to-give-an-execution-an-http-location.md refuses it, and
+  # what a chart author sees is error.communication carrying the send's id.
   describe "a delayed send" do
     # The parcel's manifest send, delayed. The refusal returns the parcel
     # to the depot and logs what the chart was handed.
@@ -280,12 +281,13 @@ defmodule StatifierRouter.BasicHTTPSendTest do
     # sabotage: statifier_persistence's private reentry_origin/1 made to
     # drop sendid for a :send_delayed effect -> the chart's cond did not
     # match and the execution stayed :active on the van, red; restored, green.
-    test "is refused by the README's executor and re-enters as error.communication with its sendid" do
+    test "is refused by the guide's executor and re-enters as error.communication with its sendid" do
       pid = self()
       {:ok, machine} = Statifier.compile(@delayed_manifest)
       content_hash = Machine.identity(machine).content_hash
 
-      # The README's executor, its delayed arm verbatim.
+      # The executor in docs/guides/how-to-give-an-execution-an-http-location.md,
+      # its delayed arm verbatim.
       executor = fn
         {:send_delayed, %SendDelayed{type: type} = send}, _context when type in @types ->
           {:error, {:delayed_basichttp_send, send.send_id}}

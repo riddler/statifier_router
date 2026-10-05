@@ -30,8 +30,8 @@ defmodule StatifierRouter.LocationsMigrationTest do
     def down, do: StatifierRouter.Migrations.down(@opts)
   end
 
-  # The migration the README and the Migrations moduledoc give a host that
-  # sets :basichttp, written after the first.
+  # The migration docs/upgrading.md and the Migrations moduledoc give a
+  # host that sets :basichttp, written after the first.
   defmodule MigrateLocations do
     @moduledoc false
     use Ecto.Migration

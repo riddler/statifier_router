@@ -67,7 +67,30 @@ defmodule StatifierRouter.MixProject do
       canonical: "https://hexdocs.pm/statifier_router",
       source_url: @source_url,
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md"],
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/guides/how-to-run-the-broadway-pipeline.md",
+        "docs/guides/how-to-bind-events-to-an-execution.md",
+        "docs/guides/how-to-deliver-to-a-sink.md",
+        "docs/guides/how-to-take-webhooks-and-form-posts.md",
+        "docs/guides/how-to-give-an-execution-an-http-location.md",
+        "docs/guides/how-to-resolve-a-document-to-its-chart.md",
+        "docs/guides/how-to-wrap-the-engine.md",
+        "docs/guides/how-to-fit-the-router-tables-to-a-host.md",
+        "docs/explanation/what-the-router-owns.md",
+        "docs/explanation/one-key-at-a-time.md",
+        "docs/upgrading.md"
+      ],
+      # Grouped by the kind of page, in the family order (How-to guides,
+      # Explanation, Upgrading); README and CHANGELOG stay ungrouped at the
+      # top. The decision records under docs/adr/ are a record for
+      # contributors and are not extras.
+      groups_for_extras: [
+        "How-to guides": ~r{docs/guides/},
+        Explanation: ~r{docs/explanation/},
+        Upgrading: ["docs/upgrading.md"]
+      ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       # Names the docs print as code on purpose but that have no page to
       # link to, so ExDoc renders them as plain code rather than warning.
@@ -85,7 +108,16 @@ defmodule StatifierRouter.MixProject do
     [
       name: "statifier_router",
       licenses: ["MIT"],
-      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(
+        lib
+        mix.exs
+        README.md
+        CHANGELOG.md
+        LICENSE
+        docs/guides
+        docs/explanation
+        docs/upgrading.md
+      ),
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
@@ -111,7 +143,7 @@ defmodule StatifierRouter.MixProject do
       {:telemetry, "~> 1.0"},
 
       # Dev / test
-      {:ex_quality, "~> 0.15", only: [:dev, :test], runtime: false},
+      {:ex_quality, "~> 0.16", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
