@@ -4,7 +4,7 @@ defmodule StatifierRouter.BasicHTTPSendTest do
   import StatifierRouter.DeliveryFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Statifier.Effect.Send
+  alias Statifier.Effect.{Send, SendDelayed}
   alias Statifier.Machine
   alias Statifier.Send.Event, as: SendEvent
   alias StatifierPersistence.Executions
@@ -226,4 +226,113 @@ defmodule StatifierRouter.BasicHTTPSendTest do
                List.last(ledger(config))
     end
   end
+
+  # ADR-0002, the Note of 2026-10-04: a delayed BasicHTTP send is not
+  # delivered by this package. The README's executor refuses it, and what
+  # a chart author sees is error.communication carrying the send's id.
+  describe "a delayed send" do
+    # The parcel's manifest send, delayed. The refusal returns the parcel
+    # to the depot and logs what the chart was handed.
+    @delayed_manifest """
+    <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="at_depot">
+      <state id="at_depot">
+        <transition event="loaded" target="on_van"/>
+      </state>
+      <state id="on_van">
+        <onentry>
+          <send id="manifest" type="basichttp" target="https://depot.example/manifests" event="parcel.loaded" delay="5s"/>
+        </onentry>
+        <transition event="delivered" target="doorstep"/>
+        <transition event="error.communication" cond="_event.sendid == 'manifest'" target="returned_to_depot">
+          <log label="type" expr="_event.type"/>
+          <log label="data" expr="_event.data"/>
+        </transition>
+      </state>
+      <final id="doorstep"/>
+      <final id="returned_to_depot">
+        <onentry>
+          <log label="returned_to_depot"/>
+        </onentry>
+      </final>
+    </scxml>
+    """
+
+    @types ["http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor", "basichttp"]
+
+    setup do
+      handler = "basic-http-send-test-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:statifier_persistence, :effect, :failed],
+          &__MODULE__.handle_failed/4,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    # sabotage: the private step_options/1 of StatifierRouter.Delivery made
+    # to hand persistence an executor answering :ok to every effect -> the
+    # execution stayed :active on the van, red; restored, green.
+    # sabotage: statifier_persistence's private reentry_origin/1 made to
+    # drop sendid for a :send_delayed effect -> the chart's cond did not
+    # match and the execution stayed :active on the van, red; restored, green.
+    test "is refused by the README's executor and re-enters as error.communication with its sendid" do
+      pid = self()
+      {:ok, machine} = Statifier.compile(@delayed_manifest)
+      content_hash = Machine.identity(machine).content_hash
+
+      # The README's executor, its delayed arm verbatim.
+      executor = fn
+        {:send_delayed, %SendDelayed{type: type} = send}, _context when type in @types ->
+          {:error, {:delayed_basichttp_send, send.send_id}}
+
+        {:log, %Statifier.Effect.Log{label: label, value: value}}, _context ->
+          send(pid, {:logged, label, value})
+          :ok
+
+        _effect, _context ->
+          :ok
+      end
+
+      config =
+        config(pid,
+          bindings: parcel_bindings("parcel_manifest"),
+          basichttp: [base_url: @base_url, transport: DepotDown],
+          executor: executor,
+          resolver: fn "7c1e", "parcel_manifest" -> {content_hash, machine} end,
+          chart_resolver: fn ^content_hash -> {:ok, machine} end
+        )
+
+      execution_id = loaded(config)
+
+      # The refusal re-entered inside the step that sent: one input, and
+      # the execution finished on the chart's own error transition.
+      assert inputs(config, execution_id) == [{0, "step", "loaded"}]
+      assert {:ok, %{status: :completed}} = Storage.fetch_execution(config.store, execution_id)
+
+      # What the chart author sees: a platform error.communication whose
+      # sendid is the delayed send's id, and no data: the reason stays the
+      # host's, and _event.data reads as undefined.
+      assert_received {:logged, "type", "platform"}
+      assert_received {:logged, "data", :undefined}
+      assert_received {:logged, "returned_to_depot", nil}
+
+      # What the host sees: the executor's reason, re-entered.
+      assert_received {:effect_failed,
+                       %{
+                         execution_id: ^execution_id,
+                         kind: :send_delayed,
+                         reason: {:delayed_basichttp_send, "manifest"},
+                         reentered?: true
+                       }}
+    end
+  end
+
+  @doc false
+  def handle_failed(_event, _measurements, metadata, pid),
+    do: send(pid, {:effect_failed, metadata})
 end
