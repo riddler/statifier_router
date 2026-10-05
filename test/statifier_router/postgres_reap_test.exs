@@ -15,6 +15,19 @@ defmodule StatifierRouter.PostgresReapTest do
   alias StatifierRouter.Schema.Address
   alias StatifierRouter.TestRepo
 
+  # A repo module that delegates to TestRepo rather than being an Ecto
+  # repo: it exports the three callbacks the reap reaches and no
+  # __adapter__/0, so it names no adapter.
+  defmodule DelegatingRepo do
+    @moduledoc false
+
+    alias StatifierRouter.TestRepo
+
+    def all(queryable), do: TestRepo.all(queryable)
+    def update_all(queryable, updates), do: TestRepo.update_all(queryable, updates)
+    def delete_all(queryable), do: TestRepo.delete_all(queryable)
+  end
+
   @now ~U[2026-10-02 12:00:00.000000Z]
   @hour 3_600_000
   @numbers 7001..8201
@@ -124,6 +137,39 @@ defmodule StatifierRouter.PostgresReapTest do
       assert [delete] = Enum.uniq(deletes)
       assert delete =~ "= ANY("
       refute delete =~ " IN ("
+
+      assert TestRepo.aggregate(Config.queryable(config, Address), :count) == 0
+    end
+  end
+
+  describe "reap/3 through a repo module that names no adapter" do
+    # sabotage: made StatifierRouter.Adapter.postgres?/1 answer true for a
+    # repo module that exports no __adapter__/0 -> red, every stamp batch
+    # sent the one "= ANY(" statement, not the spliced IN list; restored,
+    # green.
+    test "takes the spliced IN list, one bound parameter per id" do
+      config = %{seed() | repo: DelegatingRepo}
+      refute function_exported?(DelegatingRepo, :__adapter__, 0)
+
+      assert Addresses.reap(config, bindings(), now: @now, limit: 2_000) ==
+               {:ok, %{stamped: 1201, deleted: 0, next: nil}}
+
+      stamps = writes()
+      assert length(stamps) == 3
+      assert Enum.all?(stamps, &(&1 =~ " IN (" and not (&1 =~ "ANY(")))
+      # Two batches of 500 ids share a statement; the last, of 201, has
+      # its own.
+      assert [full, full, last] = stamps
+      refute full == last
+
+      an_hour_on = DateTime.add(@now, @hour, :millisecond)
+
+      assert Addresses.reap(config, bindings(), now: an_hour_on, limit: 2_000) ==
+               {:ok, %{stamped: 0, deleted: 1201, next: nil}}
+
+      deletes = writes()
+      assert length(deletes) == 3
+      assert Enum.all?(deletes, &(&1 =~ " IN (" and not (&1 =~ "ANY(")))
 
       assert TestRepo.aggregate(Config.queryable(config, Address), :count) == 0
     end
