@@ -893,3 +893,120 @@ tag and `main` at the time of the flip:
   configuration without the option", "the :route door", "the Broadway
   handler and its partitioner", "the BasicHTTP front", "the
   execution-target door is not wrapped" and "the wrapper's contract".
+
+## Amendment (2026-10-04): the whole-delivery wrapper may also enclose the execution target's delivery, opt-in
+
+Status: proposed
+
+The Amendment of 2026-10-02 left the execution target unwrapped on two
+shapes, a live session on the send-processor shape and a step the router
+did not drive, and ended its per-shape table with "Wrapping it on the
+shapes where no wrapper reaches is not decided here." This Amendment
+decides it. Its direction was ruled by the operator, 2026-10-03: the
+wrapper also encloses the execution target's delivery on those two
+shapes, as an opt-in addition, and a host that does not opt in sees the
+published behaviour unchanged. Its spelling, one boolean key and one door
+atom, was decided by the conductor under a standing consent, 2026-10-03.
+
+**The superseded sentence.** "Wrapping it on the shapes where no wrapper
+reaches is not decided here", in the Amendment of 2026-10-02, is
+superseded by this Amendment. Every other sentence of that Amendment
+stands, and with the new key left out each of its tables answers as it
+did.
+
+- **The option.** `StatifierRouter.Config` takes one optional key,
+  `:wrap_target`, a boolean defaulting to `false`. It names a door handed
+  to `:around_delivery` and nothing else, so it is taken only beside an
+  `:around_delivery`: a value that is not a boolean is refused with
+  `{:error, {:invalid_value, :wrap_target, value}}`, and the key given
+  without the wrapper, `false` included, with
+  `{:error, {:missing_key, :around_delivery}}`.
+- **The door.** One door atom is added, `:target`. The wrapper's
+  contract is the one the Amendment of 2026-10-02 states: handed
+  `(scope, :target, work)`, it calls `work` exactly once and answers what
+  `work` answered.
+- **Absent is today.** With the key left out, or `false`, the execution
+  target is delivered as before: the same statements, in the same order,
+  and the same answers.
+
+**What `:target` covers.** A send to the execution target reads the
+sender's address row first, because the scope is that row's. With
+`wrap_target: true` and no door's work running, everything after that
+read runs inside one call of the wrapper, handed the row's scope: the
+send's delivery through `StatifierRouter.Delivery.deliver_event/4`, or
+the `send_refused` row of a send the envelope checks refuse. The address
+read stays outside, as the BasicHTTP front's token lookup does. A sender
+with no address row has no scope, is refused as `unaddressed_sender`
+with no row written, and reaches no call. A delayed send to the reserved
+name is refused before any of this, and its `send_refused` row is written
+outside the wrapper, as an unregistered route's is.
+
+**How a wrapped step is told apart.** The doors mark their work while it
+runs. On a configuration that sets `:wrap_target`, the work every door
+hands the wrapper carries a mark for as long as it runs, set inside the
+work, so it lives in the process the wrapper runs the work in, and put
+back to what it was on every way out. A send to the execution target
+whose delivery finds the mark is inside a step a door drove, and runs
+directly; one that finds none is wrapped under `:target`, and its own
+work carries the mark in turn, so a send its delivery's step makes is
+wrapped once too. The mark is not a counter in the calling process: the
+Amendment of 2026-10-02 avoided one because a wrapper may run the work in
+another process, and the mark lives where the work runs.
+
+**The execution target, per shape, with the opted-in answer.** The table
+of the Amendment of 2026-10-02 gains a column:
+
+| The sending step was driven by | Left out, or `false` | `wrap_target: true` |
+|---|---|---|
+| a wrapped door: a binding's delivery through `route/3`, or the BasicHTTP front | yes, by the sender's door, in the sender's context | yes, once, by the sender's door: the mark is found and no `:target` call is made |
+| a step the router did not drive: a delayed event a timer job steps in, or a step the host makes itself | no | yes: one `:target` call, handed the sender's address row's scope, inside the sending step's transaction |
+| a live session on the send-processor shape (`SendHandler.perform/2`) | no | yes: one `:target` call, handed the sender's address row's scope; `deliver_event/4` opens the transaction inside it |
+
+**What the mark cannot tell apart.** The mark is this package's own, so
+it tells a step a door of this package drove from every other step, and
+nothing finer. A step the host runs inside its own context, at its own
+call - its own wrap around a timer job's step, say - carries no mark, and
+is one the router cannot tell from a step nobody wrapped: with
+`wrap_target: true` the wrapper is called under `:target` there too,
+inside the host's context, and must allow being entered while its context
+is already set. This is stated rather than forced: the router has no way
+to see a context it did not set.
+
+**At the executor seam the work runs inside a transaction.** On a step
+the router did not drive, the `:target` call is made inside the sending
+step's transaction, so the wrapper must run `work` in the calling process,
+and a transaction the wrapper opens there nests into the sender's: a
+`c:Ecto.Repo.rollback/1` from it takes the sending step down, which
+`StatifierRouter.Delivery.deliver_event/4`'s savepoint was put there to
+prevent. A wrapper that opens a transaction of its own suits the
+send-processor shape and the doors of the Amendment of 2026-10-02; on a
+step the router did not drive it suits a wrapper that sets a context and
+calls `work`.
+
+**The doors left as they were.** `StatifierRouter.Delivery.deliver/4`
+and `deliver_event/4` called by a host itself, `subscribe/3`, `cancel/2`,
+`StatifierRouter.BasicHTTP.rotate_location/2` and the two reapers are not
+wrapped under either setting; the host wraps them at the call. The
+`:partition` door makes no send, so `:wrap_target` adds no call to the
+Broadway pipeline.
+
+**Where the code is.** In the pull request that carries this Amendment:
+`StatifierRouter.Config`'s `new/1` checks the key with its private
+`wrap_target/2`; its package-internal `around_target/3` makes the
+`:target` call or runs the work, and its package-internal
+`around_delivery/4` marks a door's work through its private `in_door/3`;
+`StatifierRouter.SendHandler`'s private `to_execution/3` calls
+`around_target/3` after the sender's address row is read. The anchors
+that predate this Amendment were read at `3b56f22`:
+`StatifierRouter.SendHandler`'s `perform/2` and private `deliver_to/5`,
+`StatifierRouter.Delivery`'s `deliver_event/4`, and the private
+`deliver/5` of `StatifierRouter.BasicHTTP.Front`. The tests are in
+`test/statifier_router/around_delivery_test.exs`, under the describe
+block "the execution-target door, opted in with :wrap_target": the
+option's shape, the wrapped answer on the send-processor shape and on a
+step the host makes itself, each with every statement of the target's
+delivery run in the context the wrapper set, the delivery wrapped once
+inside a step the `:route` door and the `:basichttp` door drive, and the
+statements a configuration without the key issues on both shapes,
+captured before the key existed. The describe block "the
+execution-target door is not wrapped" is unchanged and stays green.

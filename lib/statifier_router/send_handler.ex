@@ -208,6 +208,15 @@ defmodule StatifierRouter.SendHandler do
   `StatifierRouter.Delivery.deliver_event/4` opens the transaction the
   delivery runs in.
 
+  On a configuration that sets `StatifierRouter.Config`'s `:wrap_target`,
+  the delivery, or the `send_refused` row of a refusal, runs inside the
+  host's `:around_delivery` under the door `:target`, handed the sender's
+  address row's scope, on either shape whenever no door's work encloses
+  the send: on the send-processor shape, and from a step the router did
+  not drive. Inside a step a door drove it is wrapped once, by that door
+  (ADR-0003, the Amendment of 2026-10-04). The sender's address row is
+  read before the call, outside it, since the scope comes from it.
+
   A refusal and a miss are reported to the sender the way ADR-0005,
   section 7 reports an unregistered route: `{:error, reason}` from this
   handler, which at the executor seam re-enters the sending execution as
@@ -618,10 +627,18 @@ defmodule StatifierRouter.SendHandler do
   defp to_execution(config, send, sender) do
     # The sender's scope is read from its own address row, never written by
     # the author (ADR-0006, section 1). A sender with no row has no scope,
-    # and the ledger cannot record a refusal without one (section 6).
+    # and the ledger cannot record a refusal without one (section 6). The
+    # row's scope is what a host's `:around_delivery` is handed when the
+    # configuration sets `:wrap_target` and no wrapped door is running
+    # (ADR-0003, the Amendment of 2026-10-04); otherwise nothing wraps it.
     case Addresses.by_execution(config, sender) do
-      %Address{} = row -> addressed(config, send, sender, row, DateTime.utc_now())
-      nil -> {:error, {:send_refused, :unaddressed_sender}}
+      %Address{} = row ->
+        Config.around_target(config, row.scope, fn ->
+          addressed(config, send, sender, row, DateTime.utc_now())
+        end)
+
+      nil ->
+        {:error, {:send_refused, :unaddressed_sender}}
     end
   end
 

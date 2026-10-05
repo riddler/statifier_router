@@ -125,8 +125,11 @@ defmodule StatifierRouter.Delivery do
   Amendment of 2026-10-02). `StatifierRouter.route/3` wraps every
   `deliver/4` of one event, with its bindings read, and
   `StatifierRouter.BasicHTTP.Front` wraps its `deliver_event/4`.
-  `StatifierRouter.SendHandler` calls `deliver_event/4` unwrapped, and so
-  does a host that calls either door itself.
+  `StatifierRouter.SendHandler` calls `deliver_event/4` unwrapped, unless
+  the configuration sets `:wrap_target` and no door's work encloses the
+  send: then it calls it inside the wrapper, under the door `:target`
+  (ADR-0003, the Amendment of 2026-10-04). A host that calls either door
+  itself is never wrapped here.
 
   ## The completion hook
 

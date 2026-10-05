@@ -1127,13 +1127,35 @@ end
 | `:route` | `StatifierRouter.route/3`, so `StatifierRouter.Webhook.handle/3` and each message `StatifierRouter.Broadway` handles | the bindings read, every `key_refused` row and every binding's delivery |
 | `:partition` | `StatifierRouter.Broadway`'s partitioner, in the producer's process | the bindings read for one message |
 | `:basichttp` | `StatifierRouter.BasicHTTP.Front.handle/3` | the delivery; the token is resolved before the call, outside it |
+| `:target` | `StatifierRouter.SendHandler`, only with `wrap_target: true`, for a send to an execution target no other door's work encloses | the send's delivery, or its `send_refused` row; the sender's address row, whose scope the wrapper is handed, is read before the call, outside it |
 
-A send to an execution target is not wrapped by a door of its own. At the
+A send to an execution target has no door of its own by default. At the
 executor seam it runs inside the sending execution's step, so the `:route`
-call around that step's delivery already encloses it. On the send-processor
-shape, and from a step the router did not drive, nothing of the router's
-encloses it: wrap the call that performs the send, or the step, yourself. A
-call your own code makes to `StatifierRouter.Delivery`, `subscribe/3`,
+or `:basichttp` call around that step's delivery already encloses it. On
+the send-processor shape, and from a step the router did not drive - a
+delayed event a timer job steps in, a step you make yourself - nothing of
+the router's encloses it. Either wrap the call that performs the send, or
+the step, yourself, or opt in with `wrap_target: true` beside the wrapper:
+
+```elixir
+{:ok, config} =
+  StatifierRouter.Config.new(
+    base_options ++ [around_delivery: around_delivery, wrap_target: true]
+  )
+```
+
+With it, the target's delivery runs inside one call of the wrapper under the
+door `:target`, handed the sender's scope, on exactly those two shapes: a
+target delivery inside a step a door drove is wrapped once, by that door. A
+step you wrap in your own context at your own call is not one the router can
+see, so there the wrapper is called again under `:target`, inside your
+context, and must allow that. At the executor seam the work runs inside the
+sending step's transaction: run it in the calling process, and know that a
+rollback from a transaction the wrapper opens there takes the sending step
+down too. `:wrap_target` is a boolean and is refused without
+`:around_delivery`; left out, or `false`, nothing changes.
+
+A call your own code makes to `StatifierRouter.Delivery`, `subscribe/3`,
 `cancel/2`, the location rotation or a reaper is yours to wrap at the call.
 
 A context held in the process reaches every statement `work` runs. A
@@ -1142,7 +1164,8 @@ a transaction on the configuration's repo before calling `work`, and then
 every delivery of one `route/3` call commits, or rolls back, together. The
 partitioner's read runs in no transaction, so there only the process
 context reaches it. `StatifierRouter.Config` documents the option, and
-ADR-0003's Amendment of 2026-10-02 records the decision.
+ADR-0003's Amendment of 2026-10-02 records the decision, and its Amendment of
+2026-10-04 the `:wrap_target` opt-in.
 
 ### Minting the execution id
 
@@ -1764,7 +1787,8 @@ The source invoke is `StatifierRouter.subscribe/3`,
 the opt-in location table that `StatifierRouter.Migrations.up_locations/1`
 creates outside the version walk; a configuration without `:basichttp`
 needs neither. The whole-delivery wrapper is the configuration's optional
-`:around_delivery`; left out, nothing is called. Each piece lands behind the
+`:around_delivery`, with `:wrap_target` its opt-in for the execution
+target's delivery; left out, nothing is called. Each piece lands behind the
 decision record that fixes it, in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
 
 ## Installation

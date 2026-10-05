@@ -118,6 +118,66 @@ defmodule StatifierRouter.AroundDeliveryTest do
     "INSERT INTO \"statifier_router_routing_ledger\" (\"binding_id\",\"inserted_at\",\"message_id\",\"outcome\",\"reason\",\"scope\") VALUES ($,$,$,$,$,$) RETURNING \"id\""
   ]
 
+  # The statements the execution target's delivery issues where no door of
+  # the router's wraps it, captured at the commit before `:wrap_target`
+  # existed and normalized by normalize/1: a send to the execution target on
+  # the send-processor shape, from the sender's address read to the
+  # delivery's commit, and a step the host makes itself whose `<send>`
+  # reaches the execution target at the executor seam, from the step's
+  # begin to its commit.
+  @processor_target [
+    "SELECT s0.\"id\", s0.\"scope\", s0.\"document\", s0.\"key\", s0.\"execution_id\", s0.\"terminal_seen_at\", s0.\"inserted_at\" FROM \"statifier_router_addresses\" AS s0 WHERE (s0.\"execution_id\" = $) ORDER BY s0.\"id\" LIMIT 1",
+    "begin",
+    "SAVEPOINT sr_execution_target_N",
+    "INSERT INTO \"statifier_router_dedupe\" AS s0 (\"binding_id\",\"expires_at\",\"message_id\") VALUES ($,$,$) ON CONFLICT (\"binding_id\",\"message_id\") DO UPDATE SET \"expires_at\" = $ WHERE (s0.\"expires_at\" < $)",
+    "SELECT s0.\"id\", s0.\"scope\", s0.\"document\", s0.\"key\", s0.\"execution_id\", s0.\"terminal_seen_at\", s0.\"inserted_at\" FROM \"statifier_router_addresses\" AS s0 WHERE (((s0.\"scope\" = $) AND (s0.\"document\" = $)) AND (s0.\"key\" = $))",
+    "INSERT INTO \"statifier_router_addresses\" (\"document\",\"execution_id\",\"inserted_at\",\"key\",\"scope\") VALUES ($,$,$,$,$) ON CONFLICT (\"scope\",\"document\",\"key\") DO NOTHING RETURNING \"id\"",
+    "SELECT s0.\"retired_at\", s0.\"retired_by\" FROM \"statifier_charts\" AS s0 WHERE (s0.\"content_hash\" = $) AND (NOT (s0.\"retired_at\" IS NULL))",
+    "SELECT pg_advisory_xact_lock(hashtextextended($::text, 0))",
+    "SELECT s0.\"id\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $) FOR UPDATE",
+    "INSERT INTO \"statifier_executions\" (\"content_hash\",\"execution_id\",\"id\",\"identity_blob\",\"inserted_at\",\"position_blob\",\"status\",\"updated_at\") VALUES ($,$,$,$,$,$,$,$)",
+    "SELECT pg_advisory_xact_lock(hashtextextended($::text, 0))",
+    "SELECT s0.\"id\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $) FOR UPDATE",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"seq\", s0.\"input_blob\" FROM \"statifier_inputs\" AS s0 WHERE (s0.\"execution_id\" = $) ORDER BY s0.\"seq\" DESC LIMIT 1",
+    "INSERT INTO \"statifier_inputs\" (\"door\",\"execution_id\",\"id\",\"input_blob\",\"inserted_at\",\"seq\",\"updated_at\") VALUES ($,$,$,$,$,$,$)",
+    "UPDATE \"statifier_executions\" AS s0 SET \"content_hash\" = $, \"failure\" = $, \"identity_blob\" = $, \"position_blob\" = $, \"status\" = $, \"updated_at\" = $ WHERE (s0.\"execution_id\" = $)",
+    "INSERT INTO \"statifier_router_routing_ledger\" (\"binding_id\",\"execution_id\",\"inserted_at\",\"key\",\"message_id\",\"outcome\",\"scope\") VALUES ($,$,$,$,$,$,$) RETURNING \"id\"",
+    "RELEASE SAVEPOINT sr_execution_target_N",
+    "commit"
+  ]
+
+  @unrouted_target [
+    "begin",
+    "SELECT pg_advisory_xact_lock(hashtextextended($::text, 0))",
+    "SELECT s0.\"id\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $) FOR UPDATE",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"seq\", s0.\"input_blob\" FROM \"statifier_inputs\" AS s0 WHERE (s0.\"execution_id\" = $) ORDER BY s0.\"seq\" DESC LIMIT 1",
+    "INSERT INTO \"statifier_inputs\" (\"door\",\"execution_id\",\"id\",\"input_blob\",\"inserted_at\",\"seq\",\"updated_at\") VALUES ($,$,$,$,$,$,$)",
+    "SELECT s0.\"id\", s0.\"scope\", s0.\"document\", s0.\"key\", s0.\"execution_id\", s0.\"terminal_seen_at\", s0.\"inserted_at\" FROM \"statifier_router_addresses\" AS s0 WHERE (s0.\"execution_id\" = $) ORDER BY s0.\"id\" LIMIT 1",
+    "SAVEPOINT sr_execution_target_N",
+    "INSERT INTO \"statifier_router_dedupe\" AS s0 (\"binding_id\",\"expires_at\",\"message_id\") VALUES ($,$,$) ON CONFLICT (\"binding_id\",\"message_id\") DO UPDATE SET \"expires_at\" = $ WHERE (s0.\"expires_at\" < $)",
+    "SELECT s0.\"id\", s0.\"scope\", s0.\"document\", s0.\"key\", s0.\"execution_id\", s0.\"terminal_seen_at\", s0.\"inserted_at\" FROM \"statifier_router_addresses\" AS s0 WHERE (((s0.\"scope\" = $) AND (s0.\"document\" = $)) AND (s0.\"key\" = $))",
+    "INSERT INTO \"statifier_router_addresses\" (\"document\",\"execution_id\",\"inserted_at\",\"key\",\"scope\") VALUES ($,$,$,$,$) ON CONFLICT (\"scope\",\"document\",\"key\") DO NOTHING RETURNING \"id\"",
+    "SELECT s0.\"retired_at\", s0.\"retired_by\" FROM \"statifier_charts\" AS s0 WHERE (s0.\"content_hash\" = $) AND (NOT (s0.\"retired_at\" IS NULL))",
+    "SELECT pg_advisory_xact_lock(hashtextextended($::text, 0))",
+    "SELECT s0.\"id\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $) FOR UPDATE",
+    "INSERT INTO \"statifier_executions\" (\"content_hash\",\"execution_id\",\"id\",\"identity_blob\",\"inserted_at\",\"position_blob\",\"status\",\"updated_at\") VALUES ($,$,$,$,$,$,$,$)",
+    "SELECT pg_advisory_xact_lock(hashtextextended($::text, 0))",
+    "SELECT s0.\"id\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $) FOR UPDATE",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"id\", s0.\"execution_id\", s0.\"status\", s0.\"content_hash\", s0.\"identity_blob\", s0.\"position_blob\", s0.\"failure\", s0.\"session_id\", s0.\"metadata\", s0.\"outcome_blob\", s0.\"ended_at\", s0.\"inserted_at\", s0.\"updated_at\" FROM \"statifier_executions\" AS s0 WHERE (s0.\"execution_id\" = $)",
+    "SELECT s0.\"seq\", s0.\"input_blob\" FROM \"statifier_inputs\" AS s0 WHERE (s0.\"execution_id\" = $) ORDER BY s0.\"seq\" DESC LIMIT 1",
+    "INSERT INTO \"statifier_inputs\" (\"door\",\"execution_id\",\"id\",\"input_blob\",\"inserted_at\",\"seq\",\"updated_at\") VALUES ($,$,$,$,$,$,$)",
+    "UPDATE \"statifier_executions\" AS s0 SET \"content_hash\" = $, \"failure\" = $, \"identity_blob\" = $, \"position_blob\" = $, \"status\" = $, \"updated_at\" = $ WHERE (s0.\"execution_id\" = $)",
+    "INSERT INTO \"statifier_router_routing_ledger\" (\"binding_id\",\"execution_id\",\"inserted_at\",\"key\",\"message_id\",\"outcome\",\"scope\") VALUES ($,$,$,$,$,$,$) RETURNING \"id\"",
+    "RELEASE SAVEPOINT sr_execution_target_N",
+    "UPDATE \"statifier_executions\" AS s0 SET \"content_hash\" = $, \"failure\" = $, \"identity_blob\" = $, \"position_blob\" = $, \"status\" = $, \"updated_at\" = $ WHERE (s0.\"execution_id\" = $)",
+    "commit"
+  ]
+
   # A parcel loaded onto the van tells the depot's tally that it left: an
   # execution-to-execution send from the step the `loaded` scan drives.
   @dispatching """
@@ -728,6 +788,278 @@ defmodule StatifierRouter.AroundDeliveryTest do
 
       assert_received {:module_wrapped, "7c1e", :route}
     end
+  end
+
+  describe "the execution-target door, opted in with :wrap_target" do
+    # sabotage: wrap_target/2's missing-wrapper clause never matched ->
+    # the key alone was accepted, red; restored, green.
+    test "takes a boolean beside :around_delivery, defaulting to false, and refuses any other value or the key alone" do
+      wrapper = context_wrapper(self())
+
+      assert config(self()).wrap_target == false
+      assert config(self(), around_delivery: wrapper).wrap_target == false
+      assert config(self(), around_delivery: wrapper, wrap_target: true).wrap_target == true
+      assert config(self(), around_delivery: wrapper, wrap_target: false).wrap_target == false
+
+      base = [repo: TestRepo, delivery: StatifierRouter.RecordingDelivery]
+
+      for bad <- [nil, "true", 1, :yes] do
+        assert Config.new(base ++ [around_delivery: wrapper, wrap_target: bad]) ==
+                 {:error, {:invalid_value, :wrap_target, bad}}
+      end
+
+      for alone <- [
+            [wrap_target: true],
+            [wrap_target: false],
+            [around_delivery: nil, wrap_target: true]
+          ] do
+        assert Config.new(base ++ alone) == {:error, {:missing_key, :around_delivery}}
+      end
+    end
+
+    # sabotage: to_execution/3 handed around_target/3 the configuration
+    # with wrap_target: false -> no :target call, red; restored, green.
+    # sabotage: in_door/3 never put back the mark it replaced -> the
+    # route that made the sender left it set and the send was not
+    # wrapped, red; restored, green.
+    test "on the send-processor shape it delivers inside one :target call, under the sender's scope" do
+      me = self()
+
+      config =
+        sending_config(
+          around_delivery: context_wrapper(me),
+          wrap_target: true,
+          bindings: parcel_bindings("dispatching_parcel")
+        )
+
+      sender = unrouted_sender(config, "pcl_4821")
+      _before = {wrapped(), statements()}
+
+      assert processor_send(config, sender) == :ok
+
+      assert wrapped() == [{me, "7c1e", :target}]
+      seen = statements()
+      assert [_tally] = tally_addresses(config)
+
+      # The sender's address row is read before the call and outside it: the
+      # scope the wrapper is handed comes from that row.
+      assert [{^me, nil, lookup} | delivery] = seen
+      assert lookup == hd(@processor_target)
+      assert queries(delivery, me) == tl(@processor_target)
+      assert contexts(delivery, me) == ["7c1e"]
+    end
+
+    # sabotage: around_target/3 ran the work before calling the wrapper
+    # and handed the wrapper its answer -> the target's statements ran
+    # with no context, red; restored, green.
+    test "from a step the router did not drive it delivers inside one :target call, under the sender's scope" do
+      me = self()
+
+      config =
+        sending_config(
+          around_delivery: context_wrapper(me),
+          wrap_target: true,
+          bindings: parcel_bindings("dispatching_parcel")
+        )
+
+      sender = unrouted_sender(config, "pcl_4821")
+      _before = {wrapped(), statements()}
+
+      assert {:ok, _execution, _state} = host_step(config, sender)
+
+      assert wrapped() == [{me, "7c1e", :target}]
+      seen = statements()
+      assert [_tally] = tally_addresses(config)
+
+      assert queries(seen, me) == @unrouted_target
+
+      {step, target} =
+        Enum.split_with(seen, fn {_, context, _} -> is_nil(context) end)
+
+      # The host's own step runs outside the call; every statement of the
+      # target's delivery runs inside it, from its savepoint to its release.
+      assert contexts(target, me) == ["7c1e"]
+      assert [{_, _, "SAVEPOINT sr_execution_target_N"} | _] = target
+      assert {_, _, "RELEASE SAVEPOINT sr_execution_target_N"} = List.last(target)
+      assert Enum.any?(step, fn {_, _, q} -> q =~ ~s(INSERT INTO "statifier_inputs") end)
+    end
+
+    # sabotage: to_execution/3 called addressed/5 unwrapped and only
+    # deliver_to/5 called around_target/3 -> the refusal made no :target
+    # call, red; restored, green.
+    test "on the send-processor shape a refused send's send_refused row is written inside the :target call" do
+      me = self()
+
+      config =
+        sending_config(
+          around_delivery: context_wrapper(me),
+          wrap_target: true,
+          bindings: parcel_bindings("dispatching_parcel")
+        )
+
+      sender = unrouted_sender(config, "pcl_4821")
+      _before = {wrapped(), statements()}
+
+      assert processor_send(config, sender, %{"document" => "depot_tally"}) ==
+               {:error, {:send_refused, :key}}
+
+      assert wrapped() == [{me, "7c1e", :target}]
+
+      assert [{^me, nil, _lookup} | refusal] = statements()
+
+      assert Enum.any?(
+               queries(refusal, me),
+               &(&1 =~ ~s(INSERT INTO "statifier_router_routing_ledger"))
+             )
+
+      assert contexts(refusal, me) == ["7c1e"]
+    end
+
+    # sabotage: in_door/3's marking clause never matched -> the send
+    # from the :route step made a second, :target call, red; restored,
+    # green.
+    test "inside a step a wrapped door drives, the target's delivery is wrapped once, by that door" do
+      me = self()
+
+      config =
+        sending_config(
+          around_delivery: context_wrapper(me),
+          wrap_target: true,
+          bindings: parcel_bindings("dispatching_parcel"),
+          basichttp: [base_url: @base_url]
+        )
+
+      assert {:ok, [{:created_and_delivered, "loaded_scans", _sender}, {:no_match, _}]} =
+               StatifierRouter.route(config, parcel_scan("parcel_scans/1/0001", "loaded"),
+                 now: @now
+               )
+
+      assert wrapped() == [{me, "7c1e", :route}]
+      assert [_tally] = tally_addresses(config)
+      assert contexts(target_statements(statements()), me) == ["7c1e"]
+
+      # The BasicHTTP front's delivery steps a second parcel into the send.
+      held = unrouted_sender(config, "pcl_5150")
+      {:ok, location} = BasicHTTP.location(config, held)
+      _before = {wrapped(), statements()}
+
+      assert Front.handle(config, post(token(location), "loaded"), now: @now) ==
+               {:ok, {:delivered, "basichttp", held}}
+
+      assert wrapped() == [{me, "7c1e", :basichttp}]
+      target = target_statements(statements())
+      assert target != []
+      assert contexts(target, me) == ["7c1e"]
+    end
+
+    # sabotage: around_target/3 called the wrapper under :target whenever
+    # an :around_delivery was set -> a configuration without the key made
+    # :target calls, red; restored, green.
+    test "a configuration without it issues the same statements and answers the same as before it existed" do
+      me = self()
+
+      for {opts, parcel} <- [
+            {[], "pcl_1001"},
+            {[around_delivery: context_wrapper(me)], "pcl_1002"},
+            {[around_delivery: context_wrapper(me), wrap_target: false], "pcl_1003"}
+          ] do
+        config = sending_config([bindings: parcel_bindings("dispatching_parcel")] ++ opts)
+        sender = unrouted_sender(config, parcel)
+        _before = {wrapped(), statements()}
+
+        assert processor_send(config, sender) == :ok
+        assert queries(statements(), me) == @processor_target
+
+        clear_tally(config)
+        assert {:ok, _execution, _state} = host_step(config, sender)
+        assert queries(statements(), me) == @unrouted_target
+
+        clear_tally(config)
+        assert wrapped() == []
+      end
+    end
+  end
+
+  # A dispatching parcel the router created and did not step past
+  # `at_depot`: a `delivered` scan selects no transition there, so the
+  # execution exists, under an address row keyed by `parcel`, with no send
+  # made yet.
+  defp unrouted_sender(config, parcel) do
+    scan = parcel_scan("parcel_scans/#{parcel}/0001", "delivered")
+    scan = %{scan | data: %{"kind" => "delivered", "parcel_id" => parcel}}
+
+    assert {:ok, [{:no_match, "loaded_scans"}, {:dropped, "delivered_scans", :unmatched_event}]} =
+             StatifierRouter.route(config, scan, now: @now)
+
+    [%Address{execution_id: sender}] =
+      TestRepo.all(
+        from(a in Config.queryable(config, Address),
+          where: a.document == "dispatching_parcel" and a.key == ^parcel
+        )
+      )
+
+    sender
+  end
+
+  defp clear_tally(config) do
+    TestRepo.delete_all(
+      from(a in Config.queryable(config, Address), where: a.document == "depot_tally")
+    )
+
+    _cleared = statements()
+    :ok
+  end
+
+  # The statements of the execution target's delivery, from its savepoint
+  # to its release.
+  defp target_statements(statements) do
+    statements
+    |> Enum.drop_while(fn {_, _, q} -> q != "SAVEPOINT sr_execution_target_N" end)
+    |> Enum.take_while(fn {_, _, q} -> q != "RELEASE SAVEPOINT sr_execution_target_N" end)
+  end
+
+  # The send-processor shape: a live session's `<send>` to the execution
+  # target, handed to `SendHandler.perform/2` with the sender's id as the
+  # session id, as the engine hands it.
+  defp processor_send(config, sender, data \\ %{"document" => "depot_tally", "key" => "depot_9"}) do
+    effect = %Send{
+      event: "parcel.loaded",
+      target: "execution",
+      type: @type_string,
+      data: data,
+      send_id: "send_1",
+      c_index: 3,
+      owner: nil,
+      macrostep: 1,
+      microstep: 0,
+      round: 0,
+      ordinal: 1
+    }
+
+    {:ok, [{:handler, SendHandler, payload}]} =
+      SendHandler.deliver(effect, SendEvent.build(effect, sender), %{session_id: sender})
+
+    :ok = SendHandler.put_config(config)
+
+    try do
+      SendHandler.perform(payload, %{session_id: sender})
+    after
+      SendHandler.delete_config()
+    end
+  end
+
+  # A step the router did not drive: the host steps the sender itself, as a
+  # timer job does, with the router's handler as the executor, so the
+  # `loaded` transition's `<send>` reaches the execution target at the
+  # executor seam with no door of the router's around it.
+  defp host_step(config, sender) do
+    Executions.step(
+      config.store,
+      sender,
+      compile!(@dispatching),
+      Statifier.Event.external("loaded"),
+      [{:executor, config.executor} | config.persistence_options]
+    )
   end
 
   defmodule Wrapper do
