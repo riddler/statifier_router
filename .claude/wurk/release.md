@@ -117,9 +117,10 @@ the prep is split by that table's tagging and release rows and its "Release
 preps" paragraph. Once the prep is merged to `origin/main`, the conductor or the session that owns the release bead tags
 that merged commit with the new version and pushes the tag; a tag before the
 bump is on `origin/main`, or naming any other version or commit, is not
-allowed. Publishing - `mix hex.publish`, a GitHub release, a docs republish
-included - is the operator's one release step, trigger **never**, in every
-campaign, and no consent or relay delegates it. `changelog.d/README.md` ends
+allowed. An agent or a session never runs `mix hex.publish` (a docs republish
+included): the release workflow publishes on that tag push, and a failed
+workflow is re-run from its Actions page, never worked round by a local
+publish (ADR-0009). `changelog.d/README.md` ends
 its "At release" paragraph with "and tag it": that is the tag the conductor
-or the release bead's session makes on the merged prep, and it never extends
-to the publish.
+or the release bead's session makes on the merged prep, and that session's
+part ends at the tag; the workflow the tag push starts is what publishes.
