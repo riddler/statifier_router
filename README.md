@@ -37,7 +37,7 @@ and schedules the reapers.
 ```elixir
 def deps do
   [
-    {:statifier_router, "~> 0.11.0"}
+    {:statifier_router, "~> 0.12.0"}
   ]
 end
 ```
