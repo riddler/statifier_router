@@ -84,6 +84,51 @@ defmodule StatifierRouter.WebhookTest do
 
       assert_received {:deliver, "impressions_to_join", "imp_7f3a", %{message_id: @body_sha}}
     end
+
+    # Pins the answer to a request that carries a binary :raw_body across the
+    # four provider ids: a non-empty string wins, and nil, "" and a non-string
+    # all fall to the body's digest. The non-string case had no test before
+    # :raw_body became optional.
+    # sabotage: message_id/1's binary-body clause dropped the provider id and
+    # always hashed -> the "evt_2f9c" row red on its message id, and the
+    # provider-id test above with it; restored, green. Second mutation:
+    # message_id/2's provider clause guarded on `provider_id not in [nil, ""]`
+    # rather than is_binary -> the 4071 row red, its integer handed on as the
+    # message id; restored, green.
+    test "a request carrying a binary raw body is answered as before" do
+      for {provider_id, message_id} <- [
+            {"evt_2f9c", "evt_2f9c"},
+            {nil, @body_sha},
+            {"", @body_sha},
+            {4071, @body_sha}
+          ] do
+        config = recording_config()
+
+        assert {:ok, [{:delivered, "impressions_to_join", _}, {:no_match, "clicks_to_join"}]} =
+                 Webhook.handle(config, request(%{provider_id: provider_id}), now: @now)
+
+        assert_received {:deliver, "impressions_to_join", "imp_7f3a", %{message_id: ^message_id}}
+      end
+    end
+
+    # sabotage: message_id/1's provider-id-alone clause deleted, so a request
+    # without :raw_body fell to the refusal -> this test red on the
+    # {:invalid_request, _} answer; restored, green.
+    test "is the provider id alone when the request carries no raw body" do
+      config = config(self())
+      without_body = Map.delete(request(%{provider_id: "evt_5b1d"}), :raw_body)
+
+      assert {:ok, [{:created_and_delivered, "impressions_to_join", _}, _no_match]} =
+               Webhook.handle(config, without_body, now: @now)
+
+      assert {:ok, [{:duplicate, "impressions_to_join"}, _no_match]} =
+               Webhook.handle(config, without_body, now: @now)
+
+      assert Enum.map(ledger(config), &{&1.outcome, &1.message_id}) == [
+               {"created_and_delivered", "evt_5b1d"},
+               {"duplicate", "evt_5b1d"}
+             ]
+    end
   end
 
   describe "handle/3" do
@@ -140,6 +185,30 @@ defmodule StatifierRouter.WebhookTest do
             Map.delete(request(), :scope),
             request(%{source: :ad_events}),
             request(%{data: []})
+          ] do
+        assert {:error, {:invalid_request, ^bad}} = Webhook.handle(config, bad, now: @now)
+      end
+
+      refute_received {:deliver, _binding_id, _key, _delivery}
+      assert ledger(config) == []
+    end
+
+    # sabotage: message_id/1's non-binary-body clause deleted, so a request
+    # carrying `raw_body: nil` or an integer body fell through to the
+    # provider id -> the first two rows routed, red; restored, green. Second
+    # mutation: message_id/1's provider-id-alone clause guarded on is_binary
+    # alone -> the "" row routed, red; restored, green.
+    test "refuses a non-binary raw body, and no body without a provider id" do
+      config = recording_config()
+      without_body = Map.delete(request(), :raw_body)
+
+      for bad <- [
+            request(%{raw_body: nil, provider_id: "evt_5b1d"}),
+            request(%{raw_body: 4071, provider_id: "evt_5b1d"}),
+            Map.put(without_body, :provider_id, ""),
+            Map.put(without_body, :provider_id, 4071),
+            Map.put(without_body, :provider_id, nil),
+            Map.delete(without_body, :provider_id)
           ] do
         assert {:error, {:invalid_request, ^bad}} = Webhook.handle(config, bad, now: @now)
       end

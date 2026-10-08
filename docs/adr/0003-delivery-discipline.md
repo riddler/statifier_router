@@ -1109,3 +1109,56 @@ PR 171 (`f0d24a1`, the ownership lists, which now name `:wrap_target`).
   `:basichttp` doors, and a configuration without the key issuing the
   same statements on both shapes. The describe block "the
   execution-target door is not wrapped" is still there.
+
+## Amendment (2026-10-08): a webhook request may leave out its raw body when it carries a non-empty provider id
+
+Status: proposed
+
+Section 6's bullet "A webhook's message id is the provider's" names two
+sources for a webhook's message id: the provider's event id when the
+provider sends one, and otherwise a hash of the verified request body.
+`StatifierRouter.Webhook.handle/3`, which implements that bullet (the
+Note of 2026-09-21 above), has required the body on every request, so a
+front that hands over an id of its own as the provider id, such as the
+id of a row in which it stored a post, has had to pass a body too even
+though the provider id was always the one taken. This Amendment relaxes
+that, as ruled by the operator, 2026-10-07: the body may be left out
+when the provider id is a non-empty string.
+
+- **The rule is unchanged.** The provider's event id still wins whenever
+  it is a non-empty string, and otherwise the message id is the
+  lowercase hex SHA-256 of the body. Both sources of section 6's bullet
+  stand, and neither gains a third.
+- **The body is required only when it is the source.** A request with no
+  `:raw_body` key and a non-empty string `:provider_id` is routed with
+  the provider id as its message id. A request with neither a binary
+  `:raw_body` nor a non-empty string `:provider_id` is refused as
+  `{:error, {:invalid_request, request}}`, so an id is always derivable.
+- **A request that carries the body is answered as before.** Only the
+  absent key counts as no body. A binary `:raw_body` takes the rule
+  above whatever `:provider_id` holds, and a `:raw_body` of any other
+  type, `nil` included, is refused whatever `:provider_id` holds,
+  exactly as when the key was required.
+
+| The request | Its answer |
+|---|---|
+| a binary `:raw_body`, a non-empty string `:provider_id` | routed; the provider id is the message id (as before) |
+| a binary `:raw_body`, `:provider_id` absent, `nil`, `""` or not a string | routed; the body's SHA-256 is the message id (as before) |
+| a `:raw_body` that is not a binary, `nil` included | `{:error, {:invalid_request, request}}` (as before) |
+| no `:raw_body` key, a non-empty string `:provider_id` | routed; the provider id is the message id (new) |
+| no `:raw_body` key, `:provider_id` absent, `nil`, `""` or not a string | `{:error, {:invalid_request, request}}` (as before) |
+
+The request type and the "The request" and "The message id" sections of
+`StatifierRouter.Webhook`'s module documentation say the same, and so
+does Step 1 of the guide "How to take webhooks and form posts". The
+private `message_id/1` in `lib/statifier_router/webhook.ex` decides which
+source a request names, and the tests "a request carrying a binary raw
+body is answered as before", "is the provider id alone when the request
+carries no raw body" and "refuses a non-binary raw body, and no body
+without a provider id" in `test/statifier_router/webhook_test.exs` pin
+the table above row by row.
+
+The dedupe key is unchanged too: it is the binding and the message id
+(section 6's first bullet), and a provider id carries no scope, so the
+same provider id under two scopes through one shared binding is one
+message whether or not the request carried a body.
