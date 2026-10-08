@@ -6,9 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.3/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.12.0/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.12.0] 2026-10-08
+
+Feature release: a webhook front that hands the router an id of its own as `:provider_id` may leave `:raw_body` out, and that id is the message id. Every request that carries `:raw_body` is answered exactly as before. No option, event or migration version is added, and the statifier requirement stays `~> 2.10`. The webhook guide gains a form post the host stores first, the explanation page names the rows a source event's data lands in, and the upgrading page gains a section for 0.11 to 0.12.
+
+### Added
+
+- `StatifierRouter.Webhook.handle/3` takes a request with no `:raw_body` when its `:provider_id` is a non-empty string, which is then the message id; every request that carries `:raw_body` is answered as before.
 
 ## [0.11.3] 2026-10-08
 
