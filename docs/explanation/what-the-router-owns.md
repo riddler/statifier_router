@@ -117,6 +117,99 @@ with `:wrap_target` its opt-in for the execution target's delivery; left out,
 nothing is called. Each piece lands behind the decision record that fixes it,
 in [docs/adr/](https://github.com/riddler/statifier_router/blob/main/docs/adr/README.md).
 
+## Where a source event's data lands
+
+A host that keeps a posted form's values out of the engine's state needs to
+know which rows a source event reaches. A source event carries a `scope`, a
+`message_id`, a `source` and its `data`, the adapter-normalized event. A
+binding reads that data three ways: its `match` and `key` programs evaluate
+over it, and its `data` paths project it (`StatifierRouter.Binding.project/2`).
+The router writes the rows below and makes two calls into
+statifier_persistence; those rows and those calls are everything it writes of
+the event.
+
+**The router's own rows.** The package writes five tables, each through one
+schema in `StatifierRouter.Schema`; the location table only under a
+configuration that sets `:basichttp`. The list below is every column each
+schema maps, under the default `table_prefix`, and what it holds of a source
+event:
+
+| Table | Column | What it holds of a source event |
+|---|---|---|
+| `statifier_router_addresses` | `id` | nothing: the table's own id |
+| `statifier_router_addresses` | `scope` | the event's `scope` |
+| `statifier_router_addresses` | `document` | nothing: the binding's `document` |
+| `statifier_router_addresses` | `key` | the value the binding's `key` program produced over the event |
+| `statifier_router_addresses` | `execution_id` | nothing: a minted id, or the host's `:execution_id` answer, which is handed the scope, the document and the key |
+| `statifier_router_addresses` | `terminal_seen_at` | nothing: when a reap or a delivery first read the execution finished |
+| `statifier_router_addresses` | `inserted_at` | nothing: the delivery attempt's time |
+| `statifier_router_dedupe` | `id` | nothing: the table's own id |
+| `statifier_router_dedupe` | `binding_id` | nothing: the binding's `id` |
+| `statifier_router_dedupe` | `message_id` | the event's `message_id` |
+| `statifier_router_dedupe` | `expires_at` | nothing: the attempt's time plus the binding's dedupe horizon |
+| `statifier_router_routing_ledger` | `id` | nothing: the table's own id |
+| `statifier_router_routing_ledger` | `binding_id` | nothing: the binding's `id` |
+| `statifier_router_routing_ledger` | `message_id` | the event's `message_id` |
+| `statifier_router_routing_ledger` | `scope` | the event's `scope` |
+| `statifier_router_routing_ledger` | `outcome` | nothing: the outcome's name |
+| `statifier_router_routing_ledger` | `key` | the key, on every outcome `StatifierRouter.Delivery` records; `nil` on a `key_refused` |
+| `statifier_router_routing_ledger` | `execution_id` | nothing: the execution the outcome names, or `nil` |
+| `statifier_router_routing_ledger` | `reason` | on a `key_refused` only, the refusal as `inspect/1` renders it: the value a `match` or `key` program produced, or the evaluation error it raised; `nil` on every other outcome of a source event |
+| `statifier_router_routing_ledger` | `inserted_at` | nothing: the delivery attempt's time |
+| `statifier_router_subscriptions` | `id` | nothing: the table's own id |
+| `statifier_router_subscriptions` | `binding_id` | nothing: the binding the source invoke names |
+| `statifier_router_subscriptions` | `execution_id` | nothing: the subscribing execution |
+| `statifier_router_subscriptions` | `invoke_id` | nothing: the invocation's id |
+| `statifier_router_subscriptions` | `scope` | a copy of the subscribing execution's address row `scope` |
+| `statifier_router_subscriptions` | `key` | a copy of the subscribing execution's address row `key` |
+| `statifier_router_subscriptions` | `inserted_at` | nothing: when `StatifierRouter.subscribe/3` wrote it |
+| `statifier_router_locations` | `id` | nothing: the table's own id |
+| `statifier_router_locations` | `address_id` | nothing: the address row the location belongs to |
+| `statifier_router_locations` | `token` | nothing: random bytes `StatifierRouter.BasicHTTP` mints |
+| `statifier_router_locations` | `inserted_at` | nothing: when the location was first written |
+
+Three things the table implies are worth saying outright. The webhook
+front's `raw_body` is never written: when no provider id is handed over, the
+message id is the body's SHA-256 in hex (`StatifierRouter.Webhook`), and only
+that digest reaches the rows. A `key_refused` row's `reason` is event data
+at rest: a `key` that produced a number, or a `match` that produced a
+string, stores that value, and predicator's type mismatch error carries the
+values it compared. And a host's `:leading_columns` are columns the
+migrations place and the package never writes; a host fills them through
+its own wrap, if at all. A `send_refused` row records a chart's `<send>`,
+not a source event; `StatifierRouter.SendHandler` says what its columns hold.
+
+**The two calls into statifier_persistence.** `StatifierRouter.Delivery`
+creates an execution with `create/4` and steps it with `step/5`, or calls a
+host's `:on_create` and `:on_step` with the same arguments:
+
+- `create/4` is handed the execution id, the chart and the options: the
+  executor and an `initialize:` snapshot of the configuration's persistence
+  options, carrying a location token when the configuration sets
+  `:basichttp`. It is handed no message id, no key and no data, and the
+  router seeds nothing into the new execution's datamodel.
+- `step/5` is handed one external event, named by the binding's `event`,
+  whose data is the binding's projection of the event's data: the paths the
+  binding's `data` names, and nothing outside them. On an adapter that keeps
+  an input log, statifier_persistence keeps that event, data and all, as
+  delivered (`StatifierPersistence.Executions.inputs/2`). The
+  execution's datamodel then holds whatever the chart itself copies out of
+  `_event.data`.
+
+The telemetry a `no_match` reports names the binding, the source, the scope
+and the message id, and no data.
+
+**The rule for a host.** Of a source event, the router keeps at rest its
+scope, its message id and the key its binding produced, and, on a refused
+`match` or `key`, what that program produced or the error it raised;
+statifier_persistence keeps the binding's projection in the input log and
+whatever the chart copies from it. A field of the event that no binding's
+`match`, `key` or `data` reads is written nowhere by this package. So a host
+that keeps form values out of the engine's state keys its bindings on an id
+of its own, projects only ids, and routes an event whose data carries only
+ids, as [Step 5 of the webhook guide](../guides/how-to-take-webhooks-and-form-posts.md#step-5-a-form-post-you-store-first)
+does.
+
 ## Why an address row pins a chart
 
 statifier_persistence retires a chart it can prove nothing still needs, and
