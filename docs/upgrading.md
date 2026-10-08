@@ -41,9 +41,16 @@ Must change: **NONE**, unless one of these is you.
 
 May start doing:
 
-- **If you serve send types of your own**, declare them in `:send_handlers`
-  rather than in `:persistence_options`' `:send_types`, and
-  `StatifierRouter.Contracts.check/3` stops reporting them as unsupported.
+- **If you set `:send_type` and serve send types of your own**, declare
+  them in `:send_handlers`, a map from each type string to its processor
+  module. Before 0.7 such a configuration had nowhere to put them: a
+  `:send_types` of your own beside `:send_type` is refused with
+  `{:declared_send_types, send_type}`, so
+  `StatifierRouter.Contracts.check/3` reported your types under
+  `:unsupported_types`. Declared in `:send_handlers`, they join the
+  router's type in the one snapshot every delivery carries, and `check/3`
+  stops reporting them. A configuration without `:send_type` that passes
+  its own `:send_types` in `:persistence_options` keeps working as it is.
   [How to fit the router into an engine of your own](guides/how-to-wrap-the-engine.md),
   "Step 4. Declare the send types the host serves", shows the option.
 
