@@ -31,7 +31,7 @@ defmodule StatifierRouter.Webhook do
       section 1); bindings are chosen by source alone.
 
   Any other key is ignored. A request missing `:scope`, `:source` or
-  `:data`, or carrying any key of the wrong type, is
+  `:data`, or carrying one of those, or `:raw_body`, of the wrong type, is
   `{:error, {:invalid_request, request}}` and nothing is routed.
 
   `:raw_body` is required unless `:provider_id` is a non-empty string. A
