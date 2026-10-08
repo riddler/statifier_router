@@ -6,9 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.2/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.11.3/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.11.3] 2026-10-08
+
+Patch release: documentation only, and the package's code is unchanged. The upgrading page now walks a host from 0.6 to 0.11 one minor at a time. No public function, option, event or migration version is added or changed, and the statifier requirement stays `~> 2.10`.
+
+### Changed
+
+- The upgrading page becomes "Upgrading a host from 0.6 to 0.11": a section per minor, from 0.6 to 0.7 through 0.10 to 0.11, says what a host changes for that step, or NONE where nothing, above the V03 migration and the opt-in location table it already carried.
+- The README's documentation map names the upgrading page by its new title.
 
 ## [0.11.2] 2026-10-05
 
