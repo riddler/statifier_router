@@ -20,6 +20,16 @@ the same message. Keep the bytes in `conn.assigns.raw_body` with
 `Plug.Parsers`' `:body_reader` option. It worked when
 `conn.assigns.raw_body` is the posted body, not `""`, in the action.
 
+The body is needed only to be hashed. From statifier_router 0.12.0, a
+request whose `provider_id` is a non-empty string may leave `raw_body` out:
+the provider id is the message id, so there is nothing to hash. A front that
+hands over an id of its own, such as the id of a row in which it stored the
+post, passes that id as `provider_id` and no body. On 0.11 and earlier
+`raw_body` is required on every request, so such a front passes its id as
+`raw_body` too. A request with neither a body nor a non-empty `provider_id`
+is `{:error, {:invalid_request, request}}`, and a `raw_body` of `nil` counts
+as the wrong type rather than as no body.
+
 ## Step 2. Write the webhook action
 
 **The host verifies the signature.** This package verifies nothing; it routes

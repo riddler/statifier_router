@@ -21,7 +21,8 @@ defmodule StatifierRouter.Webhook do
       event (ADR-0003, section 8);
     * `:source` - the source the bindings name;
     * `:raw_body` - the request body exactly as it arrived, the bytes whose
-      signature was verified;
+      signature was verified; it may be left out when `:provider_id` is a
+      non-empty string (below);
     * `:data` - the adapter-normalized event, a string-keyed map;
     * `:provider_id` - the provider's own event id, or `nil`;
     * `:selector` - the source's selector, carried for the host's own front
@@ -29,9 +30,20 @@ defmodule StatifierRouter.Webhook do
       adapter's to read, and the router never reads it (ADR-0001,
       section 1); bindings are chosen by source alone.
 
-  Any other key is ignored. A request missing `:scope`, `:source`,
-  `:raw_body` or `:data`, or carrying one of the wrong type, is
+  Any other key is ignored. A request missing `:scope`, `:source` or
+  `:data`, or carrying any key of the wrong type, is
   `{:error, {:invalid_request, request}}` and nothing is routed.
+
+  `:raw_body` is required unless `:provider_id` is a non-empty string. A
+  front that hands over an id of its own as `:provider_id` - the id of a
+  row in which it stored the post, say - has no bytes to hash and may
+  leave `:raw_body` out; the provider id is then the message id. A request
+  with neither a binary `:raw_body` nor a non-empty string `:provider_id`
+  is `{:error, {:invalid_request, request}}`. Only the absent key counts
+  as no body: `raw_body: nil`, or any other non-binary value, is the wrong
+  type and is refused whatever `:provider_id` says, so a request that
+  carries `:raw_body` is answered exactly as before the key became
+  optional.
 
   ## The message id
 
@@ -45,7 +57,8 @@ defmodule StatifierRouter.Webhook do
 
   A provider that sends no event id therefore gets one delivery per
   distinct body, and its retry of the same body is the same message. There
-  is no third source: `:raw_body` is required, so an id is always derivable,
+  is no third source: a request must carry a non-empty string
+  `:provider_id` or a binary `:raw_body`, so an id is always derivable,
   and the SHA-256 of an empty body is a well-defined, constant id rather
   than a failure.
 
@@ -73,7 +86,7 @@ defmodule StatifierRouter.Webhook do
   @type request :: %{
           required(:scope) => String.t(),
           required(:source) => String.t(),
-          required(:raw_body) => binary(),
+          optional(:raw_body) => binary(),
           required(:data) => map(),
           optional(:provider_id) => String.t() | nil,
           optional(:selector) => map(),
@@ -128,18 +141,31 @@ defmodule StatifierRouter.Webhook do
   def status({:ok, outcomes}) when is_list(outcomes), do: 200
   def status({:error, _reason}), do: 500
 
-  defp source_event(%{scope: scope, source: source, raw_body: raw_body, data: data} = request)
-       when is_binary(scope) and is_binary(source) and is_binary(raw_body) and is_map(data) do
-    {:ok,
-     %{
-       scope: scope,
-       message_id: message_id(Map.get(request, :provider_id), raw_body),
-       source: source,
-       data: data
-     }}
+  defp source_event(%{scope: scope, source: source, data: data} = request)
+       when is_binary(scope) and is_binary(source) and is_map(data) do
+    case message_id(request) do
+      {:ok, message_id} ->
+        {:ok, %{scope: scope, message_id: message_id, source: source, data: data}}
+
+      :error ->
+        {:error, {:invalid_request, request}}
+    end
   end
 
   defp source_event(request), do: {:error, {:invalid_request, request}}
+
+  # A request carrying :raw_body is answered as it was when the key was
+  # required: a binary body takes the rule below, anything else is refused.
+  # Only a request without the key may name its message by provider id alone.
+  defp message_id(%{raw_body: raw_body} = request) when is_binary(raw_body),
+    do: {:ok, message_id(Map.get(request, :provider_id), raw_body)}
+
+  defp message_id(%{raw_body: _not_binary}), do: :error
+
+  defp message_id(%{provider_id: provider_id}) when is_binary(provider_id) and provider_id != "",
+    do: {:ok, provider_id}
+
+  defp message_id(_no_id), do: :error
 
   defp message_id(provider_id, _raw_body) when is_binary(provider_id) and provider_id != "",
     do: provider_id
