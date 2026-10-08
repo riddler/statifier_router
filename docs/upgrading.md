@@ -1,22 +1,22 @@
-# Upgrading a host from 0.6 to 0.11
+# Upgrading a host from 0.6 to 0.12
 
 This page says what a host changes to move `statifier_router` from 0.6.0 to
-0.11.2, one minor at a time: 0.6 to 0.7, 0.7 to 0.8, 0.8 to 0.9, 0.9 to
-0.10 and 0.10 to 0.11. A host here is the code that embeds the package: the
-`StatifierRouter.Config` it builds, the migrations it runs, the bindings it
-routes with, the reapers it schedules, and any front, wrapper or send
-processor of its own. What each release added is in the
+0.12.0, one minor at a time: 0.6 to 0.7, 0.7 to 0.8, 0.8 to 0.9, 0.9 to
+0.10, 0.10 to 0.11 and 0.11 to 0.12. A host here is the code that embeds
+the package: the `StatifierRouter.Config` it builds, the migrations it runs,
+the bindings it routes with, the reapers it schedules, and any front,
+wrapper or send processor of its own. What each release added is in the
 [changelog](https://github.com/riddler/statifier_router/blob/main/CHANGELOG.md);
 this page lists only what a host has to do about it, and says **NONE** where
 the answer is nothing.
 
 Take the minors in order, and move the pin with each one, as the README's
 Compatibility section recommends: `{:statifier_router, "~> 0.7.0"}`, then
-`"~> 0.8.0"`, then `"~> 0.9.0"`, then `"~> 0.10.0"`, then `"~> 0.11.0"`. A
-patch release rides its minor's pin, so each section below covers the
-patches of the minor it moves to. The `statifier` requirement is `~> 2.9`
-through 0.8 and `~> 2.10` from 0.9 on; the `statifier_persistence`
-requirement stays `~> 0.18` on every step.
+`"~> 0.8.0"`, then `"~> 0.9.0"`, then `"~> 0.10.0"`, then `"~> 0.11.0"`,
+then `"~> 0.12.0"`. A patch release rides its minor's pin, so each section
+below covers the patches of the minor it moves to. The `statifier`
+requirement is `~> 2.9` through 0.8 and `~> 2.10` from 0.9 on; the
+`statifier_persistence` requirement stays `~> 0.18` on every step.
 
 A host on 0.6.0 has run migration versions V01 and V02. One release in this
 range adds a version to the walk, 0.8.0 (V03), and one adds a table outside
@@ -145,8 +145,9 @@ May start doing:
 
 ## 0.10 to 0.11
 
-Must change: **NONE**. 0.11.1 and 0.11.2 change no code: 0.11.2 moves the
-README's long sections to pages of their own, this one among them.
+Must change: **NONE**. 0.11.1, 0.11.2 and 0.11.3 change no code: 0.11.2
+moves the README's long sections to pages of their own, this one among
+them, and 0.11.3 gives this page its section per minor.
 
 - **If your repo's adapter module wraps `Ecto.Adapters.SQLite3`**, take
   0.11.0 or later before you run V03: from 0.11.0 V03 does nothing on such a
@@ -168,6 +169,31 @@ May start doing:
   raises `ArgumentError` before anything is written.
   [How to give an execution an HTTP location](guides/how-to-give-an-execution-an-http-location.md),
   "Step 4. Send from a durable execution", shows the envelope.
+
+## 0.11 to 0.12
+
+Must change: **NONE**, unless this is you.
+
+- **If your front counts on `StatifierRouter.Webhook.handle/3` refusing a
+  request that has no `:raw_body`**, check for the body yourself: from
+  0.12.0 such a request routes when its `:provider_id` is a non-empty
+  string, where 0.11 answered `{:error, {:invalid_request, request}}`.
+
+A webhook request that carries `:raw_body` is answered exactly as on 0.11:
+a binary body is hashed when `:provider_id` is not a non-empty string, and
+`raw_body: nil`, or any other value that is not a binary, is still refused
+as `{:error, {:invalid_request, request}}`. No option, event or migration
+version is added.
+
+May start doing:
+
+- **If your front hands over an id of its own as `:provider_id`** (the id
+  of a row in which it stored the post, say) and passes the same id as
+  `:raw_body` because 0.11 required a body, leave `:raw_body` out. The
+  provider id was already the message id whenever it was a non-empty
+  string, so the message id, and every dedupe keyed on it, stays the same.
+  [How to take webhooks and form posts](guides/how-to-take-webhooks-and-form-posts.md),
+  "Step 1. Keep the raw body", says which version needs which.
 
 ## V03: the subscription index name
 

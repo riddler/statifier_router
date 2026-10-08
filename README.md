@@ -113,7 +113,7 @@ event reaches the execution the depot's scan created.
   - [How to resolve a document to its chart](docs/guides/how-to-resolve-a-document-to-its-chart.md): the resolver behaviour, the static resolver, and the chart an existing execution keeps.
   - [How to fit the router into an engine of your own](docs/guides/how-to-wrap-the-engine.md): the create and step hooks, the whole-delivery wrapper, execution ids, send types and a timer queue.
   - [How to fit the router's tables to a host](docs/guides/how-to-fit-the-router-tables-to-a-host.md): the reapers, a host column at a fixed position, and a primary key of the host's own.
-  - [Upgrading a host from 0.6 to 0.11](docs/upgrading.md): what a host changes for each minor, the V03 migration, and the opt-in location table.
+  - [Upgrading a host from 0.6 to 0.12](docs/upgrading.md): what a host changes for each minor, the V03 migration, and the opt-in location table.
 - Look up
   - [The configuration](https://hexdocs.pm/statifier_router/StatifierRouter.Config.html): every option, its default and how it is checked.
   - [The binding](https://hexdocs.pm/statifier_router/StatifierRouter.Binding.html): its fields, their defaults and the key rules.
