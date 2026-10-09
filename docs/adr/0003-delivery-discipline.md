@@ -1112,7 +1112,7 @@ PR 171 (`f0d24a1`, the ownership lists, which now name `:wrap_target`).
 
 ## Amendment (2026-10-08): a webhook request may leave out its raw body when it carries a non-empty provider id
 
-Status: proposed
+Status: accepted
 
 Section 6's bullet "A webhook's message id is the provider's" names two
 sources for a webhook's message id: the provider's event id when the
@@ -1162,3 +1162,103 @@ The dedupe key is unchanged too: it is the binding and the message id
 (section 6's first bullet), and a provider id carries no scope, so the
 same provider id under two scopes through one shared binding is one
 message whether or not the request carried a body.
+
+## Note (2026-10-09): the tests that pin the raw-body Amendment's table, and a stored row's id as the provider id
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. The Amendment of 2026-10-08 closes by naming
+three tests that "pin the table above row by row"; this Note gives the
+whole list, and points a front that hands over a stored row's id as the
+provider id at the guide step that already says where its dedupe starts.
+
+- **The tests, row by row.** Every one is in
+  `test/statifier_router/webhook_test.exs`. The ones the Amendment does
+  not name are "is the provider's event id when it sends a non-empty
+  one", "falls to the lowercase hex SHA-256 of the raw body when it does
+  not" and "refuses a request it cannot build an event from, and routes
+  nothing"; of these, "falls to the lowercase hex SHA-256 of the raw body
+  when it does not" is the only test that sends a binary body with no
+  `:provider_id` key.
+  - A binary `:raw_body` with a non-empty string `:provider_id`: "is the
+    provider's event id when it sends a non-empty one" and "a request
+    carrying a binary raw body is answered as before".
+  - A binary `:raw_body` with `:provider_id` absent, `nil`, `""` or not a
+    string: "falls to the lowercase hex SHA-256 of the raw body when it
+    does not" (`nil`, `""` and the key left out) and "a request carrying
+    a binary raw body is answered as before" (`nil`, `""` and an
+    integer).
+  - A `:raw_body` that is not a binary: "refuses a non-binary raw body,
+    and no body without a provider id", with a `nil` and an integer body,
+    each beside a non-empty string `:provider_id`, the one case in which
+    the relaxation could have changed the answer. No test sends a
+    non-binary body with any other `:provider_id`; that refusal is the
+    private `message_id/1`'s clause for a `:raw_body` that is not a
+    binary, which reads no provider id.
+  - No `:raw_body` key with a non-empty string `:provider_id`: "is the
+    provider id alone when the request carries no raw body".
+  - No `:raw_body` key with `:provider_id` absent, `nil`, `""` or not a
+    string: "refuses a non-binary raw body, and no body without a
+    provider id", and "refuses a request it cannot build an event from,
+    and routes nothing" with `nil`.
+- **A stored row's id as the provider id.** The Amendment's example of a
+  front that hands over an id of its own is "the id of a row in which it
+  stored a post". Such an id names the row, not the post: a second post
+  of the same submission, a provider's retry or a person's second click,
+  stored as a new row, carries a new id, and the router's dedupe on the
+  binding and the message id (section 6's first bullet;
+  `StatifierRouter.Dedupe.claim/4`) takes it for a new message. The guide
+  "How to take webhooks and form posts", in "Step 5. A form post you
+  store first", says so in its paragraph "Two dedupe layers, the host's
+  first": the host's unique index on the form's one-time token is the
+  first layer and the router's claim the second, so a front that passes
+  its stored row's id dedupes when it stores. That step landed in PR 182
+  (`a74f1f4`) and shipped in statifier_router 0.12.0 with the
+  Amendment's code.
+
+## Note (2026-10-09, sr-7rqa): the raw-body Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`; this flip was decided by the conductor
+under a standing consent, 2026-10-09. The `## Amendment (2026-10-08)` on
+a webhook request without its raw body is such a record: its `Status:`
+line moved from `proposed` to `accepted`. Its code landed in PR 181
+(`04606a9`, with `95fb4dd`, which scoped the module documentation's
+wrong-type sentence to the keys it checks before the merge) and shipped
+in statifier_router 0.12.0 (tag `v0.12.0`, at `cb83a13`, published on
+Hex 2026-10-08T09:28:14Z by the release workflow's run
+https://github.com/riddler/statifier_router/actions/runs/37756763701).
+The record's own status on line 3 was already `accepted` and was not
+touched, and the Note of 2026-10-09 above carries no status and does not
+flip.
+
+Every claim was re-verified by anchor at `cb83a13`, which is both the
+tag and `main` at the time of the flip. One later change touched a file
+the Amendment cites, and it changes no claim: PR 182 (`a74f1f4`), the
+guide's Step 5, which the Note of 2026-10-09 above cites. The
+Amendment's sentence that its three named tests pin the table row by
+row is completed by that Note's list.
+
+- The rule: `StatifierRouter.Webhook`'s private `message_id/2` answers
+  the provider id when it is a non-empty string and otherwise the
+  lowercase hex SHA-256 of the body, and has no third answer.
+- The body only when it is the source: the private `message_id/1`'s
+  clause for a request without `:raw_body` answers a non-empty string
+  `:provider_id`, and its last clause answers `:error`, which the private
+  `source_event/1` returns as `{:error, {:invalid_request, request}}`.
+- A request that carries the body: `message_id/1`'s first clause hands a
+  binary `:raw_body` to `message_id/2` whatever `:provider_id` holds, and
+  its second refuses any other `:raw_body`, `nil` included, before a
+  provider id is read.
+- The documentation: the `request` type marks `:raw_body` optional; the
+  module documentation's "The request" and "The message id" sections and
+  the guide's "Step 1. Keep the raw body" state the same rule, the guide
+  naming 0.12.0 as the version it starts in.
+- The dedupe key: `StatifierRouter.Dedupe.claim/4` claims on the
+  binding's id and the message id alone, so one provider id under two
+  scopes through one binding is one message.
+- The ruling: the relaxation was ruled by the operator, 2026-10-07, as
+  the Amendment says.
+- The tests: the ones the Note of 2026-10-09 above lists, in
+  `test/statifier_router/webhook_test.exs`.
