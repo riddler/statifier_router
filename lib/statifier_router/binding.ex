@@ -42,7 +42,7 @@ defmodule StatifierRouter.Binding do
 
   `match/2` and `key/2` evaluate the compiled programs over the normalized
   event, a string-keyed map bound in the predicator context as `event`, so
-  a program reads `event.kind` or `event.impression_id`.
+  a program reads `event.kind` or `event.parcel_id`.
 
     * `match/2` returns `true` only when the program evaluates to exactly
       `true`. `false` and `nil` return `false`, and `:undefined` returns
@@ -110,21 +110,21 @@ defmodule StatifierRouter.Binding do
 
       iex> {:ok, binding} =
       ...>   StatifierRouter.Binding.new(
-      ...>     id: "clicks_to_join",
-      ...>     source: "ad_events",
-      ...>     match: "event.kind == 'click'",
-      ...>     key: "event.impression_id",
-      ...>     document: "impression_click_join",
-      ...>     event: "click",
-      ...>     data: ["impression_id", "url"]
+      ...>     id: "carrier_scans_to_parcel",
+      ...>     source: "parcel_scans",
+      ...>     match: "event.kind == 'delivered'",
+      ...>     key: "event.parcel_id",
+      ...>     document: "parcel_delivery",
+      ...>     event: "parcel.delivered",
+      ...>     data: ["parcel_id", "signed_by"]
       ...>   )
-      iex> click = %{"kind" => "click", "impression_id" => "imp_7f3a"}
-      iex> StatifierRouter.Binding.match(binding, click)
+      iex> delivered = %{"kind" => "delivered", "parcel_id" => "1042771"}
+      iex> StatifierRouter.Binding.match(binding, delivered)
       true
-      iex> StatifierRouter.Binding.key(binding, click)
-      {:ok, "imp_7f3a"}
-      iex> StatifierRouter.Binding.project(binding, click)
-      %{"impression_id" => "imp_7f3a"}
+      iex> StatifierRouter.Binding.key(binding, delivered)
+      {:ok, "1042771"}
+      iex> StatifierRouter.Binding.project(binding, delivered)
+      %{"parcel_id" => "1042771"}
   """
 
   @enforce_keys [:id, :source, :match, :key, :document, :event, :compiled_match, :compiled_key]

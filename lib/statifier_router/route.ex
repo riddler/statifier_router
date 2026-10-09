@@ -6,8 +6,8 @@ defmodule StatifierRouter.Route do
   `StatifierRouter.SendHandler` hands the built event to the module
   registered for that name.
 
-      <send type="myapp:sink" target="joined_records" event="joined">
-        <param name="impression_id" expr="impression_id"/>
+      <send type="myapp:sink" target="carrier_pickup" event="pickup.requested">
+        <param name="parcel_id" expr="parcel_id"/>
       </send>
 
   ## A route is one-way
