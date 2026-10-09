@@ -1175,8 +1175,9 @@ provider id at the guide step that already says where its dedupe starts.
   `test/statifier_router/webhook_test.exs`. The ones the Amendment does
   not name are "is the provider's event id when it sends a non-empty
   one", "falls to the lowercase hex SHA-256 of the raw body when it does
-  not" and "refuses a request it cannot build an event from, and routes
-  nothing"; of these, "falls to the lowercase hex SHA-256 of the raw body
+  not", "two identical bodies are one delivery and one duplicate" and
+  "refuses a request it cannot build an event from, and routes nothing";
+  of these, "falls to the lowercase hex SHA-256 of the raw body
   when it does not" is the only test that sends a binary body with no
   `:provider_id` key.
   - A binary `:raw_body` with a non-empty string `:provider_id`: "is the
@@ -1184,9 +1185,11 @@ provider id at the guide step that already says where its dedupe starts.
     carrying a binary raw body is answered as before".
   - A binary `:raw_body` with `:provider_id` absent, `nil`, `""` or not a
     string: "falls to the lowercase hex SHA-256 of the raw body when it
-    does not" (`nil`, `""` and the key left out) and "a request carrying
-    a binary raw body is answered as before" (`nil`, `""` and an
-    integer).
+    does not" (`nil`, `""` and the key left out), "a request carrying a
+    binary raw body is answered as before" (`nil`, `""` and an integer),
+    and "two identical bodies are one delivery and one duplicate" (`nil`,
+    with the ledger's message ids the digests of the two bodies it
+    posts).
   - A `:raw_body` that is not a binary: "refuses a non-binary raw body,
     and no body without a provider id", with a `nil` and an integer body,
     each beside a non-empty string `:provider_id`, the one case in which
