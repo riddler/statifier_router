@@ -1167,19 +1167,29 @@ message whether or not the request carried a body.
 
 A Note, not an amendment: it decides nothing and changes no decision,
 amendment or Note above it. The Amendment of 2026-10-08 closes by naming
-three tests that "pin the table above row by row"; this Note gives the
-whole list, and points a front that hands over a stored row's id as the
-provider id at the guide step that already says where its dedupe starts.
+three tests that "pin the table above row by row"; this Note lists the
+tests that pin it by a rule, and points a front that hands over a stored
+row's id as the provider id at the guide step that already says where
+its dedupe starts.
 
-- **The tests, row by row.** Every one is in
-  `test/statifier_router/webhook_test.exs`. The ones the Amendment does
-  not name are "is the provider's event id when it sends a non-empty
-  one", "falls to the lowercase hex SHA-256 of the raw body when it does
-  not", "two identical bodies are one delivery and one duplicate" and
+- **The tests, row by row.** The rule: a test pins a row when it calls
+  `StatifierRouter.Webhook.handle/3` and asserts either the message id
+  that row names or the `{:error, {:invalid_request, request}}` it
+  names. The list below was drawn by reading every test under `test/`
+  that calls `handle/3`, and every test the rule picks is in
+  `test/statifier_router/webhook_test.exs`. Two tests that call
+  `handle/3` assert neither, so the rule leaves them out: "passes its
+  options through to route/3" in that file and "wraps
+  StatifierRouter.Webhook.handle/3, which routes through route/3" in
+  `test/statifier_router/around_delivery_test.exs`. The tests the rule
+  picks that the Amendment does not name are "is the provider's event id
+  when it sends a non-empty one", "falls to the lowercase hex SHA-256 of
+  the raw body when it does not", "two identical bodies are one delivery
+  and one duplicate", "does not read the request's selector" and
   "refuses a request it cannot build an event from, and routes nothing";
-  of these, "falls to the lowercase hex SHA-256 of the raw body
-  when it does not" is the only test that sends a binary body with no
-  `:provider_id` key.
+  among the tests the rule picks, "falls to the lowercase hex SHA-256 of
+  the raw body when it does not" is the only one that sends a binary body
+  with no `:provider_id` key.
   - A binary `:raw_body` with a non-empty string `:provider_id`: "is the
     provider's event id when it sends a non-empty one" and "a request
     carrying a binary raw body is answered as before".
@@ -1187,9 +1197,10 @@ provider id at the guide step that already says where its dedupe starts.
     string: "falls to the lowercase hex SHA-256 of the raw body when it
     does not" (`nil`, `""` and the key left out), "a request carrying a
     binary raw body is answered as before" (`nil`, `""` and an integer),
-    and "two identical bodies are one delivery and one duplicate" (`nil`,
+    "two identical bodies are one delivery and one duplicate" (`nil`,
     with the ledger's message ids the digests of the two bodies it
-    posts).
+    posts), and "does not read the request's selector" (`nil`, on a
+    request with a selector and on one without).
   - A `:raw_body` that is not a binary: "refuses a non-binary raw body,
     and no body without a provider id", with a `nil` and an integer body,
     each beside a non-empty string `:provider_id`, the one case in which
