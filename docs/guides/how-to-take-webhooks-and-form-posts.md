@@ -138,12 +138,12 @@ gets its own binding, through a `:bindings_resolver` (see
 that answers a binding `id` of the scope's own.
 
 **`status/1` is read for a browser, not for a provider's retry.** It answers
-`200` for every recorded outcome and `500` for an `{:error, _}`, nothing else.
-`200` is a redirect or a thank-you page; it says the post was recorded, not
-that an execution received it, since a duplicate, a drop, a refusal and a
-no-match are `200` too, and a host that tells the recipient more reads the
-outcomes in `answer` itself. `500` is an error page: the attempt did not
-settle, and the recipient may post again. The failed verification is the
+`200` for every `{:ok, outcomes}`, whatever the outcomes, and `500` for an
+`{:error, _}`, nothing else. `200` is a redirect or a thank-you page; it says
+the attempt settled, not that an execution received it, since a duplicate, a
+drop, a refusal and a no-match are `200` too, and a host that tells the
+recipient more reads the outcomes in `answer` itself. `500` is an error page:
+the attempt did not settle, and the recipient may post again. The failed verification is the
 host's own answer (`403` above), never a status from this package.
 
 ## Step 5. A form post you store first
@@ -243,8 +243,9 @@ the provider id still wins, so the message id is the same on both.
 runner retries it with its own backoff; what an earlier attempt wrote for a
 binding stays written, and the retry carries the same message id, so a
 binding that already took it answers `{:duplicate, binding_id}`. `200` is
-done: every recorded outcome, a duplicate, a drop, a refusal and a no-match
-included, is an answer a retry would not change.
+done: it is every `{:ok, outcomes}`, whatever the outcomes, and each of them,
+a duplicate, a drop, a refusal and a no-match included, is an answer a retry
+would not change.
 
 **The binding keys on the stored id, so one execution per submission.**
 

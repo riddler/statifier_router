@@ -10,9 +10,9 @@ defmodule StatifierRouter.Resolver.Static do
       iex> {:ok, machine} =
       ...>   Statifier.compile(~s(<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="done"><final id="done"/></scxml>))
       iex> {:ok, resolver} =
-      ...>   StatifierRouter.Resolver.Static.new(%{{"7c1e", "impression_click_join"} => machine})
-      iex> {"sha256:" <> _, ^machine} = resolver.("7c1e", "impression_click_join")
-      iex> resolver.("91ab", "impression_click_join")
+      ...>   StatifierRouter.Resolver.Static.new(%{{"7c1e", "parcel_delivery"} => machine})
+      iex> {"sha256:" <> _, ^machine} = resolver.("7c1e", "parcel_delivery")
+      iex> resolver.("91ab", "parcel_delivery")
       {:error, :not_found}
 
   The resolver answers `{content_hash, machine}` for a pair in the map, the

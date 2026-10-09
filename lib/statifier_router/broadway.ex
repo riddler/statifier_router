@@ -141,16 +141,16 @@ defmodule StatifierRouter.Broadway do
   `:normalize` of the host's own.
 
       iex> message = %Broadway.Message{
-      ...>   data: %{"kind" => "click", "impression_id" => "imp_7f3a"},
-      ...>   metadata: %{scope: "7c1e", message_id: "ad_events/3/1107", source: "ad_events"},
+      ...>   data: %{"kind" => "scan", "parcel_id" => "1042771"},
+      ...>   metadata: %{scope: "7c1e", message_id: "depot_scanners/3/1107", source: "depot_scanners"},
       ...>   acknowledger: Broadway.NoopAcknowledger.init()
       ...> }
       iex> StatifierRouter.Broadway.normalize(message)
       %{
         scope: "7c1e",
-        message_id: "ad_events/3/1107",
-        source: "ad_events",
-        data: %{"kind" => "click", "impression_id" => "imp_7f3a"}
+        message_id: "depot_scanners/3/1107",
+        source: "depot_scanners",
+        data: %{"kind" => "scan", "parcel_id" => "1042771"}
       }
   """
   @spec normalize(Message.t()) :: map()
