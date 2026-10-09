@@ -1236,10 +1236,12 @@ The record's own status on line 3 was already `accepted` and was not
 touched, and the Note of 2026-10-09 above carries no status and does not
 flip.
 
-Every claim was re-verified by anchor at `cb83a13`, which is both the
-tag and `main` at the time of the flip. One later change touched a file
-the Amendment cites, and it changes no claim: PR 182 (`a74f1f4`), the
-guide's Step 5, which the Note of 2026-10-09 above cites. The
+Every claim was re-verified by anchor at `cb83a13`, the `v0.12.0` tag.
+Later changes touched a file the Amendment cites, and neither changes a
+claim: PR 182 (`a74f1f4`), the guide's Step 5, which the Note of
+2026-10-09 above cites, and PR 186 (`a4ccc3f`), the guide's `status/1`
+sentences in Steps 4 and 5. No code or test the Amendment cites has
+changed since `cb83a13`. The
 Amendment's sentence that its three named tests pin the table row by
 row is completed by that Note's list.
 
