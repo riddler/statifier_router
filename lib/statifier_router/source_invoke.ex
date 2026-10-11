@@ -11,7 +11,7 @@ defmodule StatifierRouter.SourceInvoke do
   nothing else (ADR-0007, section 1):
 
       <invoke type="myapp:source">
-        <param name="binding" expr="'clicks_to_join'"/>
+        <param name="binding" expr="'carrier_scans_to_parcel'"/>
       </invoke>
 
   The `type` is the host's own string, registered in the
