@@ -1331,3 +1331,36 @@ the list, was decided by the conductor under a standing consent,
   2026-10-04 supersedes, and is superseded with it: that Amendment
   decides it, opt-in, under `:wrap_target`, and `around_target/3` makes
   the call. This Note does not touch the bullet's other sentences.
+
+## Note (2026-10-11, sr-pvem): the execution-target wrap flip Note's later changes, by a rule
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It corrects one paragraph of the Note of
+2026-10-04 (sr-4emm) that accepted the `## Amendment (2026-10-04)` on
+the execution target's delivery; the Amendment itself, and that Note's
+re-verification of it at `df7f009`, stand. Stating the rule that picks
+the later changes, rather than completing the list, was decided by the
+conductor under a standing consent, 2026-10-10.
+
+- **The later changes, by a rule.** The flip Note's paragraph "Later
+  changes touched files the Amendment cites, and none changes a claim"
+  names PR 163 (`285a64c`), ADR-0002's Amendment of 2026-10-04 and PR
+  171 (`f0d24a1`), and reads as the whole list. It is not: it leaves out
+  later commits that changed only documentation, among them `1adfe77`,
+  which reworded the `StatifierRouter` and `StatifierRouter.Broadway`
+  moduledocs. The list is superseded by a rule: the later changes are
+  the commits on `main` after the Amendment's code (PR 161, whose last
+  commit is `5829841`) and up to and including the flip SHA
+  (`df7f009`), the ones `git log 5829841..df7f009` lists. None of them
+  changes a claim, and what shows it is the flip Note's own
+  re-verification of every claim at `df7f009`, which carries them all,
+  not the list.
+- **Where the `:route` door's enclosure is stated.** ADR-0002's flip
+  Note of 2026-10-04 (sr-4emm), for its decision 4, names only the front
+  and `StatifierRouter.Config.around_target/3` as the calls of
+  `StatifierRouter.Config.around_delivery/4` around `deliver_event/4`.
+  This record's Amendment of 2026-10-04 already says more in its
+  per-shape table: a send to the execution target from a step a binding's
+  delivery through `route/3` drove is delivered inside the sender's
+  `:route` call. ADR-0002's Note of 2026-10-11 (sr-pvem) narrows that
+  bullet to match.
