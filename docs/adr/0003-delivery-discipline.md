@@ -1364,3 +1364,33 @@ conductor under a standing consent, 2026-10-10.
   delivery through `route/3` drove is delivered inside the sender's
   `:route` call. ADR-0002's Note of 2026-10-11 (sr-pvem) narrows that
   bullet to match.
+
+## Note (2026-10-11, sr-kssy): the guide's dedupe paragraph, quoted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It corrects one phrase of the Note of
+2026-10-09 on the tests that pin the raw-body Amendment's table; that
+Note's account of the two dedupe layers, and the rest of its bullet "A
+stored row's id as the provider id", stand. Quoting the guide here,
+rather than adding a sentence to the guide, was decided by the conductor
+under a standing consent, 2026-10-10. Every anchor below was read at
+`8ba713b`.
+
+- **The phrase corrected.** The Note of 2026-10-09 says a second post of
+  the same submission is "a provider's retry or a person's second
+  click", and cites the guide's paragraph "Two dedupe layers, the host's
+  first" for it. The paragraph, in "Step 5. A form post you store first"
+  of "How to take webhooks and form posts", opens: "A browser's or a
+  person's second post of the same form is a second request to the
+  controller, and stored without a key of the host's it would be a new
+  row with a new id, a new message and a new execution." It names a
+  browser's or a person's second post and no provider's retry; the
+  phrase is to be read as the guide's words. The paragraph's text is the
+  same at PR 182 (`a74f1f4`), where it landed.
+- **Where a provider's retry is covered.** The guide speaks of a
+  provider's retry in "Step 2. Write the webhook action": the message id
+  is the provider's event id when it sends a non-empty one, and
+  otherwise the lowercase hex SHA-256 of the raw body, "so a provider's
+  retry of the same body is the same message". That is the webhook
+  front, which hands over the provider's own id or the body, not a
+  stored row's id.
