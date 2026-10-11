@@ -1,22 +1,22 @@
-# Upgrading a host from 0.6 to 0.12
+# Upgrading a host from 0.6 to 0.13
 
 This page says what a host changes to move `statifier_router` from 0.6.0 to
-0.12.0, one minor at a time: 0.6 to 0.7, 0.7 to 0.8, 0.8 to 0.9, 0.9 to
-0.10, 0.10 to 0.11 and 0.11 to 0.12. A host here is the code that embeds
-the package: the `StatifierRouter.Config` it builds, the migrations it runs,
-the bindings it routes with, the reapers it schedules, and any front,
-wrapper or send processor of its own. What each release added is in the
-[changelog](https://github.com/riddler/statifier_router/blob/main/CHANGELOG.md);
+0.13.0, one minor at a time: 0.6 to 0.7, 0.7 to 0.8, 0.8 to 0.9, 0.9 to
+0.10, 0.10 to 0.11, 0.11 to 0.12 and 0.12 to 0.13. A host here is the code
+that embeds the package: the `StatifierRouter.Config` it builds, the
+migrations it runs, the bindings it routes with, the reapers it schedules,
+and any front, wrapper or send processor of its own. What each release
+added is in the [changelog](https://github.com/riddler/statifier_router/blob/main/CHANGELOG.md);
 this page lists only what a host has to do about it, and says **NONE** where
 the answer is nothing.
 
 Take the minors in order, and move the pin with each one, as the README's
 Compatibility section recommends: `{:statifier_router, "~> 0.7.0"}`, then
 `"~> 0.8.0"`, then `"~> 0.9.0"`, then `"~> 0.10.0"`, then `"~> 0.11.0"`,
-then `"~> 0.12.0"`. A patch release rides its minor's pin, so each section
-below covers the patches of the minor it moves to. The `statifier`
-requirement is `~> 2.9` through 0.8 and `~> 2.10` from 0.9 on; the
-`statifier_persistence` requirement stays `~> 0.18` on every step.
+then `"~> 0.12.0"`, then `"~> 0.13.0"`. A patch release rides its minor's
+pin, so each section below covers the patches of the minor it moves to. The
+`statifier` requirement is `~> 2.9` through 0.8 and `~> 2.10` from 0.9 on;
+the `statifier_persistence` requirement stays `~> 0.18` on every step.
 
 A host on 0.6.0 has run migration versions V01 and V02. One release in this
 range adds a version to the walk, 0.8.0 (V03), and one adds a table outside
@@ -202,6 +202,54 @@ May start doing:
   string, so the message id, and every dedupe keyed on it, stays the same.
   [How to take webhooks and form posts](guides/how-to-take-webhooks-and-form-posts.md),
   "Step 1. Keep the raw body", says which version needs which.
+
+## 0.12 to 0.13
+
+Must change: **NONE**, unless this is you.
+
+- **If a route of yours steps an execution through
+  `StatifierRouter.Delivery.deliver_event/4` and then, later in the same
+  route, calls `StatifierRouter.route/3`, `StatifierRouter.Delivery.deliver/4`
+  or `StatifierRouter.BasicHTTP.Front.handle/3` in-process**, that later
+  call is refused from 0.13.0 as `{:error, {:reentrant_route, execution_id}}`,
+  as it already was before the nested step. 0.12 let it through, stepping
+  the sending execution from a position not yet written. Hand the event off
+  durably, as a route must (`StatifierRouter.SendHandler`, "What a route may
+  not do from the executor seam"). In the same place
+  `StatifierRouter.SendHandler.sending_execution/0` now reads the sending
+  execution, where 0.12 read `nil`.
+
+The `statifier` requirement stays `~> 2.10`, and
+`StatifierRouter.BasicHTTP.rotate_location/2` answers as before. No
+configuration option, event or migration version is added.
+
+Two answers that shipped in 0.11.0 are named in 0.13.0, and neither changes
+on this step:
+
+- An envelope handed to `StatifierRouter.Delivery.deliver_event/4` that
+  carries `:run_in_scope` with any value other than `true` or `false`, `nil`
+  included, raises `ArgumentError` before anything is opened or written.
+  Leave the key out, or pass a boolean.
+- With `run_in_scope: true`, a delivery that ends the execution resolves the
+  configuration's `:on_complete` route in the envelope's `:scope` too, so a
+  completion route that a scope in `:route_overrides` overrides is reached.
+  Without the key, and with no scope in reach, that route is refused and the
+  delivery answers `{:error, {:on_complete, name, {:no_delivery_scope, name}}}`
+  with every write it made rolled back.
+
+May start doing:
+
+- **If you rotate an execution's location while you hold the
+  `Statifier.Session` running it**, call
+  `StatifierRouter.BasicHTTP.rotate_location/3` with `session:` naming that
+  session. The token moves first, then the session is re-stamped, so its
+  chart reads the new location from the next event it processes. It answers
+  `{:ok, location}`, `{:error, {:no_address, execution_id}}` as before, or
+  `{:error, {:session_not_restamped, location, reason}}` when the token moved
+  and the session refused; `reason` is `:replace_send_type_unavailable` on a
+  statifier before 2.13.0. A durable execution's stored entry is not reached.
+  [How to give an execution an HTTP location](guides/how-to-give-an-execution-an-http-location.md),
+  "Step 2. Set `:basichttp` on the configuration", gives both shapes.
 
 ## V03: the subscription index name
 
