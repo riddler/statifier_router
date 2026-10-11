@@ -206,6 +206,18 @@ The suite reaches a real Postgres server through the `PG*` env vars
 The gate is deliberately smaller than statifier-ex's; `.quality.exs` records
 why.
 
+The Postgres test database is per checkout. Unless `PGDATABASE` is set,
+`config/test.exs` names it `statifier_router_test_<dir>_<hash>`: `<dir>`
+is the checkout directory's name (sanitized, at most 16 characters),
+`<hash>` hashes the checkout's full path, and `_p<n>` is appended when
+`mix test --partitions` sets `MIX_TEST_PARTITION`. The main checkout and
+each worktree therefore run the suite against their own database, created
+on first run by `test/test_helper.exs`, and can run it at the same time.
+Never point two checkouts at one database by exporting the same
+`PGDATABASE` in both; CI sets `PGDATABASE` itself. A removed checkout's
+database stays on the server until it is dropped by hand (`dropdb
+<name>`), and so does the old shared `statifier_router_test`.
+
 <!-- usage-rules-start -->
 ## ExQuality (`mix quality`)
 
