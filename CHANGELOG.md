@@ -6,9 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for unreleased work are not written here directly. Each issue drops a
-fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.12.0/changelog.d/README.md); the fragments are assembled
+fragment in [`changelog.d/`](https://github.com/riddler/statifier_router/blob/v0.13.0/changelog.d/README.md); the fragments are assembled
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
+
+## [0.13.0] 2026-10-11
+
+Feature release: `StatifierRouter.BasicHTTP.rotate_location/3` rotates an execution's location and, with `session:` naming the host's running session, re-stamps that session so its chart reads the new location; `rotate_location/2` answers as before. A route that steps an execution through `StatifierRouter.Delivery.deliver_event/4` now keeps its route mark after that nested step, so a later in-process call into the router from the same route is refused as reentrant, as it was before the nested step. Two `run_in_scope` answers that shipped in 0.11.0 are named. No configuration option, event or migration version is added, and the statifier requirement stays `~> 2.10`; the re-stamp needs statifier 2.13.0 or later. The module docs' examples and doctests now use parcel delivery, the engine guide names the create and step hooks as the way a host on a backend that is not Postgres passes a serialization strategy, and the upgrading page gains a section for 0.12 to 0.13.
+
+### Added
+
+- `StatifierRouter.BasicHTTP.rotate_location/3` rotates a location as
+  `rotate_location/2` does and, with `session:` naming the host's running
+  `Statifier.Session`, re-stamps that session so its chart reads the new
+  location: it answers `{:ok, location}`, `{:error, {:no_address, id}}` as
+  before, or `{:error, {:session_not_restamped, location, reason}}` when the
+  token moved and the session refused, with `:replace_send_type_unavailable`
+  on a statifier before 2.13.0. The statifier requirement stays `~> 2.10`,
+  and `rotate_location/2` answers as before.
+
+### Changed
+
+- Names a change to `StatifierRouter.Delivery.deliver_event/4` that
+  shipped in 0.11.0 and that the 0.11.0 entry left unsaid: an envelope
+  that carries `:run_in_scope` with any value other than `true` or
+  `false`, `nil` included, raises `ArgumentError` before anything is
+  opened or written, where 0.10.0 ignored the key. Leave the key out, or
+  pass a boolean.
+- Names how far `run_in_scope: true` reaches, as it has since 0.11.0: a
+  delivery that ends the execution resolves the configuration's
+  `:on_complete` route in the envelope's `:scope` too, so a completion
+  route that a scope in `:route_overrides` overrides is reached. Without
+  the key, and with no scope in reach, that route is refused and the
+  delivery answers
+  `{:error, {:on_complete, name, {:no_delivery_scope, name}}}` with every
+  write it made rolled back.
+
+### Fixed
+
+- A route that calls `StatifierRouter.Delivery.deliver_event/4` keeps its
+  route mark after that nested step: `StatifierRouter.route/3` (and
+  `StatifierRouter.Delivery.deliver/4`) and
+  `StatifierRouter.BasicHTTP.Front.handle/3` called in-process from the
+  rest of that route are refused as
+  `{:error, {:reentrant_route, execution_id}}`, and
+  `StatifierRouter.SendHandler.sending_execution/0` reads the sending
+  execution there; the nested step's exit had cleared the mark, so they
+  were let through (stepping the sending execution from a position not
+  yet written) and `sending_execution/0` read `nil`.
 
 ## [0.12.0] 2026-10-08
 
