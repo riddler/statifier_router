@@ -61,6 +61,21 @@ defmodule StatifierRouter.DeliverEventScopeTest do
   </scxml>
   """
 
+  # The same parcel when a failed delivery ends its execution: the parcel
+  # is returned to the depot and nothing more happens to it, so the step
+  # that takes delivery.failed is the one the completion hook fires on.
+  @returned """
+  <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="at_depot">
+    <state id="at_depot">
+      <transition event="loaded" target="on_van"/>
+    </state>
+    <state id="on_van">
+      <transition event="delivery.failed" target="returned_to_depot"/>
+    </state>
+    <final id="returned_to_depot"/>
+  </scxml>
+  """
+
   # Each scope sends the recipient's notices to a sink of its own; the
   # depot's desk is overridden by no scope.
   @overrides %{
@@ -114,22 +129,31 @@ defmodule StatifierRouter.DeliverEventScopeTest do
   end
 
   # The host's configuration: the handler wired in as the executor, which
-  # reports each effect's answer, and the two routes.
-  defp notice_config(pid, depot_desk \\ :ok) do
-    {:ok, machine} = Statifier.compile(@notice)
+  # reports each effect's answer, and the two routes. `source` is the chart
+  # the document resolves to and `opts` adds options of its own.
+  #
+  # The chart resolver answers the chart unless the calling process holds
+  # a `:chart_answer`, which it answers in its place: `:error` makes the
+  # delivery answer `{:error, {:chart_not_resolved, hash}}`, and an answer
+  # outside the resolver's contract makes it raise `ArgumentError`.
+  defp notice_config(pid, depot_desk \\ :ok, source \\ @notice, opts \\ []) do
+    {:ok, machine} = Statifier.compile(source)
     content_hash = Machine.identity(machine).content_hash
 
     config =
-      config(pid,
-        bindings: parcel_bindings("parcel_notice"),
-        resolver: fn _scope, "parcel_notice" -> {content_hash, machine} end,
-        chart_resolver: fn ^content_hash -> {:ok, machine} end,
-        send_type: @type_string,
-        route_adapters: %{
-          "recipient_notices" => {RecordingRoute, %{pid: pid, sink: "recipient_notices"}},
-          "depot_desk" => {RecordingRoute, %{pid: pid, sink: "depot_desk", answer: depot_desk}}
-        },
-        route_overrides: @overrides
+      config(
+        pid,
+        [
+          bindings: parcel_bindings("parcel_notice"),
+          resolver: fn _scope, "parcel_notice" -> {content_hash, machine} end,
+          chart_resolver: fn ^content_hash -> Process.get(:chart_answer, {:ok, machine}) end,
+          send_type: @type_string,
+          route_adapters: %{
+            "recipient_notices" => {RecordingRoute, %{pid: pid, sink: "recipient_notices"}},
+            "depot_desk" => {RecordingRoute, %{pid: pid, sink: "depot_desk", answer: depot_desk}}
+          },
+          route_overrides: @overrides
+        ] ++ opts
       )
 
     executor = fn effect, context ->
@@ -169,6 +193,25 @@ defmodule StatifierRouter.DeliverEventScopeTest do
       )
 
     Delivery.deliver_event(config, %{@plan | document: row.document}, row.key, envelope)
+  end
+
+  # A parcel in a90f and one in 7c1e, both on the van, and then the
+  # delivered scan of the one in 7c1e, whose step calls `depot_desk` at the
+  # executor seam before its send to the recipient's notices. Answers the
+  # parcel in 7c1e and what `StatifierRouter.route/3` answered.
+  defp nested_in_sending_step(pid, depot_desk) do
+    config = notice_config(pid, depot_desk)
+    Process.put(:host_config, config)
+
+    other = loaded(config, @other_scope, "parcel_scans/2/0001")
+    Process.put(:other_execution, other)
+    execution_id = loaded(config, @scope, "parcel_scans/1/0001")
+    flush()
+
+    answer =
+      StatifierRouter.route(config, parcel_scan("parcel_scans/1/0002", "delivered"), now: @now)
+
+    {execution_id, answer}
   end
 
   defp flush do
@@ -294,6 +337,59 @@ defmodule StatifierRouter.DeliverEventScopeTest do
       assert queries(statements(), self()) == Enum.take(@unscoped, 1)
       assert inputs(config, execution_id) == [{0, "step", "loaded"}]
     end
+
+    # An explicit nil is a value, not the key left out: since 0.11.0 it
+    # raises, where 0.10.0 ignored the key.
+    #
+    # sabotage: deliver_event/4 given a `nil` arm that settles as `false`
+    # does -> deliver_event/4 answered an outcome and no ArgumentError was
+    # raised, red; restored, green.
+    test "an explicit nil raises before anything is written" do
+      config = notice_config(self())
+      execution_id = loaded(config, @scope, "parcel_scans/1/0001")
+      flush()
+
+      assert_raise ArgumentError, ~r/run_in_scope must be a boolean, got: nil/, fn ->
+        failed(config, execution_id, %{run_in_scope: nil})
+      end
+
+      assert queries(statements(), self()) == Enum.take(@unscoped, 1)
+      assert inputs(config, execution_id) == [{0, "step", "loaded"}]
+    end
+
+    # A raise is the one way out a sending step does not survive: it takes
+    # the step's transaction with it (deliver_event/4's documentation, "This
+    # door takes a savepoint, and it does not roll back"). So this test
+    # sets the earlier scope outside any transaction, through the same call
+    # a binding's delivery sets its scope with, and reads the scope the
+    # process holds once the delivery has raised: the chart resolver
+    # answers outside its contract, and the earlier scope is back.
+    #
+    # sabotage: SendHandler's in_delivery_scope/2 made to put the earlier
+    # scope back only when fun returns (the restore moved out of `after`
+    # to follow the call) -> the process still held 7c1e after the raise,
+    # red; restored, green.
+    test "puts the earlier scope back when the delivery raises" do
+      config = notice_config(self())
+      execution_id = loaded(config, @scope, "parcel_scans/1/0001")
+      flush()
+
+      :ok = SendHandler.put_delivery_scope(@other_scope)
+      Process.put(:chart_answer, :not_a_chart)
+
+      try do
+        assert_raise ArgumentError, ~r/the chart resolver answered :not_a_chart/, fn ->
+          failed(config, execution_id, %{run_in_scope: true})
+        end
+
+        assert Process.get({SendHandler, :delivery_scope}) == @other_scope
+      after
+        Process.delete(:chart_answer)
+        SendHandler.delete_delivery_scope()
+      end
+
+      refute_received {:routed, _route_config, _event, _key}
+    end
   end
 
   describe "a host's deliver_event/4 inside a sending step" do
@@ -341,6 +437,82 @@ defmodule StatifierRouter.DeliverEventScopeTest do
 
       assert_received {:routed, %{sink: "notices_7c1e"}, %{name: "parcel.delivered"},
                        {^execution_id, _position, _ordinal}}
+    end
+
+    # The nested delivery answers an error instead: the chart resolver
+    # answers :error for the parcel in a90f. The outer step's next send
+    # still resolves in 7c1e.
+    #
+    # sabotage: SendHandler's in_delivery_scope/2 made to put the earlier
+    # scope back only when fun's answer is not an {:error, _} (an error
+    # answer left the envelope's scope set) -> the outer step's second
+    # send resolved in a90f and was routed to notices_a90f, red; restored,
+    # green.
+    test "puts the sending step's scope back when the nested delivery answers an error" do
+      pid = self()
+
+      depot_desk = fn ->
+        config = Process.get(:host_config)
+        other = Process.get(:other_execution)
+        Process.put(:chart_answer, :error)
+        send(pid, {:nested, failed(config, other, %{run_in_scope: true})})
+        Process.delete(:chart_answer)
+        :ok
+      end
+
+      {execution_id, answer} = nested_in_sending_step(pid, depot_desk)
+
+      assert {:ok, [_loaded, {:delivered, "delivered_scans", ^execution_id}]} = answer
+      assert_received {:nested, {:error, {:chart_not_resolved, _content_hash}}}
+
+      refute_received {:routed, %{sink: "notices_a90f"}, _event, _key}
+
+      assert_received {:routed, %{sink: "notices_7c1e"}, %{name: "parcel.delivered"},
+                       {^execution_id, _position, _ordinal}}
+    end
+  end
+
+  describe "a host's deliver_event/4 that finishes the execution" do
+    # ADR-0002's Note of 2026-10-11 on the Amendment of 2026-10-04: with
+    # the key set, the completion hook the finishing step fires resolves
+    # its route in the envelope's scope too, as the step's sends do.
+    #
+    # sabotage: deliver_event/4's `true` arm made to settle without
+    # SendHandler.in_delivery_scope/2 (the key read as false) -> the
+    # delivery answered {:error, {:on_complete, "recipient_notices",
+    # {:no_delivery_scope, "recipient_notices"}}}, red; restored, green.
+    test "with run_in_scope: true, the completion hook resolves its route in the envelope's scope" do
+      config = notice_config(self(), :ok, @returned, on_complete: "recipient_notices")
+      execution_id = loaded(config, @scope, "parcel_scans/1/0001")
+      flush()
+
+      assert failed(config, execution_id, %{run_in_scope: true}) ==
+               {:delivered, "delivery_failure", execution_id}
+
+      assert_received {:routed, %{sink: "notices_7c1e"}, %{name: "done.execution"},
+                       {^execution_id, _position, nil}}
+
+      refute_received {:routed, _route_config, _event, _key}
+      assert Process.get({SendHandler, :delivery_scope}) == nil
+    end
+
+    # sabotage: deliver_event/4's `false` arm made to settle inside
+    # SendHandler.in_delivery_scope/2 (the key read as true) -> the hook
+    # resolved its route in 7c1e and the delivery answered an outcome,
+    # red; restored, green.
+    test "without the key, the completion hook's overridden route is refused" do
+      config = notice_config(self(), :ok, @returned, on_complete: "recipient_notices")
+      execution_id = loaded(config, @scope, "parcel_scans/1/0001")
+      flush()
+
+      assert failed(config, execution_id, %{}) ==
+               {:error,
+                {:on_complete, "recipient_notices", {:no_delivery_scope, "recipient_notices"}}}
+
+      refute_received {:routed, _route_config, _event, _key}
+
+      # The refusal rolled the delivery back: the step is not on the log.
+      assert inputs(config, execution_id) == [{0, "step", "loaded"}]
     end
   end
 
