@@ -79,6 +79,32 @@ defmodule StatifierRouter.AdapterTest do
       refute Adapter.postgres?(WrappedPostgresRepo)
     end
 
+    # The wrapped repos are not started here. sqlite?/1 asks a running repo
+    # which connection writes its SQL only for an adapter module that is
+    # neither stock one, so that question needs the repo started and raises
+    # Ecto's own error without it; postgres?/1 reads the module alone and
+    # answers either way.
+    #
+    # sabotage: made the clause for any other adapter module answer false
+    # without asking the repo -> red, no error was raised; restored, green.
+    # sabotage: made postgres?/1 read StatifierRouter.WrappedPostgres as
+    # Postgres -> red, the wrapped Postgres repo read true; restored, green.
+    test "needs a started repo for an adapter module that is not a stock one" do
+      refute Process.whereis(WrappedSQLiteRepo)
+      refute Process.whereis(WrappedPostgresRepo)
+
+      assert_raise RuntimeError, ~r/because it was not started/, fn ->
+        Adapter.sqlite?(WrappedSQLiteRepo)
+      end
+
+      assert_raise RuntimeError, ~r/because it was not started/, fn ->
+        Adapter.sqlite?(WrappedPostgresRepo)
+      end
+
+      refute Adapter.postgres?(WrappedSQLiteRepo)
+      refute Adapter.postgres?(WrappedPostgresRepo)
+    end
+
     # sabotage: made the clause for a repo naming no adapter answer true
     # -> red, the assertion read true; restored, green.
     test "is false for a repo module that exports no __adapter__/0" do
