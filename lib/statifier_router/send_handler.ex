@@ -1072,11 +1072,23 @@ defmodule StatifierRouter.SendHandler do
   @spec override_scope() :: String.t() | nil
   defp override_scope, do: Process.get(@scope_key)
 
+  # Marks the route as running under `scope` for the length of `fun`, and
+  # puts back whatever mark the process held before on every way out: a
+  # step driven from inside a route (through
+  # `StatifierRouter.Delivery.deliver_event/4`) that sends again marks its
+  # own route and must leave the outer route's mark standing, or a later
+  # `StatifierRouter.route/3` from the outer route is let through.
   @spec in_route(String.t(), (-> result)) :: result when result: var
   defp in_route(scope, fun) do
-    Process.put(@in_route_key, scope)
-    fun.()
-  after
-    Process.delete(@in_route_key)
+    previous = Process.put(@in_route_key, scope)
+
+    try do
+      fun.()
+    after
+      restore_in_route(previous)
+    end
   end
+
+  defp restore_in_route(nil), do: Process.delete(@in_route_key)
+  defp restore_in_route(scope), do: Process.put(@in_route_key, scope)
 end
