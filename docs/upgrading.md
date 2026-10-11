@@ -23,6 +23,16 @@ range adds a version to the walk, 0.8.0 (V03), and one adds a table outside
 it, 0.9.0 (V04, opt-in); the last two sections of this page give both
 migrations in full.
 
+If you schedule `StatifierRouter.Addresses.reap/3`, check, whichever step
+you take, that your sweep pages through the table. One call examines at most
+`:limit` rows (1000 by default) and answers a `next` cursor, and a sweep
+calls again with `after: next` until `next` is `nil`. A host that never
+passes `after:` examines the first `:limit` rows each time and frees nothing
+behind them. The cursor works this way on every release this page covers
+(`StatifierRouter.Addresses`, "Its cost is bounded";
+[How to fit the router's tables to a host](guides/how-to-fit-the-router-tables-to-a-host.md),
+"Step 1. Schedule the reapers").
+
 ## 0.6 to 0.7
 
 Must change: **NONE**, unless one of these is you.
@@ -55,6 +65,9 @@ May start doing:
   "Step 4. Declare the send types the host serves", shows the option.
 
 ## 0.7 to 0.8
+
+Must change: **add the V03 migration**; the rest only if one of these is
+you.
 
 - **Add the V03 migration.** A host that has already run V02 adds one
   migration calling `StatifierRouter.Migrations.up(from: 3)`, with
@@ -94,11 +107,12 @@ May start doing:
 
 ## 0.8 to 0.9
 
-- **Move `statifier` to 2.10 or later first.** 0.9.0 requires
-  `{:statifier, "~> 2.10"}`, whether or not you set `:basichttp`.
-- **NONE else for a host that does not set `:basichttp`.** No version is
-  added to the walk, and `StatifierRouter.Migrations.up/1` and `down/1`
-  behave as before.
+Must change: **move `statifier` to 2.10 or later first**, since 0.9.0
+requires `{:statifier, "~> 2.10"}` whether or not you set `:basichttp`;
+beyond that **NONE**, unless this is you. For a host that does not set
+`:basichttp`, no version is added to the walk, and
+`StatifierRouter.Migrations.up/1` and `down/1` behave as before.
+
 - **If you run on SQLite**, take 0.9.2: on 0.9.1 V03 does nothing on
   SQLite, and on 0.9.2 `StatifierRouter.Addresses.reap/3` runs on SQLite,
   writing more than 500 rows in batches of 500, one statement each. A
@@ -124,14 +138,8 @@ Must change: **NONE**.
   execution's persisted state: never run a production repo at `:debug`.
 - **If you schedule `StatifierRouter.Addresses.reap/3`**, nothing changes:
   on Postgres each batch is one array statement again, with the same
-  counts. Check while you are there that your sweep pages through the
-  table: one call examines at most `:limit` rows (1000 by default) and
-  answers a `next` cursor, and a sweep calls again with `after: next` until
-  `next` is `nil`. A host that never passes `after:` examines the first
-  `:limit` rows each time and frees nothing behind them
-  (`StatifierRouter.Addresses`, "Its cost is bounded";
-  [How to fit the router's tables to a host](guides/how-to-fit-the-router-tables-to-a-host.md),
-  "Step 1. Schedule the reapers").
+  counts. The sweep's cursor is unchanged too; the paging advice at the
+  top of this page applies on every step.
 
 May start doing:
 
