@@ -8,6 +8,7 @@ defmodule StatifierRouter.AroundDeliveryTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
   import StatifierRouter.DeliveryFixtures
 
   alias Broadway.Message
@@ -622,6 +623,76 @@ defmodule StatifierRouter.AroundDeliveryTest do
       seen = statements()
       assert queries(seen, processor) != []
       assert contexts(seen, processor) == ["7c1e"]
+
+      pipeline = Process.whereis(name)
+      monitor = Process.monitor(pipeline)
+      Process.exit(pipeline, :normal)
+      assert_receive {:DOWN, ^monitor, _, _, _}, 5_000
+    end
+
+    # sabotage: StatifierRouter.Broadway's bindings_for/2 caught the exit
+    # and answered {:error, :exit} -> the message was partitioned by its
+    # message id, routed and acknowledged, and the producer stayed up,
+    # red; restored, green. Second mutation: Config.around_delivery/4
+    # raised ArgumentError for a wrapper's exit -> the partitioner rescued
+    # it and the producer stayed up, red; restored, green.
+    test "a wrapper that exits under :partition takes the producer down with the message it holds" do
+      me = self()
+
+      wrapper = fn scope, door, work ->
+        send(me, {:wrapped, self(), scope, door})
+
+        case door do
+          :partition -> exit(:no_context_for_scope)
+          _door -> work.()
+        end
+      end
+
+      config =
+        config(me, bindings_resolver: reporting_resolver(me), around_delivery: wrapper)
+
+      name = :"#{__MODULE__}.#{System.unique_integer([:positive])}"
+
+      {:ok, _pid} =
+        StatifierRouter.Broadway.start_link(
+          name: name,
+          producer: {Broadway.DummyProducer, []},
+          router: config
+        )
+
+      producer = name |> Broadway.producer_names() |> hd() |> Process.whereis()
+      down = Process.monitor(producer)
+      scan = parcel_scan("parcel_scans/1/0001", "loaded")
+
+      # The push is a call to the producer. When the processor's demand is
+      # already there, the producer dispatches, and so partitions, inside
+      # that call, and the call exits with the producer's reason; when it
+      # is not, the call answers and the producer goes down on the
+      # dispatch that follows. Either way the producer goes down with the
+      # wrapper's reason.
+      log =
+        capture_log(fn ->
+          pushed =
+            try do
+              Broadway.test_message(name, scan.data,
+                metadata: Map.take(scan, [:scope, :message_id, :source])
+              )
+            catch
+              :exit, {reason, {GenServer, :call, _}} -> {:exited, reason}
+            end
+
+          assert match?({:exited, :no_context_for_scope}, pushed) or is_reference(pushed)
+          assert_receive {:DOWN, ^down, :process, ^producer, :no_context_for_scope}, 5_000
+          refute_receive {:ack, _ref, _successful, _failed}, 200
+        end)
+
+      assert log =~ "no_context_for_scope"
+
+      # The wrapper ran once, in the producer, and the processor never
+      # got the message: route/3 was not called and nothing was read.
+      assert wrapped() == [{producer, "7c1e", :partition}]
+      refute_received {:bindings_read, _, _}
+      assert executions() == 0
 
       pipeline = Process.whereis(name)
       monitor = Process.monitor(pipeline)
