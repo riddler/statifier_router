@@ -30,7 +30,19 @@ defmodule StatifierRouter.Adapter do
   end
 
   # Postgres by the stock adapter module alone: a repo on any other
-  # module, or on none, keeps the statements it sends today.
+  # module, or on none, keeps the statements it sends today. It reads the
+  # repo module only, so it answers for a repo that is not started.
+  #
+  # The two questions read a wrapped adapter differently on purpose. A
+  # repo whose adapter module wraps `Ecto.Adapters.Postgres` is not read
+  # as Postgres here, though its SQL is Postgres's. In
+  # `StatifierRouter.Addresses` it takes the statement form every adapter
+  # other than Postgres takes: an IN list of one bound parameter per id,
+  # in place of the one bound array. That form is correct on Postgres; it
+  # is slower, since a batch of a new length is a new statement for
+  # Postgres to prepare. It is not changed: reading the wrapped repo by
+  # its connection module, as `sqlite?/1` does, would change the
+  # statements such a host's repo is sent today.
   @doc false
   @spec postgres?(module()) :: boolean()
   def postgres?(repo), do: adapter(repo) == Ecto.Adapters.Postgres
@@ -38,7 +50,11 @@ defmodule StatifierRouter.Adapter do
   # SQLite by the stock adapter module, or, for an adapter module that is
   # neither stock module, by the stock SQLite connection writing the
   # running repo's SQL. That second reading asks the repo's registry
-  # entry, so it is for a started repo, as a migration's always is.
+  # entry, so it is for a started repo, as a migration's always is: for
+  # such a repo that is not started it raises Ecto's own error rather
+  # than answering. That precondition is kept, and a test pins it; the
+  # one caller is the V03 migration, whose repo is always started. A repo
+  # on either stock module, or on none, answers without a started repo.
   @doc false
   @spec sqlite?(module()) :: boolean()
   def sqlite?(repo) do
