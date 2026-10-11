@@ -12,6 +12,10 @@ defmodule StatifierRouter.BasicHTTP.Front do
   location only to the parties that should reach the execution, keep it
   out of logs, serve the base URL over TLS, and rotate it with
   `StatifierRouter.BasicHTTP.rotate_location/2` when it may have leaked.
+  A live session the host names is re-stamped with the new location by
+  `StatifierRouter.BasicHTTP.rotate_location/3` with `session:`; a durable
+  execution's stored `_ioprocessors` entry keeps the old location until the
+  host refreshes it.
 
   It is Plug-shaped, not a Plug, as `StatifierRouter.Webhook` is: it adds
   no dependency on Plug or Phoenix and starts no process. The host routes

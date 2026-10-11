@@ -54,10 +54,23 @@ execution id. The chart reads it at `_ioprocessors['basichttp']['location']`
 and can hand it to whoever should reach it; the host reads it with
 `StatifierRouter.BasicHTTP.location/2` and replaces it with
 `StatifierRouter.BasicHTTP.rotate_location/2`, after which the old location
-answers `404`. Rotation does not reach the chart's own copy, which statifier
-writes once when the execution starts: after a rotation the chart still reads
-the old location. An execution created under `:always_new` has no address row
-and no location.
+answers `404`. statifier writes the chart's own copy when the execution
+starts, so a rotation alone leaves the chart reading the old location. Two
+shapes follow:
+
+- A live session: pass the host's running `Statifier.Session` as `session:`
+  to `StatifierRouter.BasicHTTP.rotate_location/3`. The token moves first,
+  then the session is re-stamped under both type strings, and the chart reads
+  the new location from the next event it processes. It answers
+  `{:ok, location}`, or `{:error, {:session_not_restamped, location, reason}}`
+  when the token moved and the session refused; `reason` is
+  `:replace_send_type_unavailable` on a statifier before 2.13.0. A session
+  that is not alive, or that does not answer within 5 seconds, exits the
+  caller after the token has moved; `location/2` then reads the new location.
+- A durable execution's stored entry: the `_ioprocessors` it persisted when it
+  started keeps the old location until the host refreshes it.
+
+An execution created under `:always_new` has no address row and no location.
 
 Check it by routing a parcel's first scan and reading
 `StatifierRouter.BasicHTTP.location/2` for its execution: it answers

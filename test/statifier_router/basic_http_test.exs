@@ -5,6 +5,7 @@ defmodule StatifierRouter.BasicHTTPTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Statifier.Send.Types
+  alias Statifier.Session
   alias StatifierPersistence.Executions
   alias StatifierRouter.BasicHTTP
   alias StatifierRouter.BasicHTTP.Front
@@ -25,6 +26,22 @@ defmodule StatifierRouter.BasicHTTPTest do
 
   # A well-formed send key: eight `/`-separated fields.
   @send_key "sess_depot/scan_1/3/1/0/0/onentry.0.0/0"
+
+  # A session module that refuses the processor's short form after
+  # handing the URI's re-stamp to the engine: the partial re-stamp.
+  defmodule RefusesShortForm do
+    @moduledoc false
+    def replace_send_type(_session, "basichttp", _registration), do: {:error, :not_running}
+
+    def replace_send_type(session, type, registration),
+      do: Statifier.Session.replace_send_type(session, type, registration)
+  end
+
+  # A session module whose engine exports no replace_send_type/3.
+  defmodule NoReplaceSendType do
+    @moduledoc false
+    def refresh_ioprocessors(_session), do: :ok
+  end
 
   setup do
     :ok = Sandbox.checkout(TestRepo)
@@ -170,6 +187,197 @@ defmodule StatifierRouter.BasicHTTPTest do
 
       assert handle(config, post(token(location), "noted")) ==
                {:ok, {:delivered, "basichttp", execution_id}}
+    end
+  end
+
+  describe "rotation with a live session" do
+    # A live session over the parcel chart, registered as a create
+    # registers the processor: this module under each of `types`, the
+    # location's token among its options.
+    defp live_session(location, start_opts \\ [], types \\ BasicHTTP.type_strings()) do
+      registration = Config.basichttp_registration([base_url: @base_url], token(location))
+      send_types = Map.new(types, &{&1, registration})
+      {:ok, machine} = Map.fetch(machines(), "parcel_route")
+      {:ok, session} = Session.start_link(machine, [send_types: send_types] ++ start_opts)
+      session
+    end
+
+    defp ioprocessors(session), do: Session.snapshot(session).datamodel["_ioprocessors"]
+
+    # sabotage: rotate_location/4 made to answer {:ok, location} without
+    # calling restamp/5 -> both entries kept the old location, red;
+    # restored, green.
+    # sabotage: Config.basichttp_registration/2's token clause made to
+    # leave the token out -> the session's entries carried no location,
+    # red; restored, green.
+    test "re-stamps the session's entry under both type strings" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+      assert ioprocessors(session)[@uri] == %{"location" => old}
+
+      assert {:ok, new} = BasicHTTP.rotate_location(config, execution_id, session: session)
+      assert new != old
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+      assert ioprocessors(session)[@uri] == %{"location" => new}
+      assert ioprocessors(session)["basichttp"] == %{"location" => new}
+    end
+
+    # sabotage: the no-session branch of rotate_location/4 made to answer
+    # {:error, {:no_address, execution_id}} -> no match, red; restored,
+    # green.
+    test "with no options answers as rotate_location/2 and asks no session" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+
+      assert {:ok, new} = BasicHTTP.rotate_location(config, execution_id, [])
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+      assert {:ok, newer} = BasicHTTP.rotate_location(config, execution_id)
+      assert BasicHTTP.location(config, execution_id) == {:ok, newer}
+      assert ioprocessors(session)[@uri] == %{"location" => old}
+    end
+
+    # sabotage: the Keyword.validate!/2 call removed -> no ArgumentError
+    # was raised and the token moved, red; restored, green.
+    test "raises ArgumentError for an unknown option and writes nothing" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+
+      assert_raise ArgumentError, fn ->
+        BasicHTTP.rotate_location(config, execution_id, sesion: self())
+      end
+
+      assert BasicHTTP.location(config, execution_id) == {:ok, old}
+    end
+
+    # sabotage: the no-address clause made to re-stamp the named session
+    # with a fresh token -> the session's entry moved, red; restored,
+    # green.
+    test "answers no_address as before and leaves the session alone" do
+      config = basichttp_config()
+      {_execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+
+      assert BasicHTTP.rotate_location(config, "exec_unknown", session: session) ==
+               {:error, {:no_address, "exec_unknown"}}
+
+      assert ioprocessors(session)[@uri] == %{"location" => old}
+    end
+
+    # sabotage: restamp_type/5's refusal clause made to answer
+    # {:ok, location} -> the not_running refusal answered ok, red;
+    # restored, green.
+    test "answers the engine's not_running for a halted session, the token moved" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+      Session.send_event(session, "loaded")
+      Session.send_event(session, "delivered")
+      assert Session.status(session).status == :done
+
+      assert {:error, {:session_not_restamped, new, :not_running}} =
+               BasicHTTP.rotate_location(config, execution_id, session: session)
+
+      assert new != old
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+    end
+
+    # sabotage: restamp_type/5's refusal clause made to drop the location
+    # from the error ({:session_not_restamped, reason}) -> no match, red;
+    # restored, green.
+    test "answers the engine's recorded_session for a recording session" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old, record: true)
+
+      assert {:error, {:session_not_restamped, new, :recorded_session}} =
+               BasicHTTP.rotate_location(config, execution_id, session: session)
+
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+      assert ioprocessors(session)[@uri] == %{"location" => old}
+    end
+
+    # sabotage: restamp/5 made to ask every type string and answer the
+    # last refusal -> the reason named basichttp, not the URI, red;
+    # restored, green.
+    test "stops at a refused URI and answers its reason" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old, [], [])
+
+      assert {:error, {:session_not_restamped, new, {:unknown_send_type, @uri}}} =
+               BasicHTTP.rotate_location(config, execution_id, session: session)
+
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+    end
+
+    # sabotage: type_strings/0 made to answer the short form first -> the
+    # basichttp refusal came first and the URI entry kept the old
+    # location, red; restored, green.
+    test "a refused basichttp after the URI leaves the URI entry re-stamped" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old, [], [@uri])
+
+      assert {:error, {:session_not_restamped, new, {:unknown_send_type, "basichttp"}}} =
+               BasicHTTP.rotate_location(config, execution_id, session: session)
+
+      assert ioprocessors(session)[@uri] == %{"location" => new}
+    end
+
+    # sabotage: restamp/5 made to re-stamp the URI alone -> the partial
+    # answered ok, red; restored, green.
+    test "a partial re-stamp leaves basichttp carrying the old location" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+
+      assert {:error, {:session_not_restamped, new, :not_running}} =
+               BasicHTTP.rotate_location(
+                 config,
+                 execution_id,
+                 [session: session],
+                 __MODULE__.RefusesShortForm
+               )
+
+      assert ioprocessors(session)[@uri] == %{"location" => new}
+      assert ioprocessors(session)["basichttp"] == %{"location" => old}
+    end
+
+    # sabotage: the unavailable refusal's atom renamed to :unavailable ->
+    # no match, red; restored, green.
+    test "answers replace_send_type_unavailable when the engine exports no such call" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+
+      assert {:error, {:session_not_restamped, new, :replace_send_type_unavailable}} =
+               BasicHTTP.rotate_location(
+                 config,
+                 execution_id,
+                 [session: session],
+                 __MODULE__.NoReplaceSendType
+               )
+
+      assert BasicHTTP.location(config, execution_id) == {:ok, new}
+      assert ioprocessors(session)[@uri] == %{"location" => old}
+    end
+
+    # sabotage: rotate_location/4 made to ask the session for its status
+    # before the upsert -> the exit left the old location in place, red;
+    # restored, green.
+    test "a session that is not alive exits the caller after the token moved" do
+      config = basichttp_config()
+      {execution_id, old} = loaded_parcel(config)
+      session = live_session(old)
+      :ok = Session.stop(session)
+
+      assert {:noproc, _call} =
+               catch_exit(BasicHTTP.rotate_location(config, execution_id, session: session))
+
+      assert {:ok, new} = BasicHTTP.location(config, execution_id)
+      assert new != old
     end
   end
 
