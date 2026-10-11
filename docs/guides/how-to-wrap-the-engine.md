@@ -53,6 +53,14 @@ With neither set, the delivery calls statifier_persistence itself.
 error from it rolls back. `MyApp.ParcelStepper` in Step 4 is one module that
 serves as both.
 
+On a backend that is not Postgres, statifier_persistence's default
+per-execution lock is Postgres SQL and raises there, and the configuration
+has no option that carries a serialization strategy, so `:on_create` and
+`:on_step` are the way such a host passes one: each adds the strategy as
+`serialization:` to the options it hands `create/4` or `step/5`, as
+[How to run the Ecto adapter on a backend that is not Postgres](https://hexdocs.pm/statifier_persistence/non-postgres-backends.html)
+describes.
+
 A host that wraps every step in a tenancy context of its own (process state
 that its repo and its rows read) can set that context in the hook's body. It
 then covers the create or the step and what they write through the
