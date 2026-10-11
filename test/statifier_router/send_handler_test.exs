@@ -12,6 +12,7 @@ defmodule StatifierRouter.SendHandlerTest do
   alias StatifierPersistence.Storage
   alias StatifierRouter.AddressReadFailingRepo
   alias StatifierRouter.Config
+  alias StatifierRouter.Delivery
   alias StatifierRouter.DeliveryFixtures
   alias StatifierRouter.RecordingDelivery
   alias StatifierRouter.RecordingRoute
@@ -1200,6 +1201,77 @@ defmodule StatifierRouter.SendHandlerTest do
 
       assert_received {:reentered, {:error, {:reentrant_route, ^execution_id}}}
     end
+
+    # The route's mark survives a nested step: a deliver_event/4 made from
+    # inside a route drives a second execution whose step sends, so the
+    # route mark is set again for that execution and taken down on its way
+    # out. sabotage: SendHandler's in_route/2 deleted the mark on exit
+    # instead of putting back the outer one -> sending_execution/0 read nil
+    # after the nested call and the later route/3 was let through, red;
+    # restored, green.
+    test "still refuses a route that calls back after a nested step inside it" do
+      pid = self()
+
+      outer_route = fn ->
+        # The nested execution's own send reaches this route too; only the
+        # outer call nests.
+        if Process.put(:nested, true) == nil do
+          send(
+            pid,
+            {:nested,
+             Delivery.deliver_event(
+               Process.get(:config),
+               nested_plan(),
+               "second_key",
+               nested_envelope()
+             )}
+          )
+
+          send(pid, {:after_nested, SendHandler.sending_execution()})
+          send(pid, {:reentered, StatifierRouter.route(Process.get(:config), click(), now: @now)})
+        end
+
+        :ok
+      end
+
+      config =
+        sink_config(
+          route_adapters: %{
+            "joined_records" => {RecordingRoute, %{pid: pid, answer: outer_route}}
+          }
+        )
+
+      Process.put(:config, config)
+
+      assert {:ok, [{:created_and_delivered, _binding, execution_id}, _]} =
+               StatifierRouter.route(config, DeliveryFixtures.impression(), now: @now)
+
+      # The nested step ran and sent, on another execution.
+      assert_received {:nested, {:created_and_delivered, _plan, nested_id}}
+      refute nested_id == execution_id
+      assert_received {:routed, _route_config, _event, {^nested_id, _position, _ord}}
+
+      assert_received {:after_nested, ^execution_id}
+      assert_received {:reentered, {:error, {:reentrant_route, ^execution_id}}}
+    end
+  end
+
+  defp nested_plan do
+    %{
+      id: "nested_step",
+      document: "sink_join",
+      create: :if_absent,
+      dedupe: %{by: :message_id, horizon_ms: 259_200_000}
+    }
+  end
+
+  defp nested_envelope do
+    %{
+      event: Statifier.Event.external("impression"),
+      message_id: "nested/1",
+      scope: @scope,
+      now: @now
+    }
   end
 
   defp click, do: DeliveryFixtures.click("ad_events/3/2201")

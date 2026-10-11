@@ -448,6 +448,10 @@ defmodule StatifierRouter.Delivery do
       Map.put(delivery, :event, Event.external(delivery.name, data: delivery.data))
     )
   after
+    # Deleted, not restored: no path this package opens nests a
+    # binding's delivery inside another, since deliver/4 refuses inside a
+    # route and SendHandler's in_route/2 keeps an outer route's mark
+    # across a nested step.
     SendHandler.delete_delivery_scope()
   end
 

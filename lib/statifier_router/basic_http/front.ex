@@ -193,6 +193,10 @@ defmodule StatifierRouter.BasicHTTP.Front do
       outcome -> {:ok, outcome}
     end
   after
+    # Deleted, not restored: no path this package opens nests this
+    # front's delivery inside another, since it refuses inside a route
+    # and SendHandler's in_route/2 keeps an outer route's mark across a
+    # nested step.
     SendHandler.delete_delivery_scope()
   end
 
