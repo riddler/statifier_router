@@ -95,7 +95,8 @@ V02's subscription table - so `depot_id` above sits at ordinal position 2 on
 all four. The options are the migration's, not `StatifierRouter.Config`'s:
 the configuration a host routes with does not take them. `down/1` accepts the
 same list and ignores it, so one list serves both directions. The opt-in
-location table ([Upgrading the tables](../upgrading.md)) is outside that walk:
+location table ([The opt-in location table](../upgrading.md#the-opt-in-location-table)
+on the upgrading page) is outside that walk:
 `up_locations/1` takes the same list and places the columns there the same
 way.
 
