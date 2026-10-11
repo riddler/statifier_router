@@ -2132,3 +2132,52 @@ README and the `StatifierRouter` moduledoc, which now name
   written, the sending step's scope put back after a nested call, and the
   statements a call without the key issues, captured at the commit
   before the key existed.
+
+## Note (2026-10-11, sr-0ppr): what the run_in_scope Amendment's key raises on, and how far it reaches
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It names two things the `## Amendment
+(2026-10-04, sr-x41e)` on a host's own `deliver_event/4` leaves unsaid,
+both true since that Amendment's code shipped in statifier_router 0.11.0,
+and the tests that now pin them. Naming them in a Changed entry of the
+next release and in this Note, with the released 0.11.0 entry of
+`CHANGELOG.md` left as it is, was decided by the conductor under a
+standing consent, 2026-10-10; the Changed entry's dating of the raise
+from 0.11.0 was decided by the conductor under a standing consent,
+2026-10-11. Code is read at `eeea84c`; the tests this Note names are
+cited by anchor in the pull request that carries it.
+
+- **The `ArgumentError` is a change from 0.10.0, `nil` included.**
+  Decision 3 says that a value other than `true` or `false` raises
+  `ArgumentError` before anything is opened or written.
+  `deliver_event/4` reads the key with
+  `Map.get(delivery, :run_in_scope, false)`, so an envelope that carries
+  the key set to `nil` raises too; only a key left out reads as `false`.
+  At `v0.10.0` `deliver_event/4` went straight to the private `settled/5`
+  and read no such key, so an envelope that carried one, of any value,
+  was delivered as if it did not. The 0.11.0 entry of
+  `CHANGELOG.md` names the raise as part of the new key but not as a
+  change for such an envelope; the next release's Changed entry does.
+- **The key reaches the completion hook too.** Decision 1 sets the
+  envelope's `:scope` for the delivery, "its transaction, and the step
+  it drives", and speaks of the sends that step makes. The configuration's
+  `:on_complete` hook runs inside the same call: `StatifierRouter.Delivery`'s
+  private `complete/3`, which the private `create/6` and `step/7` call
+  when the execution ends, hands the completion to
+  `StatifierRouter.SendHandler.deliver_to_route/5`, which resolves the
+  route name in the delivery scope the process holds, as a send at the
+  executor seam does. With the key set, a completion route that a scope
+  in `:route_overrides` overrides is resolved in the envelope's scope.
+  Without it, and with no scope in reach, that route is refused as
+  `{:no_delivery_scope, name}`, `complete/3` answers
+  `{:error, {:on_complete, name, reason}}`, and the delivery rolls back to
+  its savepoint and answers that error.
+- **What the tests now pin.** Decision 5 lists what
+  `test/statifier_router/deliver_event_scope_test.exs` pinned at the
+  Amendment. It now also pins the `ArgumentError` for an explicit `nil`
+  with nothing written; the completion hook's route resolved in the
+  envelope's scope with the key set, and refused, with the delivery
+  rolled back, without it; and decision 2's two other ways out: the
+  earlier delivery scope put back after the delivery raises, and, inside
+  a sending step, after it answers `{:error, reason}`, so that the step's
+  next send resolves in its own scope again.

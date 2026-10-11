@@ -379,13 +379,16 @@ defmodule StatifierRouter.Delivery do
   delivers a failed POST back in this way - sets `run_in_scope: true` in
   the envelope, and the step then resolves its routes in the envelope's
   `:scope`, as a binding's delivery
-  and the BasicHTTP front do (ADR-0002, the Amendment of 2026-10-04). The
-  scope is set for the length of the call and put back on every way out
-  to what the process held before, so a call made inside a sending step
-  leaves that step's scope as it found it. Left out, or `false`, the call
+  and the BasicHTTP front do (ADR-0002, the Amendment of 2026-10-04). A
+  delivery that ends the execution resolves the configuration's
+  `:on_complete` route, when one is set, in that scope too (ADR-0002,
+  the Note of 2026-10-11). The scope is set for the length of the call
+  and put back on every way out to what the process held before, so a
+  call made inside a sending step leaves that step's scope as it found
+  it. Left out, or `false`, the call
   issues the same statements and answers the same as before the key
-  existed. Any other value raises `ArgumentError` before anything is
-  opened or written.
+  existed. Any other value, `nil` included, raises `ArgumentError` before
+  anything is opened or written.
   """
   @spec deliver_event(Config.t(), plan(), String.t(), envelope()) ::
           StatifierRouter.outcome() | {:error, term()}
