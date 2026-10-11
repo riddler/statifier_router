@@ -123,15 +123,16 @@ defmodule StatifierRouter.Webhook do
   @doc """
   The HTTP status the provider should see for one `handle/3` answer.
 
-  `{:ok, outcomes}` is `200`, whatever those outcomes are. Every one of
-  them is a recorded answer this router will give again for the same
-  message - a duplicate, a drop, a refusal and a no-match included - so a
-  retry would change nothing and the provider should stop.
+  `{:ok, outcomes}` is `200`, whatever those outcomes are - a duplicate, a
+  drop, a refusal and a no-match all answer `200` - so the provider stops
+  retrying. A `200` says the attempt settled, not that an execution
+  received the event; a host that needs to know which reads the outcomes
+  in the answer itself.
 
   `{:error, reason}` is `500`: the attempt did not settle, so the provider
   should retry.
 
-      iex> StatifierRouter.Webhook.status({:ok, [{:duplicate, "clicks_to_join"}]})
+      iex> StatifierRouter.Webhook.status({:ok, [{:duplicate, "carrier_scans_to_parcel"}]})
       200
 
       iex> StatifierRouter.Webhook.status({:error, :no_message_id})

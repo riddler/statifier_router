@@ -56,22 +56,29 @@ defmodule StatifierRouter.Routes do
 
   ## An example
 
-  The impression-and-click join's outbound half writes two route names
-  (ADR-0005). A host that registered only one of them learns which before
-  the chart ships:
+  A parcel's chart writes two route names when the parcel reaches the
+  depot: one asks the carrier for a pickup, one tells the recipient where
+  the parcel is. A host that registered only the first learns which is
+  missing before the chart ships:
 
       iex> {:ok, config} =
       ...>   StatifierRouter.Config.new(
       ...>     repo: MyApp.Repo,
       ...>     delivery: MyApp.Delivery,
       ...>     send_type: "myapp:sink",
-      ...>     route_adapters: %{"joined_records" => {StatifierRouter.RecordingRoute, %{}}}
+      ...>     route_adapters: %{"carrier_pickup" => {StatifierRouter.RecordingRoute, %{}}}
       ...>   )
-      iex> {:ok, machine} = Statifier.compile(StatifierRouter.DeliveryFixtures.join_sends())
+      iex> chart =
+      ...>   "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' initial='at_depot'>" <>
+      ...>     "<state id='at_depot'><onentry>" <>
+      ...>     "<send type='myapp:sink' target='carrier_pickup' event='pickup.requested'/>" <>
+      ...>     "<send type='myapp:sink' target='recipient_notice' event='parcel.at_depot'/>" <>
+      ...>     "</onentry></state></scxml>"
+      iex> {:ok, machine} = Statifier.compile(chart)
       iex> %{unregistered: findings, unchecked: []} =
       ...>   StatifierRouter.Routes.unregistered(config, machine)
       iex> Enum.map(findings, & &1.route)
-      ["dead_letter"]
+      ["recipient_notice"]
   """
 
   alias Statifier.Machine
