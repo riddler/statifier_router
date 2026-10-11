@@ -2181,3 +2181,48 @@ cited by anchor in the pull request that carries it.
   earlier delivery scope put back after the delivery raises, and, inside
   a sending step, after it answers `{:error, reason}`, so that the step's
   next send resolves in its own scope again.
+
+## Note (2026-10-11, sr-pvem): the run_in_scope flip Note's later changes, by a rule, and its decision 4 bullet narrowed
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It corrects two sentences of the Note of
+2026-10-04 (sr-4emm) that accepted the `## Amendment (2026-10-04,
+sr-x41e)` on a host's own `deliver_event/4`; the Amendment itself, and
+that Note's re-verification of it at `df7f009`, stand. Stating the rule
+that picks the later changes, rather than completing the list, and
+narrowing the decision 4 bullet were decided by the conductor under a
+standing consent, 2026-10-10. Code is read at `d9fcc8f`.
+
+- **The later changes, by a rule.** The flip Note says "One later change
+  touched files the Amendment cites" and names PR 171 (`f0d24a1`). It
+  was not the only one: the 0.11.0 release commit, `df7f009`, moved the
+  README's install pin, and the README is a file the Amendment cites.
+  The list is superseded by a rule: the later changes are the commits on
+  `main` after the Amendment's code commit (`b9695d1`) and up to and
+  including the flip SHA (`df7f009`), the ones
+  `git log b9695d1..df7f009` lists. None of them changes a claim, and
+  what shows it is the flip Note's own re-verification of every claim
+  at `df7f009`, which carries them all, not the list.
+- **Decision 4's bullet, narrowed.** The flip Note's bullet for decision
+  4 says that `StatifierRouter.Config.around_delivery/4` "is called
+  around it only by the front and, under `:wrap_target`, by
+  `StatifierRouter.Config.around_target/3`". Those are the two calls of
+  `around_delivery/4` whose own work runs `deliver_event/4`: the
+  `:basichttp` door in `StatifierRouter.BasicHTTP.Front`'s private
+  `deliver/5`, and the `:target` door that `around_target/3` opens. They
+  are not the only calls that enclose it. A `deliver_event/4` call made
+  inside a step another door drove runs inside that door's call: when a
+  binding's delivery through `StatifierRouter.route/3`, whose work runs
+  inside one `:route` call, steps an execution whose step sends to the
+  execution target, `StatifierRouter.SendHandler`'s private
+  `deliver_to/5` calls `deliver_event/4` inside that `:route` call, with
+  or without `:wrap_target` (ADR-0003, the per-shape table of its
+  Amendment of 2026-10-04). The tests "at the executor seam it runs
+  inside the sender's wrapped step, under the sender's context" and
+  "inside a step a wrapped door drives, the target's delivery is wrapped
+  once, by that door" in `test/statifier_router/around_delivery_test.exs`
+  pin it. The Amendment's own sentence, in its own decision 4,
+  "`deliver_event/4` called by a host is still not handed to
+  `:around_delivery`, under either value", is narrower and holds:
+  `deliver_event/4` calls no wrapper itself, and the key changes no
+  door.
