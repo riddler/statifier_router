@@ -104,6 +104,39 @@ defmodule StatifierRouter.CorpusTest do
       assert states == [{"grace.over", "scheduled"}, {"window.closed", "completed"}]
     end
 
+    # A held job has not fired: statifier_oban counts a suspended timer as
+    # pending, and no drain fires it. The case runs in two halves, its
+    # deliver and then its advance, with the one job its deliver scheduled
+    # set suspended between them (Oban has no call that suspends a job).
+    # sabotage: `suspended` removed from CorpusRunner's @pending_states ->
+    # this test red, the runner reporting no pending timer; restored, green.
+    test "keeps a suspended job pending and never fires it" do
+      kase =
+        CorpusRunner.delivery_case_paths()
+        |> Enum.find(&(Path.basename(&1, ".json") == "impression-then-expiry"))
+        |> CorpusRunner.load!()
+
+      [%{"deliver" => _} = deliver, %{"advance" => _} = advance] = kase["script"]
+
+      %{"timers" => [event]} =
+        CorpusRunner.run(%{kase | "script" => [deliver]}, timers: :oban)
+
+      jobs = from(j in Oban.Job, where: j.worker == "StatifierOban.Timer.Worker")
+      assert {1, _rows} = TestRepo.update_all(jobs, set: [state: "suspended"])
+
+      # The advance reaches past the job's fire time, so a job the drain
+      # could fire would have fired.
+      until = DateTime.shift(CorpusRunner.start(), Duration.from_iso8601!(advance["advance"]))
+      due = TestRepo.one!(from(j in jobs, select: j.scheduled_at))
+      assert DateTime.compare(due, until) != :gt
+
+      assert %{"timers" => [^event], "sends" => [], "status" => "active"} =
+               CorpusRunner.run(%{kase | "script" => [advance]}, timers: :oban)
+
+      assert TestRepo.all(from(j in jobs, select: {j.args["event"], j.state})) ==
+               [{event, "suspended"}]
+    end
+
     # sabotage: delivery_case_paths/0 made to keep the publish cases ->
     # this test red; restored, green.
     test "runs every case but a publish case" do
