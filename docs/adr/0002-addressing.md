@@ -2229,7 +2229,7 @@ standing consent, 2026-10-10. Code is read at `d9fcc8f`.
 
 ## Amendment (2026-10-11, sr-0g0x): a live session is re-stamped with the rotated location
 
-Status: proposed
+Status: accepted (statifier_router 0.13.0)
 
 The location Amendment of 2026-09-30 (sr-xgi8), decision 2, ends its
 "What rotation does not reach" bullet with "Changing that needs a
@@ -2309,3 +2309,90 @@ an execution an HTTP location" name both shapes. The tests under
 the engine can give through this package's registration, the partial
 re-stamp and the unavailable refusal through the session-module seam,
 and the exit.
+
+## Note (2026-10-11, sr-vbt8): the live-session re-stamp Amendment accepted
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. Records merge at proposed and are accepted
+once their code has shipped in a published version and every claim they
+make verifies against `main`; this flip was decided by the conductor
+under a standing consent, 2026-10-11. The `## Amendment (2026-10-11,
+sr-0g0x)` on a live session re-stamped with the rotated location is
+such a record: its `Status:` line moved from `proposed` to `accepted`,
+naming the version. Its code landed in PR 187 (`8bb98be`) and shipped
+in statifier_router 0.13.0 (tag `v0.13.0`, at `1c92ffe`, published on
+Hex 2026-10-11T14:35:57Z by the release workflow's run 38147770747). The
+record's own status on line 3 was already `accepted` and was not
+touched.
+
+Every claim was re-verified by anchor at `1c92ffe`, which is both the
+tag and `main` at the time of the flip (the Amendment read this package
+at `8bed9ed`). The later changes are the commits on `main` after the
+Amendment's code commit (`8bb98be`) and up to and including the flip
+SHA, the ones `git log 8bb98be..1c92ffe` lists; they touch the README,
+the upgrading page, `CHANGELOG.md`, the fragments and `mix.exs`'s
+version, none of them a file the Amendment cites, and none changes a
+claim. The engine's half was read in statifier-ex at the `v2.13.0` tag
+(`f0b1095`).
+
+- Context: the location Amendment of 2026-09-30, decision 2, carries the
+  "What rotation does not reach" bullet ending "Changing that needs a
+  statifier change and is not assumed here."
+  `Statifier.Session.replace_send_type/3`'s `@doc` at `v2.13.0` says it
+  replaces a running session's registration for one registered type and
+  recomputes that type's `_ioprocessors` entry, and statifier-ex's
+  ADR-0069 carries its Amendment of 2026-10-09. statifier `v2.12.0`'s
+  `Statifier.Session` has no such function.
+- Decision 1: `StatifierRouter.BasicHTTP.rotate_location/3` passes its
+  options through `Keyword.validate!(opts, [:session])` before the
+  address lookup, so another key raises `ArgumentError` with nothing
+  written. `rotate_location/2` keeps its guards (`basichttp: [_ | _]`,
+  a binary id) and calls it with `[]`; with no `:session` the body
+  answers `{:ok, location}` after the same upsert `rotate_location/2`
+  ran at `8bed9ed`, so its answers are unchanged.
+- Decision 2: the upsert (`config.repo.insert!/2` with `on_conflict`
+  on `:address_id`) runs before the session is asked, and
+  `StatifierRouter.Addresses.by_execution/2` answering `nil` returns
+  `{:error, {:no_address, execution_id}}` with no session call.
+- Decision 3: the private `restamp/5` builds the registration with
+  `StatifierRouter.Config.basichttp_registration/2` (`@doc false`), the
+  helper the private `put_basichttp/3` now builds a create's snapshot
+  with: `{StatifierRouter.BasicHTTP, opts}` with the key's options and
+  the new `:location_token`. It calls `replace_send_type/3` once per
+  string of `StatifierRouter.BasicHTTP.type_strings/0` (the URI, then
+  `basichttp`) through `Enum.reduce_while/3`, halting at the first
+  `{:error, reason}`. The options are the configuration's current
+  `:basichttp`, so its `:base_url` is the current one.
+- Decision 4: the private `restamp_type/5` answers
+  `{:error, {:session_not_restamped, location, reason}}` with the new
+  location and the engine's reason, and `rotate_location/3`'s `@spec`
+  and `@doc` name the answers. The engine's `@doc` and `@spec` at
+  `v2.13.0` list the five refusals the Amendment names and say each
+  changes nothing, so a refused URI leaves both entries as they were and
+  a refused `basichttp` after an accepted URI leaves only the URI entry
+  moved.
+- Decision 5: `restamp/5` calls the session module only when
+  `Code.ensure_loaded?/1` and `function_exported?/3` for
+  `:replace_send_type, 3` hold, else answers
+  `:replace_send_type_unavailable`; the default module is
+  `Statifier.Session`. `mix.exs` requires `{:statifier, "~> 2.10"}` and
+  `mix.lock` locks statifier at 2.13.0.
+- Decision 6: `replace_send_type/3` is a `GenServer.call/2` with the
+  default timeout, and nothing around the call in `restamp_type/5` or
+  `rotate_location/4` catches; the engine's `@doc` says a timeout does
+  not withdraw the request. The exit case was ruled by the operator,
+  2026-10-11.
+- Decision 7: `rotate_location/3` writes only the location row and
+  calls only the named session; nothing reaches a durable execution's
+  stored `_ioprocessors`.
+- Where it is shown: `StatifierRouter.BasicHTTP`'s moduledoc carries
+  "Rotation and the chart's own copy" with both shapes,
+  `StatifierRouter.BasicHTTP.Front`'s moduledoc names the live session
+  and the stored entry, and the guide "How to give an execution an HTTP
+  location" lists both. The `describe "rotation with a live session"`
+  block of `test/statifier_router/basic_http_test.exs` pins the re-stamp
+  under both strings, the no-options answer, the `ArgumentError` with
+  nothing written, `:no_address`, `:not_running`, `:recorded_session`,
+  the stop at a refused URI, a refused `basichttp` after the URI, the
+  partial re-stamp and `:replace_send_type_unavailable` through the
+  session-module seam, and the exit of a session that is not alive.
