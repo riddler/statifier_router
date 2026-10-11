@@ -995,12 +995,24 @@ defmodule StatifierRouter.Config do
   defp put_basichttp(map, nil, _token), do: map
 
   defp put_basichttp(map, basichttp, token) do
-    opts = if token, do: basichttp ++ [location_token: token], else: basichttp
+    registration = basichttp_registration(basichttp, token)
 
     Enum.reduce(StatifierRouter.BasicHTTP.type_strings(), map, fn type, acc ->
-      Map.put(acc, type, {StatifierRouter.BasicHTTP, opts})
+      Map.put(acc, type, registration)
     end)
   end
+
+  # The registration of `StatifierRouter.BasicHTTP` under each of its type
+  # strings: the key's options, and a location token among them when one
+  # is given. A create's snapshot carries it, and
+  # `StatifierRouter.BasicHTTP.rotate_location/3` re-stamps a live session
+  # with the same registration and the rotated token.
+  @doc false
+  @spec basichttp_registration(keyword(), String.t() | nil) :: {module(), keyword()}
+  def basichttp_registration(basichttp, nil), do: {StatifierRouter.BasicHTTP, basichttp}
+
+  def basichttp_registration(basichttp, token) when is_binary(token),
+    do: {StatifierRouter.BasicHTTP, basichttp ++ [location_token: token]}
 
   # The persistence options a create carries when it mints a location
   # token: the configuration's own, with the snapshot rebuilt from the same

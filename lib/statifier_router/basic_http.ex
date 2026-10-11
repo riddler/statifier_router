@@ -10,7 +10,8 @@ defmodule StatifierRouter.BasicHTTP do
   possession of the location (ruled by the operator, 2026-09-30). Hand a
   location only to the parties that should reach the execution, keep it
   out of logs and out of URLs shown to others, serve the base URL over
-  TLS, and rotate it with `rotate_location/2` when it may have leaked.
+  TLS, and rotate it with `rotate_location/2` (or `rotate_location/3`, to
+  re-stamp a live session as well) when it may have leaked.
 
   ## Registering it
 
@@ -54,12 +55,46 @@ defmodule StatifierRouter.BasicHTTP do
 
   `location/2` reads an execution's current location and
   `rotate_location/2` replaces its token, after which the old location is
-  answered 404 by the front. Rotation does not reach the execution's own
-  `_ioprocessors`: statifier writes that entry once, when the execution
-  starts, so after a rotation the chart still reads the location it
-  started with, which no longer answers. A host that rotates hands the new
-  location to whoever should hold it. Both functions build the location
-  from the configuration's current base URL.
+  answered 404 by the front. Both build the location from the
+  configuration's current base URL. A host that rotates hands the new
+  location to whoever should hold it.
+
+  ## Rotation and the chart's own copy
+
+  statifier writes an execution's `_ioprocessors` entry when the execution
+  starts, so a rotation alone leaves the chart reading the location it
+  started with, which no longer answers. Two shapes follow:
+
+    * **A live session.** `rotate_location/3` with `session:` naming the
+      host's running `Statifier.Session` rotates the token and then
+      re-stamps that session through `Statifier.Session.replace_send_type/3`,
+      under the processor's URI first and then `basichttp`, with this
+      module's registration carrying the new token. The chart reads the new
+      location from the next event the session processes.
+    * **A durable execution's stored entry.** The entry an execution
+      persisted when it started stays as it was: it carries the old
+      location until the host refreshes it. `rotate_location/3` reaches a
+      session the host names, never a stored execution.
+
+  The token moves first and never waits on the session: the upsert has
+  committed before the session is asked, so every answer after it carries
+  the new location, `{:ok, location}` when both re-stamps answered `:ok`
+  and `{:error, {:session_not_restamped, location, reason}}` when one did
+  not. `reason` is the engine's own refusal, from the first type string
+  that refused, or `:replace_send_type_unavailable` when the statifier in
+  use exports no `Statifier.Session.replace_send_type/3` (it does from
+  2.13.0; the requirement stays `~> 2.10`, so on an older statifier the
+  call is never made). A refused URI stops there, and both entries carry
+  the old location. A refused `basichttp` after an accepted URI leaves the
+  URI entry carrying the new location and the `basichttp` entry the old
+  one.
+
+  `Statifier.Session.replace_send_type/3` is a `GenServer.call` with its
+  default 5-second timeout, and `rotate_location/3` does not catch it: a
+  session that is not alive, or one that does not answer in time, exits
+  the caller as the engine's own call does, after the token has moved.
+  `location/2` then reads the new location. A timeout does not withdraw
+  the request, so the session may still apply the re-stamp later.
 
   ## Outbound
 
@@ -165,8 +200,67 @@ defmodule StatifierRouter.BasicHTTP do
   """
   @spec rotate_location(Config.t(), String.t()) ::
           {:ok, String.t()} | {:error, {:no_address, String.t()}}
-  def rotate_location(%Config{basichttp: [_ | _] = basichttp} = config, execution_id)
-      when is_binary(execution_id) do
+  def rotate_location(%Config{basichttp: [_ | _]} = config, execution_id)
+      when is_binary(execution_id),
+      do: rotate_location(config, execution_id, [])
+
+  @doc """
+  Rotates the location of the execution `execution_id` as
+  `rotate_location/2` does and, with `session:`, re-stamps the host's live
+  session with it (the moduledoc's "Rotation and the chart's own copy").
+
+  `opts` takes one key, and any other raises `ArgumentError` before
+  anything is written:
+
+    * `:session` - the host's running `Statifier.Session` (a pid or a
+      registered name) for this execution. After the token's upsert has
+      committed, the session's registration of this module is replaced
+      under the processor's URI and then under `basichttp` with one that
+      carries the new token, through `Statifier.Session.replace_send_type/3`.
+
+  With no options it answers exactly as `rotate_location/2`. With
+  `session:` it answers:
+
+    * `{:ok, location}` - the new location, and both re-stamps answered
+      `:ok`;
+    * `{:error, {:no_address, execution_id}}` - no address row names the
+      execution; nothing was written and the session was not asked;
+    * `{:error, {:session_not_restamped, location, reason}}` - the token
+      moved to `location`, and a re-stamp did not: `reason` is the
+      engine's refusal (`:not_running`, `:recorded_session`,
+      `{:unknown_send_type, type}`, `{:send_types, _}` or
+      `{:ioprocessors_entry, _, _}`), or `:replace_send_type_unavailable`
+      when the statifier in use does not export the call.
+
+  A session that is not alive, or that does not answer within the
+  engine's 5-second timeout, exits the caller after the token has moved.
+  """
+  @spec rotate_location(Config.t(), String.t(), keyword()) ::
+          {:ok, String.t()}
+          | {:error,
+             {:no_address, String.t()}
+             | {:session_not_restamped, String.t(), term()}}
+  def rotate_location(%Config{basichttp: [_ | _]} = config, execution_id, opts)
+      when is_binary(execution_id) and is_list(opts),
+      do: rotate_location(config, execution_id, opts, Statifier.Session)
+
+  # The body of rotate_location/3 with the session module as a seam, so a
+  # test can hand it a module that does not export replace_send_type/3.
+  @doc false
+  @spec rotate_location(Config.t(), String.t(), keyword(), module()) ::
+          {:ok, String.t()}
+          | {:error,
+             {:no_address, String.t()}
+             | {:session_not_restamped, String.t(), term()}}
+  def rotate_location(
+        %Config{basichttp: [_ | _] = basichttp} = config,
+        execution_id,
+        opts,
+        session
+      )
+      when is_binary(execution_id) and is_list(opts) and is_atom(session) do
+    opts = Keyword.validate!(opts, [:session])
+
     case Addresses.by_execution(config, execution_id) do
       nil ->
         {:error, {:no_address, execution_id}}
@@ -187,7 +281,34 @@ defmodule StatifierRouter.BasicHTTP do
           log: false
         )
 
-        {:ok, location_string(Keyword.fetch!(basichttp, :base_url), token)}
+        location = location_string(Keyword.fetch!(basichttp, :base_url), token)
+
+        case Keyword.fetch(opts, :session) do
+          :error -> {:ok, location}
+          {:ok, server} -> restamp(session, server, basichttp, token, location)
+        end
+    end
+  end
+
+  # The live session's re-stamp, after the upsert has committed: the
+  # registration a create carries, with the new token, under each type
+  # string in turn; the first refusal stops it.
+  defp restamp(session, server, basichttp, token, location) do
+    if Code.ensure_loaded?(session) and function_exported?(session, :replace_send_type, 3) do
+      registration = Config.basichttp_registration(basichttp, token)
+
+      Enum.reduce_while(type_strings(), {:ok, location}, fn type, ok ->
+        restamp_type(session, server, type, registration, ok)
+      end)
+    else
+      {:error, {:session_not_restamped, location, :replace_send_type_unavailable}}
+    end
+  end
+
+  defp restamp_type(session, server, type, registration, {:ok, location} = ok) do
+    case session.replace_send_type(server, type, registration) do
+      :ok -> {:cont, ok}
+      {:error, reason} -> {:halt, {:error, {:session_not_restamped, location, reason}}}
     end
   end
 

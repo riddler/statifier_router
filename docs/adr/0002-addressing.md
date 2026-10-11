@@ -2226,3 +2226,86 @@ standing consent, 2026-10-10. Code is read at `d9fcc8f`.
   `:around_delivery`, under either value", is narrower and holds:
   `deliver_event/4` calls no wrapper itself, and the key changes no
   door.
+
+## Amendment (2026-10-11, sr-0g0x): a live session is re-stamped with the rotated location
+
+Status: proposed
+
+The location Amendment of 2026-09-30 (sr-xgi8), decision 2, ends its
+"What rotation does not reach" bullet with "Changing that needs a
+statifier change and is not assumed here." statifier 2.13.0 makes that
+change: `Statifier.Session.replace_send_type/3` replaces a running
+session's registration for one registered send type and recomputes that
+type's `_ioprocessors` entry from it (its `@doc` in statifier-ex's
+`lib/statifier/session.ex`, read at the `v2.13.0` tag, `f0b1095`;
+st-ADR-0069, the Amendment of 2026-10-09). This Amendment adopts the
+call for a session the host names. The function's name, its one option
+and its answers, and the statifier requirement, were ruled by the
+operator, 2026-10-10. Building the registration through an internal
+helper, the test seam that takes the session module, and stopping at the
+first refused type string were decided by the conductor under a standing
+consent, 2026-10-11.
+
+Code cites that predate this Amendment are read at `8bed9ed`; the code it
+adds is cited by anchor in the pull request that carries it.
+
+1. **The call.** `StatifierRouter.BasicHTTP.rotate_location/3` takes the
+   configuration, an execution id and options checked with
+   `Keyword.validate!/2`: one key, `:session`, the host's running
+   `Statifier.Session`. Any other key raises `ArgumentError` before
+   anything is written. With no options it answers exactly as
+   `rotate_location/2`, which now calls it with `[]` and keeps its own
+   guards, so every answer `rotate_location/2` gave at `8bed9ed` is
+   unchanged.
+2. **The token moves first.** The upsert decision 2 of 2026-09-30
+   describes has committed before the session is asked, and the session
+   is never asked when no address row names the execution, which answers
+   `{:error, {:no_address, execution_id}}` as before.
+3. **The re-stamp.** The session is handed the registration a create
+   carries, `{StatifierRouter.BasicHTTP, opts}` with the key's options
+   and the new `:location_token` (built for a create by
+   `StatifierRouter.Config`'s private `put_basichttp/3` at `8bed9ed`),
+   under each type string in the order
+   `StatifierRouter.BasicHTTP.type_strings/0` answers, the processor's
+   URI and then `basichttp`: one `replace_send_type/3` call each. The
+   first refusal stops it. The registration carries the configuration's
+   current `:base_url`, so a re-stamped entry also follows a moved base
+   URL.
+4. **The answers.** `{:ok, location}` when both calls answered `:ok`;
+   `{:error, {:session_not_restamped, location, reason}}` when the token
+   moved and a call did not, `location` being the new location and
+   `reason` the engine's refusal (`:not_running`, `:recorded_session`,
+   `{:unknown_send_type, type}`, `{:send_types, {:invalid_registration,
+   type, reason}}` or `{:ioprocessors_entry, type, exception}`) or
+   `:replace_send_type_unavailable` (decision 5). A refused URI leaves
+   both entries carrying the old location. A refused `basichttp` after
+   an accepted URI leaves the URI entry carrying the new location and
+   the `basichttp` entry the old one.
+5. **The requirement stays `~> 2.10`, the call guarded.** The call is
+   made only when `Code.ensure_loaded?/1` and
+   `function_exported?(Statifier.Session, :replace_send_type, 3)` both
+   hold; otherwise the answer carries `:replace_send_type_unavailable`,
+   so a host on statifier 2.10 to 2.12 keeps every answer
+   `rotate_location/2` gave. The lock moves to 2.13.0, the first release
+   that exports the call.
+6. **An exit reaches the caller.** `replace_send_type/3` is a
+   `GenServer.call` with the default 5-second timeout, and
+   `rotate_location/3` catches nothing around it: a session that is not
+   alive, or that does not answer in time, exits the caller after the
+   token has moved, and `location/2` then reads the new location. The
+   engine's `@doc` says a timeout does not withdraw the request, so the
+   session may still apply it.
+7. **What it still does not reach.** A durable execution's stored
+   `_ioprocessors` entry, persisted when it started, is not rewritten:
+   it carries the old location until the host refreshes it. This
+   Amendment changes the 2026-09-30 bullet for a live session the host
+   names, and for nothing else.
+
+The moduledoc's "Rotation and the chart's own copy",
+`StatifierRouter.BasicHTTP.Front`'s moduledoc and the guide "How to give
+an execution an HTTP location" name both shapes. The tests under
+"rotation with a live session" in
+`test/statifier_router/basic_http_test.exs` pin each answer above that
+the engine can give through this package's registration, the partial
+re-stamp and the unavailable refusal through the session-module seam,
+and the exit.
