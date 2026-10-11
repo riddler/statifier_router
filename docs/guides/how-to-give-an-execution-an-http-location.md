@@ -32,9 +32,9 @@ query log).
 ## Step 1. Create the location table
 
 The location table is opt-in and outside the version walk. Add the migration
-in [Upgrading the tables](../upgrading.md) ("The opt-in location table") after
-the ones you have, and run it. It worked when the table exists under your
-`:table_prefix`.
+in [The opt-in location table](../upgrading.md#the-opt-in-location-table) on
+the upgrading page after the ones you have, and run it. It worked when the
+table exists under your `:table_prefix`.
 
 ## Step 2. Set `:basichttp` on the configuration
 
