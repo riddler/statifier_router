@@ -1278,3 +1278,56 @@ row is completed by that Note's list.
   the Amendment says.
 - The tests: the ones the Note of 2026-10-09 above lists, in
   `test/statifier_router/webhook_test.exs`.
+
+## Note (2026-10-11, sr-6w7x): the tests that pin the execution-target wrap Amendment, and the passages it supersedes that it does not name
+
+A Note, not an amendment: it decides nothing and changes no decision,
+amendment or Note above it. It completes the test list of the Amendment
+of 2026-10-04 and names the passages that Amendment supersedes without
+naming them. Stating the rule that picks the tests, rather than lengthening
+the list, was decided by the conductor under a standing consent,
+2026-10-11. Every anchor below was read at `7e16b40`.
+
+- **The tests, by a rule.** The Amendment's "Where the code is" names
+  the tests that pin it and leaves one out. The rule that picks them: a
+  test pins the Amendment when it is in the describe block "the
+  execution-target door, opted in with :wrap_target" of
+  `test/statifier_router/around_delivery_test.exs`; that block landed
+  with the Amendment's code in PR 161 (`3ce250b`). The test the list
+  leaves out is "on the send-processor shape a refused send's
+  send_refused row is written inside the :target call". It pins the
+  sentence of "What `:target` covers" that puts a refused send's
+  `send_refused` row inside the call: it asserts one `:target` call,
+  handed the sender's address row's scope, and an insert into the
+  routing ledger among the statements run under the context the
+  wrapper set. The row is written by `StatifierRouter.SendHandler`'s
+  private `refused/6`, which the private `addressed/5` reaches inside
+  the work `to_execution/3` hands `StatifierRouter.Config.around_target/3`.
+  The Note of 2026-10-04 (sr-4emm) already describes this test in its
+  tests bullet, by what it covers rather than by its title.
+- **The table cells the superseded-sentence paragraph leaves out.** With
+  `wrap_target: true`, the Amendment's paragraph "The superseded
+  sentence" names passages of the Amendment of 2026-10-02 that hold
+  only for a send whose delivery runs inside a step a door drove. These
+  cells of that Amendment's two tables are read the same way, and the
+  Amendment of 2026-10-04's own text already gives each its opted-in
+  answer:
+  - the doors table's "Door atom" cell, `none`, on both execution-target
+    rows: on the two shapes no door reaches, the door is `:target`, as
+    its "The door" bullet and "What `:target` covers" say;
+  - the per-shape table's "no" cells on the row for a step the router
+    did not drive and on the row for a live session on the
+    send-processor shape: with `wrap_target: true` each is the "yes" of
+    the Amendment of 2026-10-04's own per-shape table.
+  The doors table's cell "no delivery of the router's is running", on
+  the send-processor row, still describes that shape: no door's work is
+  running there, and that is the case in which `around_target/3` finds
+  no mark and makes the `:target` call. Only the "no" beside it is
+  superseded, as the paragraph already says.
+- **The Note of 2026-10-02's bullet.** The Note of 2026-10-02 (sr-4llw)
+  ends its bullet "The doors left unwrapped" with "Wrapping the
+  execution target where no wrapper reaches it stays undecided, as the
+  Amendment says." That sentence echoes the one the Amendment of
+  2026-10-04 supersedes, and is superseded with it: that Amendment
+  decides it, opt-in, under `:wrap_target`, and `around_target/3` makes
+  the call. This Note does not touch the bullet's other sentences.
