@@ -64,10 +64,10 @@ A request whose signature fails verification never reaches the router: the
 The message id is the provider's event id when it sends a non-empty one, and
 otherwise the lowercase hex SHA-256 of the raw body, so a provider's retry of
 the same body is the same message. `status/1` answers `200` for every
-recorded outcome - a duplicate, a drop, a refusal and a no-match included -
-so the provider stops retrying, and `500` for an `{:error, _}`, so it
-retries. The request's `selector` is carried for the host's own front and is
-never read here: bindings are chosen by source alone.
+`{:ok, outcomes}`, whatever the outcomes - a duplicate, a drop, a refusal and
+a no-match included - so the provider stops retrying, and `500` for an
+`{:error, _}`, so it retries. The request's `selector` is carried for the host's
+own front and is never read here: bindings are chosen by source alone.
 
 Check it by posting the same signed body twice: both answer `200`, and the
 second is recorded as `{:duplicate, binding_id}`.
